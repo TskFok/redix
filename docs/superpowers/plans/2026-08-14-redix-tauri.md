@@ -460,7 +460,10 @@ fn repository_round_trips_profiles_without_secret_data() {
 
     assert_eq!(loaded, vec![profile]);
     let raw = std::fs::read_to_string(dir.path().join("connections.json")).unwrap();
-    assert!(!raw.contains("password"));
+    let document: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    let stored = document["profiles"][0].as_object().unwrap();
+    assert!(!stored.contains_key("password"));
+    assert!(stored.contains_key("has_password"));
 }
 
 #[test]
