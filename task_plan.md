@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3：Task 4 Redis 核心连接服务已实现，等待任务级审查
+Phase 3：Task 4 Redis 核心连接服务已完成，进入 Task 5 Tauri 命令层
 
 ## Phases
 
@@ -40,6 +40,15 @@ Phase 3：Task 4 Redis 核心连接服务已实现，等待任务级审查
 - [x] 添加可选本地 Redis 五类型集成测试（普通运行明确 `ignored`；设置 `REDIX_TEST_REDIS_URL` 后须传 `--ignored --nocapture` 执行）
 - [x] 执行 fmt、领域测试、差异审查并写 Task 4 报告（真实 Redis 流受环境限制时如实记录）
 - [x] 使用简体中文提交 Task 4
+- **Status:** complete（修复复审 PASS）
+
+#### 当前 Task 5 执行清单
+
+- [ ] 先写 Tauri 命令层行为测试，覆盖 AppState、无效配置和密钥写入边界
+- [ ] 实现连接配置、Browser、Workbench 命令及统一错误映射
+- [ ] 验证命令层不暴露密码、不执行 SQL/Cloud 逻辑
+- [ ] 运行 Rust 命令层测试、fmt 和差异审查并写 Task 5 报告
+- [ ] 使用简体中文提交 Task 5
 
 ### Phase 4：测试与验证
 
