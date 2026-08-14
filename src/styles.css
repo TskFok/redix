@@ -104,6 +104,8 @@ input:disabled {
 }
 
 .workspace-tab {
+  display: inline-flex;
+  align-items: center;
   min-width: 96px;
   min-height: 44px;
   padding: 8px 16px;
@@ -111,7 +113,7 @@ input:disabled {
   border-radius: 6px;
   color: var(--color-muted);
   background: transparent;
-  cursor: pointer;
+  cursor: default;
   text-align: left;
   transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease;
 }

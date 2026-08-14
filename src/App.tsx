@@ -20,15 +20,15 @@ export default function App() {
         </div>
         <span className="app-version">桌面版 · MVP</span>
       </header>
-      <nav aria-label="工作区导航" className="workspace-tabs">
+      <nav aria-label="工作区导航（后续功能占位）" className="workspace-tabs">
         {workspaces.map((workspace) => (
-          <button
-            type="button"
+          <span
             className={`workspace-tab${workspace.id === "browser" ? " workspace-tab-active" : ""}`}
             key={workspace.id}
+            aria-current={workspace.id === "browser" ? "page" : undefined}
           >
             {workspace.label}
-          </button>
+          </span>
         ))}
       </nav>
       <section className="workspace" aria-label="默认工作区">

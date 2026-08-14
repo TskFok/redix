@@ -173,6 +173,65 @@ describe("Redis 连接管理页面", () => {
     expect(screen.queryByText("本地 Redis")).not.toBeInTheDocument();
   });
 
+  it("删除当前活动连接后通知父级清理活动 profile", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("本地 Redis");
+
+    fireEvent.click(screen.getByRole("button", { name: "连接" }));
+    await waitFor(() => expect(onOpenConnectionMock).toHaveBeenCalledWith(localProfile));
+
+    fireEvent.click(screen.getByRole("button", { name: "删除 本地 Redis" }));
+    await waitFor(() =>
+      expect(onOpenConnectionMock).toHaveBeenNthCalledWith(2, null),
+    );
+  });
+
+  it("保存成功但打开失败时保留 profile 并显示稳定提示", async () => {
+    const calls: string[] = [];
+    saveConnectionMock.mockImplementation(async () => {
+      calls.push("save");
+      return localProfile;
+    });
+    openConnectionMock.mockImplementation(async () => {
+      calls.push("open");
+      throw { code: "CONNECTION_FAILED", message: "无法连接到 Redis 服务器" };
+    });
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm();
+    fillStandaloneForm();
+    fireEvent.click(screen.getByRole("button", { name: "保存并连接" }));
+
+    await waitFor(() => expect(screen.getByText("本地 Redis")).toBeInTheDocument());
+    expect(calls).toEqual(["save", "open"]);
+    expect(saveConnectionMock).toHaveBeenCalledTimes(1);
+    expect(openConnectionMock).toHaveBeenCalledWith(localProfile.id);
+    expect(onOpenConnectionMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "已保存连接，但打开失败，请重试",
+    );
+    expect(screen.queryByRole("heading", { name: "新增连接" })).not.toBeInTheDocument();
+  });
+
+  it("编辑已有认证连接空密码测试时提示输入密码", async () => {
+    const securedProfile: ConnectionProfile = {
+      ...localProfile,
+      id: "secured-test",
+      name: "受保护测试 Redis",
+      has_password: true,
+    };
+    listConnectionsMock.mockResolvedValue([securedProfile]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("受保护测试 Redis");
+    fireEvent.click(screen.getByRole("button", { name: "编辑 受保护测试 Redis" }));
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "请输入密码后再测试连接",
+    );
+    expect(testConnectionMock).not.toHaveBeenCalled();
+  });
+
   it("连接错误不会渲染密码、原始命令或 URI", async () => {
     saveConnectionMock.mockRejectedValue({
       code: "CONNECTION_FAILED",

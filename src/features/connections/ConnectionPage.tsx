@@ -11,12 +11,13 @@ import ConnectionList from "./ConnectionList";
 import {
   initialConnectionPageState,
   replaceProfile,
+  savedButOpenFailedMessage,
   toUserFacingError,
   type ConnectionPageState,
 } from "./connectionState";
 
 interface ConnectionPageProps {
-  onOpenConnection: (profile: ConnectionProfile) => void;
+  onOpenConnection: (profile: ConnectionProfile | null) => void;
 }
 
 export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
@@ -77,6 +78,14 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
     onOpenConnection(profile);
   };
 
+  const handleOpenFailed = (profile: ConnectionProfile) => {
+    setState((current) => ({
+      ...current,
+      profiles: replaceProfile(current.profiles, profile),
+      error: savedButOpenFailedMessage,
+    }));
+  };
+
   const handleOpen = async (profile: ConnectionProfile) => {
     setState((current) => ({
       ...current,
@@ -101,6 +110,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
       return;
     }
     const wasEditing = state.editingProfile?.id === profile.id;
+    const wasActive = state.activeId === profile.id;
 
     setState((current) => ({
       ...current,
@@ -119,6 +129,9 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
       }));
       if (wasEditing) {
         setFormOpen(false);
+      }
+      if (wasActive) {
+        onOpenConnection(null);
       }
     } catch (caught) {
       setState((current) => ({
@@ -210,6 +223,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
           onSaved={handleSaved}
           onCancel={handleCancel}
           onOpened={handleOpened}
+          onOpenFailed={handleOpenFailed}
           onTestingChange={(testing) =>
             setState((current) => ({
               ...current,

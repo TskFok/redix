@@ -33,6 +33,8 @@ export const initialConnectionPageState: ConnectionPageState = {
   deletingId: null,
 };
 
+export const savedButOpenFailedMessage = "已保存连接，但打开失败，请重试。";
+
 export function formValuesFromProfile(
   profile?: ConnectionProfile,
 ): ConnectionFormValues {

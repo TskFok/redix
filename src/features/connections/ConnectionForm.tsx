@@ -8,6 +8,7 @@ import {
 import type { ConnectionProfile, SaveConnectionInput } from "../../lib/types";
 import {
   formValuesFromProfile,
+  savedButOpenFailedMessage,
   toUserFacingError,
   type ConnectionFormValues,
 } from "./connectionState";
@@ -17,6 +18,7 @@ interface ConnectionFormProps {
   onSaved: (profile: ConnectionProfile) => void;
   onCancel: () => void;
   onOpened?: (profile: ConnectionProfile) => void;
+  onOpenFailed?: (profile: ConnectionProfile) => void;
   onTestingChange?: (testing: boolean) => void;
   onSavingChange?: (saving: boolean) => void;
 }
@@ -70,6 +72,7 @@ export function ConnectionForm({
   onSaved,
   onCancel,
   onOpened,
+  onOpenFailed,
   onTestingChange,
   onSavingChange,
 }: ConnectionFormProps) {
@@ -95,6 +98,10 @@ export function ConnectionForm({
     const validation = buildConnectionInput(values, initial);
     if (!validation.input) {
       setError(validation.error ?? "连接配置无效。");
+      return;
+    }
+    if (initial?.has_password && !values.password) {
+      setError("请输入密码后再测试连接。");
       return;
     }
 
@@ -128,21 +135,32 @@ export function ConnectionForm({
     onSavingChange?.(true);
     setError(null);
     setTestStatus(null);
+    let saved: ConnectionProfile;
     try {
-      const saved = await saveConnection(validation.input);
-      if (connectAfterSave) {
-        await openConnection(saved.id);
-        onSaved(saved);
-        onOpened?.(saved);
-      } else {
-        onSaved(saved);
-      }
+      saved = await saveConnection(validation.input);
     } catch (caught) {
       setError(toUserFacingError(caught, "保存连接失败，请稍后重试。"));
-    } finally {
       setSaving(false);
       onSavingChange?.(false);
+      return;
     }
+
+    onSaved(saved);
+    if (connectAfterSave) {
+      try {
+        await openConnection(saved.id);
+        onOpened?.(saved);
+      } catch {
+        if (onOpenFailed) {
+          onOpenFailed(saved);
+        } else {
+          setError(savedButOpenFailedMessage);
+        }
+      }
+    }
+
+    setSaving(false);
+    onSavingChange?.(false);
   };
 
   const busy = testing || saving;
