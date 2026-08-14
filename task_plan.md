@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 2：设计与项目结构
+Phase 3：实现计划已完成，等待执行方式确认
 
 ## Phases
 
@@ -21,8 +21,8 @@ Phase 2：设计与项目结构
 
 - [x] 提出 2-3 种 Tauri 架构方案并确认取舍
 - [x] 编写并自审设计文档
-- [ ] 等待用户确认设计文档
-- **Status:** in_progress
+- [x] 等待用户确认设计文档
+- **Status:** complete
 
 ### Phase 3：实现
 
@@ -68,10 +68,12 @@ Phase 2：设计与项目结构
 |-------|---------|------------|
 | 当前目录不是 Git 仓库 | 1 | 记录为当前工作区状态；待设计确认后再初始化项目与 Git 元数据 |
 | 规划文件补丁上下文不匹配 | 1 | 重新读取当前文件后，用精确上下文更新 |
+| `cargo info` 无法解析 crates.io | 1 | 记录错误；依赖安装阶段根据需要申请网络权限，当前使用 `cargo search` 已返回的版本信息 |
 
 ## Notes
 
 - 参考项目：`/Users/ushopal/workspace/myself/RedisInsight`
 - 当前目标目录：`/Users/ushopal/workspace/myself/redix`
 - 当前目标目录初始为空。
-- 设计文档已写入 `docs/superpowers/specs/2026-08-14-redix-tauri-design.md`，等待用户审阅后进入实现计划。
+- 设计文档已写入并提交：`docs/superpowers/specs/2026-08-14-redix-tauri-design.md`，等待用户审阅后进入实现计划。
+- 实现计划已写入：`docs/superpowers/plans/2026-08-14-redix-tauri.md`，等待用户选择执行方式。
