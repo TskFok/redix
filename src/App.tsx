@@ -1,4 +1,7 @@
-import type { Workspace } from "./lib/types";
+import { useState } from "react";
+
+import ConnectionPage from "./features/connections/ConnectionPage";
+import type { ConnectionProfile, Workspace } from "./lib/types";
 
 const workspaces: Array<{ id: Workspace; label: string }> = [
   { id: "browser", label: "Browser" },
@@ -6,18 +9,35 @@ const workspaces: Array<{ id: Workspace; label: string }> = [
 ];
 
 export default function App() {
+  const [activeProfile, setActiveProfile] = useState<ConnectionProfile | null>(null);
+
   return (
     <main className="app-shell">
       <header className="app-header">
-        <h1>Redix</h1>
+        <div>
+          <p className="app-kicker">REDIS WORKBENCH</p>
+          <h1>Redix</h1>
+        </div>
+        <span className="app-version">桌面版 · MVP</span>
       </header>
       <nav aria-label="工作区导航" className="workspace-tabs">
         {workspaces.map((workspace) => (
-          <span key={workspace.id}>{workspace.label}</span>
+          <button
+            type="button"
+            className={`workspace-tab${workspace.id === "browser" ? " workspace-tab-active" : ""}`}
+            key={workspace.id}
+          >
+            {workspace.label}
+          </button>
         ))}
       </nav>
       <section className="workspace" aria-label="默认工作区">
-        <p>选择一个工作区开始。</p>
+        <ConnectionPage onOpenConnection={setActiveProfile} />
+        <p className="workspace-context" aria-live="polite">
+          {activeProfile
+            ? `当前连接：${activeProfile.name} · ${activeProfile.host}:${activeProfile.port}`
+            : "选择一个工作区开始。"}
+        </p>
       </section>
     </main>
   );
