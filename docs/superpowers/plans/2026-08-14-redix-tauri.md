@@ -74,6 +74,8 @@
 - Create: `src-tauri/build.rs`
 - Create: `src-tauri/tauri.conf.json`
 - Create: `src-tauri/capabilities/default.json`
+- Create: `src-tauri/icons/icon.svg`
+- Generate: `src-tauri/icons/icon.png` and the platform icon assets from the SVG source
 - Create: `src-tauri/src/lib.rs`
 - Create: `.gitignore`
 
@@ -146,7 +148,7 @@ npm test -- --run src/app.smoke.test.tsx
 }
 ```
 
-`src/App.tsx` 只实现可测试的 shell；不要在这个任务中加入 Redis 逻辑。`vite.config.ts` 使用 Tauri 默认的 `1420` dev server 和 `1421` HMR 端口。`src-tauri/Cargo.toml` 先加入 Tauri、`serde`、`serde_json` 和 `thiserror`，Redis/keyring 依赖在对应任务加入。`src-tauri/src/lib.rs` 先注册空的 `invoke_handler` 并返回可运行的 Tauri builder。
+`src/App.tsx` 只实现可测试的 shell；不要在这个任务中加入 Redis 逻辑。`vite.config.ts` 使用 Tauri 默认的 `1420` dev server 和 `1421` HMR 端口。`src-tauri/Cargo.toml` 先加入 Tauri、`serde`、`serde_json` 和 `thiserror`，Redis/keyring 依赖在对应任务加入。创建最小的 `src-tauri/icons/icon.svg`，并在本任务中运行 Tauri CLI 图标生成命令，确保 `src-tauri/icons/icon.png` 在 Rust 编译和测试前已经存在；Task 10 只负责正式 bundle 配置引用这些已生成资源。`src-tauri/src/lib.rs` 先注册空的 `invoke_handler` 并返回可运行的 Tauri builder。
 
 - [ ] **Step 4: 运行基线测试和前端构建**
 
@@ -1249,7 +1251,6 @@ git commit -m "实现 Redis Workbench 工作区"
 - Create: `docs/non-cloud-scope.md`
 - Create: `scripts/check-non-cloud-scope.mjs`
 - Create: `scripts/check-non-cloud-scope.test.mjs`
-- Create: `src-tauri/icons/icon.svg`
 - Modify: `src/styles.css`
 - Modify: `src-tauri/tauri.conf.json`
 - Modify: `README.md`
@@ -1294,7 +1295,7 @@ npm test -- --run scripts/check-non-cloud-scope.test.mjs
 
 - [ ] **Step 3: 实现检查脚本、主题和图标**
 
-脚本只接受文本数组并返回命中的排除词，生产扫描入口使用 `rg --files` 得到 `src/`、`src-tauri/src/` 和 `package.json` 文件。更新 `styles.css` 提供深色默认主题、浅色主题类、焦点态和 `role="alert"` 对应样式。用 `src-tauri/icons/icon.svg` 生成 Tauri 所需图标，并在 `tauri.conf.json` 设置产品名 `Redix`、identifier `com.redix.desktop`、窗口大小和 bundle icon。
+脚本只接受文本数组并返回命中的排除词，生产扫描入口使用 `rg --files` 得到 `src/`、`src-tauri/src/` 和 `package.json` 文件。更新 `styles.css` 提供深色默认主题、浅色主题类、焦点态和 `role="alert"` 对应样式。在 `tauri.conf.json` 设置产品名 `Redix`、identifier `com.redix.desktop`、窗口大小，并将 bundle icon 配置指向 Task 1 已生成的图标资源。
 
 - [ ] **Step 4: 更新 README 和 npm scripts**
 

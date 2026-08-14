@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3：实现计划已完成，等待执行方式确认
+Phase 3：按子代理驱动方式实现中；已完成脚手架和领域模型，正在修正 Tauri 初始化资源顺序
 
 ## Phases
 
@@ -30,7 +30,7 @@ Phase 3：实现计划已完成，等待执行方式确认
 - [ ] 实现 Rust 核心命令与本地持久化
 - [ ] 实现 Tauri 前端界面与核心交互
 - [ ] 加入 Redis Cloud 功能排除边界
-- **Status:** pending
+- **Status:** in_progress
 
 ### Phase 4：测试与验证
 
@@ -76,4 +76,5 @@ Phase 3：实现计划已完成，等待执行方式确认
 - 当前目标目录：`/Users/ushopal/workspace/myself/redix`
 - 当前目标目录初始为空。
 - 设计文档已写入并提交：`docs/superpowers/specs/2026-08-14-redix-tauri-design.md`，等待用户审阅后进入实现计划。
-- 实现计划已写入：`docs/superpowers/plans/2026-08-14-redix-tauri.md`，等待用户选择执行方式。
+- 实现计划已写入：`docs/superpowers/plans/2026-08-14-redix-tauri.md`，用户已选择子代理驱动执行。
+- 用户已确认将最小 Tauri 图标资源前移到 Task 1，以便 Rust 测试可以独立编译；Task 10 继续负责正式 bundle 配置与最终非 Cloud 审查。
