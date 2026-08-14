@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3：Task 7 连接管理页面已完成，进入 Task 8 Browser 与数据类型编辑器
+Phase 3：Task 8 Browser 与数据类型编辑器已完成，进入 Task 9 Workbench
 
 ## Phases
 
@@ -71,11 +71,20 @@ Phase 3：Task 7 连接管理页面已完成，进入 Task 8 Browser 与数据�
 
 #### 当前 Task 8 执行清单
 
-- [ ] 先写 Browser 列表、详情和五种数据编辑器失败测试
-- [ ] 实现 SCAN 分页/过滤、键详情读取、CRUD、TTL 和删除交互
-- [ ] 实现 String、Hash、List、Set、Sorted Set 编辑器与可访问状态反馈
-- [ ] 运行 Browser 测试、全量前端测试和生产构建并写 Task 8 报告
-- [ ] 使用简体中文提交 Task 8
+- [x] 先写 Browser 列表、详情和五种数据编辑器失败测试
+- [x] 实现 SCAN 分页/过滤、键详情读取、CRUD、TTL 和删除交互
+- [x] 实现 String、Hash、List、Set、Sorted Set 编辑器与可访问状态反馈
+- [x] 运行 Browser 测试、全量前端测试和生产构建并写 Task 8 报告
+- [x] 使用简体中文提交 Task 8
+- **Status:** complete（修复复审 PASS）
+
+#### 当前 Task 9 执行清单
+
+- [ ] 先写 Workbench 命令输入、执行、结果和历史测试
+- [ ] 实现 PING/GET/SET 等命令执行 bridge 调用及结构化结果展示
+- [ ] 实现 Cmd/Ctrl+Enter、loading、错误状态和历史回填
+- [ ] 运行 Workbench 测试、全量前端测试和生产构建并写 Task 9 报告
+- [ ] 使用简体中文提交 Task 9
 
 ### Phase 4：测试与验证
 
