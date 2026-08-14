@@ -1,12 +1,60 @@
+use std::sync::Arc;
+
+use tauri::Manager;
+
+pub mod commands;
 pub mod domain;
 pub mod error;
 pub mod persistence;
 pub mod redis;
 
+use persistence::{JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring};
+
+pub struct AppState {
+    pub(crate) profiles: Arc<dyn ProfileRepository>,
+    pub(crate) secrets: Arc<dyn SecretStore>,
+    pub(crate) redis: redis::RedisService,
+}
+
+impl AppState {
+    pub fn new(profiles: Arc<dyn ProfileRepository>, secrets: Arc<dyn SecretStore>) -> Self {
+        Self {
+            redis: redis::RedisService::new(profiles.clone(), secrets.clone()),
+            profiles,
+            secrets,
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![])
+        .setup(|app| {
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("无法确定 Redix 应用数据目录");
+            let profiles: Arc<dyn ProfileRepository> = Arc::new(JsonProfileRepository::new(
+                data_dir.join("connections.json"),
+            ));
+            let secrets: Arc<dyn SecretStore> = Arc::new(SystemKeyring::new());
+            app.manage(AppState::new(profiles, secrets));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::connections::list_connections,
+            commands::connections::save_connection,
+            commands::connections::delete_connection,
+            commands::connections::test_connection,
+            commands::connections::open_connection,
+            commands::connections::close_connection,
+            commands::browser::scan_keys,
+            commands::browser::get_key,
+            commands::browser::set_key,
+            commands::browser::delete_key,
+            commands::browser::set_key_ttl,
+            commands::workbench::execute_command,
+        ])
         .run(tauri::generate_context!())
         .expect("运行 Redix Tauri 应用失败");
 }
