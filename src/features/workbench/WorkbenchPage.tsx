@@ -6,6 +6,7 @@ import CommandResult from "./CommandResult";
 import {
   initialWorkbenchPageState,
   isCommandReady,
+  normalizeCommand,
   normalizeWorkbenchError,
   prependCommandHistory,
   type WorkbenchPageState,
@@ -37,19 +38,20 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
 
   const handleExecute = async () => {
     if (
-      connectionId === null ||
+      normalizedConnectionId.length === 0 ||
       !isCommandReady(connectionId, state.command) ||
       state.loading
     ) {
       return;
     }
 
-    const activeConnectionId = connectionId;
-    const command = state.command;
+    const activeConnectionId = normalizedConnectionId;
+    const command = normalizeCommand(state.command);
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
     setState((current) => ({
       ...current,
+      command,
       loading: true,
       error: null,
     }));
@@ -94,6 +96,8 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
     }));
   };
 
+  const normalizedConnectionId = connectionId?.trim() ?? "";
+  const hasConnection = normalizedConnectionId.length > 0;
   const canExecute = isCommandReady(connectionId, state.command);
 
   return (
@@ -111,11 +115,11 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
           </p>
         </div>
         <span className="workbench-connection-id">
-          {connectionId ? `连接：${connectionId}` : "未连接"}
+          {hasConnection ? `连接：${normalizedConnectionId}` : "未连接"}
         </span>
       </div>
 
-      {!connectionId ? (
+      {!hasConnection ? (
         <p className="feedback feedback-error" role="status" aria-live="polite">
           请先连接 Redis，再执行命令。
         </p>

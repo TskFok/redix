@@ -28,7 +28,12 @@ export function CommandResult({ result, error }: CommandResultProps) {
   const isLargeResult = Boolean(formattedResult && formattedResult.length > 2000);
 
   return (
-    <section className="workbench-result-panel" role="group" aria-label="命令结果">
+    <section
+      className="workbench-result-panel"
+      role="group"
+      aria-label="命令结果"
+      aria-live="polite"
+    >
       <div className="workbench-panel-heading">
         <div>
           <p className="eyebrow">RESULT</p>

@@ -34,6 +34,8 @@ export const initialConnectionPageState: ConnectionPageState = {
 };
 
 export const savedButOpenFailedMessage = "已保存连接，但打开失败，请重试。";
+export const connectionSwitchFailedMessage = "切换连接失败，已保留原连接。";
+export const connectionCleanupFailedMessage = "切换连接失败，清理新连接失败，请重试。";
 
 export function formValuesFromProfile(
   profile?: ConnectionProfile,

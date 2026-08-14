@@ -9,6 +9,7 @@ const {
   executeCommandMock,
   listConnectionsMock,
   openConnectionMock,
+  closeConnectionMock,
   saveConnectionMock,
   deleteConnectionMock,
   testConnectionMock,
@@ -21,6 +22,7 @@ const {
   executeCommandMock: vi.fn(),
   listConnectionsMock: vi.fn(),
   openConnectionMock: vi.fn(),
+  closeConnectionMock: vi.fn(),
   saveConnectionMock: vi.fn(),
   deleteConnectionMock: vi.fn(),
   testConnectionMock: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock("../../lib/tauri", () => ({
   executeCommand: executeCommandMock,
   listConnections: listConnectionsMock,
   openConnection: openConnectionMock,
+  closeConnection: closeConnectionMock,
   saveConnection: saveConnectionMock,
   deleteConnection: deleteConnectionMock,
   testConnection: testConnectionMock,
@@ -66,6 +69,7 @@ describe("Redis Workbench 工作区", () => {
     vi.clearAllMocks();
     listConnectionsMock.mockResolvedValue([]);
     openConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
+    closeConnectionMock.mockResolvedValue(undefined);
     saveConnectionMock.mockResolvedValue(localProfile);
     deleteConnectionMock.mockResolvedValue(undefined);
     testConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
@@ -95,6 +99,34 @@ describe("Redis Workbench 工作区", () => {
     expect(screen.getByRole("button", { name: "执行" })).toBeDisabled();
   });
 
+  it("仅空白命令时禁用执行且不调用 IPC", () => {
+    render(<WorkbenchPage connectionId="local" />);
+
+    typeCommand("  \t  ");
+    expect(screen.getByRole("button", { name: "执行" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+    expect(executeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("空字符串连接 ID 时禁用执行且不调用 IPC", () => {
+    render(<WorkbenchPage connectionId="" />);
+
+    expect(screen.getByRole("button", { name: "执行" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Redis 命令" }), {
+      target: { value: "PING" },
+    });
+    expect(screen.getByRole("button", { name: "执行" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+    expect(executeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("仅空白连接 ID 时禁用执行且不调用 IPC", () => {
+    render(<WorkbenchPage connectionId="   " />);
+
+    expect(screen.getByRole("button", { name: "执行" })).toBeDisabled();
+    expect(screen.getByText("未连接")).toBeInTheDocument();
+  });
+
   it("执行命令并展示字符串结果", async () => {
     executeCommandMock.mockResolvedValue({ kind: "string", value: "PONG" });
     render(<WorkbenchPage connectionId="local" />);
@@ -108,6 +140,23 @@ describe("Redis Workbench 工作区", () => {
     });
     expect(await screen.findByText("PONG")).toBeInTheDocument();
     expect(Storage.prototype.setItem).not.toHaveBeenCalled();
+  });
+
+  it("执行前只去除命令首尾空白并保留引号和内部空白", async () => {
+    executeCommandMock.mockResolvedValue({ kind: "string", value: "OK" });
+    render(<WorkbenchPage connectionId=" local " />);
+
+    typeCommand('  SET "key with space"  value  ');
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+
+    expect(executeCommandMock).toHaveBeenCalledWith({
+      connection_id: "local",
+      command: 'SET "key with space"  value',
+    });
+    await screen.findByText("OK");
+    expect(
+      screen.getByRole("button", { name: /回填命令 SET/ }).querySelector("code")?.textContent,
+    ).toBe('SET "key with space"  value');
   });
 
   it("使用 Cmd 或 Ctrl 加 Enter 执行当前命令", async () => {
@@ -172,7 +221,7 @@ describe("Redis Workbench 工作区", () => {
   it("失败时只显示稳定错误码和消息，不泄露 URI 或密码", async () => {
     executeCommandMock.mockRejectedValue({
       code: "COMMAND_FAILED",
-      message: "执行命令失败",
+      message: "redis://:secret-value@127.0.0.1:6379/0 底层错误",
       uri: "redis://:secret-value@127.0.0.1:6379/0",
       password: "secret-value",
       cause: "raw redis error",
@@ -184,10 +233,28 @@ describe("Redis Workbench 工作区", () => {
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("COMMAND_FAILED");
-    expect(alert).toHaveTextContent("执行命令失败");
+    expect(alert).toHaveTextContent("Redis 操作失败，请稍后重试。");
     expect(alert).not.toHaveTextContent("redis://");
     expect(alert).not.toHaveTextContent("secret-value");
     expect(alert).not.toHaveTextContent("raw redis error");
+  });
+
+  it("未知错误码和敏感 message 都降级为稳定安全错误契约", async () => {
+    executeCommandMock.mockRejectedValue({
+      code: "UNTRUSTED_ERROR",
+      message: "redis://:another-secret@127.0.0.1:6379/0 raw redis failure",
+    });
+    render(<WorkbenchPage connectionId="local" />);
+
+    typeCommand("PING");
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("COMMAND_FAILED");
+    expect(alert).toHaveTextContent("Redis 操作失败，请稍后重试。");
+    expect(alert).not.toHaveTextContent("UNTRUSTED_ERROR");
+    expect(alert).not.toHaveTextContent("another-secret");
+    expect(alert).not.toHaveTextContent("raw redis failure");
   });
 
   it("历史记录按最近在前，点击只回填命令而不自动执行", async () => {

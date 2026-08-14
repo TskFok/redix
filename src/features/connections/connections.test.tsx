@@ -8,6 +8,7 @@ const {
   listConnectionsMock,
   saveConnectionMock,
   openConnectionMock,
+  closeConnectionMock,
   deleteConnectionMock,
   testConnectionMock,
   onOpenConnectionMock,
@@ -15,6 +16,7 @@ const {
   listConnectionsMock: vi.fn(),
   saveConnectionMock: vi.fn(),
   openConnectionMock: vi.fn(),
+  closeConnectionMock: vi.fn(),
   deleteConnectionMock: vi.fn(),
   testConnectionMock: vi.fn(),
   onOpenConnectionMock: vi.fn(),
@@ -24,6 +26,7 @@ vi.mock("../../lib/tauri", () => ({
   listConnections: listConnectionsMock,
   saveConnection: saveConnectionMock,
   openConnection: openConnectionMock,
+  closeConnection: closeConnectionMock,
   deleteConnection: deleteConnectionMock,
   testConnection: testConnectionMock,
 }));
@@ -64,6 +67,7 @@ describe("Redis 连接管理页面", () => {
     listConnectionsMock.mockResolvedValue([]);
     saveConnectionMock.mockResolvedValue(localProfile);
     openConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
+    closeConnectionMock.mockResolvedValue(undefined);
     deleteConnectionMock.mockResolvedValue(undefined);
     testConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
   });
@@ -178,13 +182,113 @@ describe("Redis 连接管理页面", () => {
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
     await screen.findByText("本地 Redis");
 
-    fireEvent.click(screen.getByRole("button", { name: "连接" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "连接" })[0]);
     await waitFor(() => expect(onOpenConnectionMock).toHaveBeenCalledWith(localProfile));
 
     fireEvent.click(screen.getByRole("button", { name: "删除 本地 Redis" }));
     await waitFor(() =>
       expect(onOpenConnectionMock).toHaveBeenNthCalledWith(2, null),
     );
+  });
+
+  it("切换连接时先打开新连接，再关闭旧连接并更新活动连接", async () => {
+    const secondProfile: ConnectionProfile = {
+      ...localProfile,
+      id: "remote",
+      name: "远程 Redis",
+      host: "192.0.2.10",
+    };
+    const calls: string[] = [];
+    listConnectionsMock.mockResolvedValue([localProfile, secondProfile]);
+    openConnectionMock.mockImplementation(async (connectionId: string) => {
+      calls.push(`open:${connectionId}`);
+      return { server_version: "8.4.0" };
+    });
+    closeConnectionMock.mockImplementation(async (connectionId: string) => {
+      calls.push(`close:${connectionId}`);
+    });
+
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("远程 Redis");
+
+    fireEvent.click(screen.getAllByRole("button", { name: "连接" })[0]);
+    await waitFor(() => expect(onOpenConnectionMock).toHaveBeenCalledWith(localProfile));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "连接" })[0]);
+    await waitFor(() =>
+      expect(onOpenConnectionMock).toHaveBeenLastCalledWith(secondProfile),
+    );
+
+    expect(calls).toEqual(["open:local", "open:remote", "close:local"]);
+    expect(closeConnectionMock).toHaveBeenCalledWith("local");
+  });
+
+  it("打开新连接失败时保留旧连接且不关闭旧连接", async () => {
+    const secondProfile: ConnectionProfile = {
+      ...localProfile,
+      id: "remote-failed",
+      name: "失败 Redis",
+    };
+    listConnectionsMock.mockResolvedValue([localProfile, secondProfile]);
+    openConnectionMock.mockImplementation(async (connectionId: string) => {
+      if (connectionId === secondProfile.id) {
+        throw { code: "CONNECTION_FAILED", message: "连接失败" };
+      }
+      return { server_version: "8.4.0" };
+    });
+
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("失败 Redis");
+    fireEvent.click(screen.getAllByRole("button", { name: "连接" })[0]);
+    await waitFor(() => expect(onOpenConnectionMock).toHaveBeenCalledWith(localProfile));
+
+    fireEvent.click(screen.getAllByRole("button", { name: "连接" })[0]);
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("无法连接到 Redis 服务器"),
+    );
+
+    expect(closeConnectionMock).not.toHaveBeenCalled();
+    expect(onOpenConnectionMock).toHaveBeenLastCalledWith(localProfile);
+    expect(screen.getByRole("button", { name: "重新连接" })).toBeInTheDocument();
+  });
+
+  it("旧连接关闭失败时清理新连接并保留旧连接状态", async () => {
+    const secondProfile: ConnectionProfile = {
+      ...localProfile,
+      id: "remote-close-failed",
+      name: "关闭失败 Redis",
+    };
+    const calls: string[] = [];
+    listConnectionsMock.mockResolvedValue([localProfile, secondProfile]);
+    openConnectionMock.mockImplementation(async (connectionId: string) => {
+      calls.push(`open:${connectionId}`);
+      return { server_version: "8.4.0" };
+    });
+    closeConnectionMock.mockImplementation(async (connectionId: string) => {
+      calls.push(`close:${connectionId}`);
+      if (connectionId === localProfile.id) {
+        throw { code: "CONNECTION_FAILED", message: "close failed" };
+      }
+    });
+
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("关闭失败 Redis");
+    fireEvent.click(screen.getAllByRole("button", { name: "连接" })[0]);
+    await waitFor(() => expect(onOpenConnectionMock).toHaveBeenCalledWith(localProfile));
+
+    fireEvent.click(screen.getByRole("button", { name: "连接" }));
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("切换连接失败，已保留原连接。"),
+    );
+
+    expect(calls).toEqual([
+      "open:local",
+      "open:remote-close-failed",
+      "close:local",
+      "close:remote-close-failed",
+    ]);
+    expect(onOpenConnectionMock).toHaveBeenLastCalledWith(localProfile);
+    expect(screen.getByRole("button", { name: "重新连接" })).toBeInTheDocument();
   });
 
   it("保存成功但打开失败时保留 profile 并显示稳定提示", async () => {

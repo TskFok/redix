@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import {
+  closeConnection,
   deleteConnection,
   listConnections,
   openConnection,
@@ -10,6 +11,8 @@ import ConnectionForm from "./ConnectionForm";
 import ConnectionList from "./ConnectionList";
 import {
   initialConnectionPageState,
+  connectionCleanupFailedMessage,
+  connectionSwitchFailedMessage,
   replaceProfile,
   savedButOpenFailedMessage,
   toUserFacingError,
@@ -87,6 +90,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
   };
 
   const handleOpen = async (profile: ConnectionProfile) => {
+    const previousActiveId = state.activeId;
     setState((current) => ({
       ...current,
       openingId: profile.id,
@@ -94,6 +98,26 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
     }));
     try {
       await openConnection(profile.id);
+      if (previousActiveId && previousActiveId !== profile.id) {
+        try {
+          await closeConnection(previousActiveId);
+        } catch {
+          let cleanupFailed = false;
+          try {
+            await closeConnection(profile.id);
+          } catch {
+            cleanupFailed = true;
+          }
+          setState((current) => ({
+            ...current,
+            activeId: previousActiveId,
+            error: cleanupFailed
+              ? connectionCleanupFailedMessage
+              : connectionSwitchFailedMessage,
+          }));
+          return;
+        }
+      }
       handleOpened(profile);
     } catch (caught) {
       setState((current) => ({
