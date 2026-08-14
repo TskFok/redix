@@ -1,16 +1,18 @@
 use std::{collections::HashMap, sync::Arc};
 
-use ::redis::Client;
+use ::redis::{Client, Value};
 use tokio::sync::RwLock;
 
 use crate::{
     domain::{
-        CommandResult, ConnectionInfo, ConnectionProfile, KeyValue, ScanPage, SetKeyInput,
-        SetKeyTtlInput,
+        CommandResult, ConnectionInfo, ConnectionProfile, HashEntry, KeySummary, KeyValue,
+        RedisValue, ScanKeysInput, ScanPage, SetKeyInput, SetKeyTtlInput, SortedSetEntry,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
 };
+
+use super::tokenize_command;
 
 #[allow(async_fn_in_trait)]
 pub trait RedisOperations: Send + Sync {
@@ -48,13 +50,33 @@ impl RedisService {
         }
     }
 
+    async fn client(&self, connection_id: &str) -> Result<Client, AppError> {
+        self.active
+            .read()
+            .await
+            .get(connection_id)
+            .cloned()
+            .ok_or(AppError::ConnectionFailed)
+    }
+
+    async fn connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<::redis::aio::MultiplexedConnection, AppError> {
+        self.client(connection_id)
+            .await?
+            .get_multiplexed_async_connection()
+            .await
+            .map_err(map_connection_error)
+    }
+
     async fn inspect_client(client: &Client) -> Result<ConnectionInfo, AppError> {
         let mut connection = client
             .get_multiplexed_async_connection()
             .await
             .map_err(map_connection_error)?;
         let pong: String = ::redis::cmd("PING")
-            .query_async(&mut connection)
+            .query_async::<String>(&mut connection)
             .await
             .map_err(map_connection_error)?;
         if pong != "PONG" {
@@ -118,32 +140,349 @@ impl RedisOperations for RedisService {
         Ok(())
     }
 
-    async fn scan_keys(&self, _input: crate::domain::ScanKeysInput) -> Result<ScanPage, AppError> {
-        Err(AppError::CommandFailed)
+    async fn scan_keys(&self, input: ScanKeysInput) -> Result<ScanPage, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let (cursor, keys): (u64, Vec<String>) = ::redis::cmd("SCAN")
+            .arg(input.cursor)
+            .arg("MATCH")
+            .arg(&input.pattern)
+            .arg("COUNT")
+            .arg(input.count)
+            .query_async::<(u64, Vec<String>)>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        let mut summaries = Vec::with_capacity(keys.len());
+
+        for key in keys {
+            let key_type: String = ::redis::cmd("TYPE")
+                .arg(&key)
+                .query_async::<String>(&mut connection)
+                .await
+                .map_err(map_command_error)?;
+            let ttl_ms: i64 = ::redis::cmd("PTTL")
+                .arg(&key)
+                .query_async::<i64>(&mut connection)
+                .await
+                .map_err(map_command_error)?;
+            let size = key_size(&mut connection, &key, &key_type).await?;
+            summaries.push(KeySummary {
+                key,
+                key_type,
+                ttl_ms,
+                size,
+            });
+        }
+
+        Ok(ScanPage {
+            cursor,
+            keys: summaries,
+            has_more: cursor != 0,
+        })
     }
 
-    async fn get_key(&self, _connection_id: &str, _key: &str) -> Result<KeyValue, AppError> {
-        Err(AppError::CommandFailed)
+    async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError> {
+        let mut connection = self.connection(connection_id).await?;
+        read_key(&mut connection, key).await
     }
 
-    async fn set_key(&self, _input: SetKeyInput) -> Result<KeyValue, AppError> {
-        Err(AppError::CommandFailed)
+    async fn set_key(&self, input: SetKeyInput) -> Result<KeyValue, AppError> {
+        let mut connection = self.connection(&input.connection_id).await?;
+        write_key(&mut connection, &input.key, &input.value).await?;
+        read_key(&mut connection, &input.key).await
     }
 
-    async fn delete_key(&self, _connection_id: &str, _key: &str) -> Result<(), AppError> {
-        Err(AppError::CommandFailed)
+    async fn delete_key(&self, connection_id: &str, key: &str) -> Result<(), AppError> {
+        let mut connection = self.connection(connection_id).await?;
+        ::redis::cmd("DEL")
+            .arg(key)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(())
     }
 
-    async fn set_key_ttl(&self, _input: SetKeyTtlInput) -> Result<i64, AppError> {
-        Err(AppError::CommandFailed)
+    async fn set_key_ttl(&self, input: SetKeyTtlInput) -> Result<i64, AppError> {
+        validate_ttl(input.ttl_ms)?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let updated: i64 = ::redis::cmd("PEXPIRE")
+            .arg(&input.key)
+            .arg(input.ttl_ms)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if updated == 0 {
+            return Err(AppError::CommandFailed);
+        }
+        ::redis::cmd("PTTL")
+            .arg(&input.key)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)
     }
 
     async fn execute_command(
         &self,
-        _connection_id: &str,
-        _input: &str,
+        connection_id: &str,
+        input: &str,
     ) -> Result<CommandResult, AppError> {
-        Err(AppError::CommandFailed)
+        let arguments = tokenize_command(input)?;
+        let mut command = ::redis::cmd(&arguments[0]);
+        command.arg(&arguments[1..]);
+        let mut connection = self.connection(connection_id).await?;
+        let value: Value = command
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        command_result(value)
+    }
+}
+
+async fn key_size(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+    key_type: &str,
+) -> Result<Option<u64>, AppError> {
+    let command = match key_type {
+        "string" => "STRLEN",
+        "hash" => "HLEN",
+        "list" => "LLEN",
+        "set" => "SCARD",
+        "zset" => "ZCARD",
+        _ => return Err(AppError::UnsupportedDataType),
+    };
+    ::redis::cmd(command)
+        .arg(key)
+        .query_async::<u64>(connection)
+        .await
+        .map(Some)
+        .map_err(map_command_error)
+}
+
+async fn read_key(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+) -> Result<KeyValue, AppError> {
+    let key_type: String = ::redis::cmd("TYPE")
+        .arg(key)
+        .query_async::<String>(connection)
+        .await
+        .map_err(map_command_error)?;
+    if key_type == "none" {
+        return Err(AppError::CommandFailed);
+    }
+
+    let value = match key_type.as_str() {
+        "string" => RedisValue::String {
+            value: ::redis::cmd("GET")
+                .arg(key)
+                .query_async::<String>(connection)
+                .await
+                .map_err(map_command_error)?,
+        },
+        "hash" => RedisValue::Hash {
+            fields: ::redis::cmd("HGETALL")
+                .arg(key)
+                .query_async::<Vec<(String, String)>>(connection)
+                .await
+                .map_err(map_command_error)?
+                .into_iter()
+                .map(|(field, value)| HashEntry { field, value })
+                .collect(),
+        },
+        "list" => RedisValue::List {
+            items: ::redis::cmd("LRANGE")
+                .arg(key)
+                .arg(0)
+                .arg(-1)
+                .query_async::<Vec<String>>(connection)
+                .await
+                .map_err(map_command_error)?,
+        },
+        "set" => RedisValue::Set {
+            members: ::redis::cmd("SMEMBERS")
+                .arg(key)
+                .query_async::<Vec<String>>(connection)
+                .await
+                .map_err(map_command_error)?,
+        },
+        "zset" => RedisValue::SortedSet {
+            members: ::redis::cmd("ZRANGE")
+                .arg(key)
+                .arg(0)
+                .arg(-1)
+                .arg("WITHSCORES")
+                .query_async::<Vec<(String, f64)>>(connection)
+                .await
+                .map_err(map_command_error)?
+                .into_iter()
+                .map(|(member, score)| SortedSetEntry { member, score })
+                .collect(),
+        },
+        _ => return Err(AppError::UnsupportedDataType),
+    };
+    let ttl_ms = ::redis::cmd("PTTL")
+        .arg(key)
+        .query_async::<i64>(connection)
+        .await
+        .map_err(map_command_error)?;
+    Ok(KeyValue {
+        key: key.to_owned(),
+        key_type,
+        ttl_ms,
+        value,
+    })
+}
+
+async fn write_key(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+    value: &RedisValue,
+) -> Result<(), AppError> {
+    match value {
+        RedisValue::String { value } => {
+            ::redis::cmd("SET")
+                .arg(key)
+                .arg(value)
+                .query_async::<String>(connection)
+                .await
+                .map_err(map_command_error)?;
+        }
+        RedisValue::Hash { fields } => {
+            if fields.is_empty() {
+                return Err(AppError::CommandFailed);
+            }
+            replace_collection(connection, key).await?;
+            let mut command = ::redis::cmd("HSET");
+            command.arg(key);
+            for entry in fields {
+                command.arg(&entry.field).arg(&entry.value);
+            }
+            command
+                .query_async::<i64>(connection)
+                .await
+                .map_err(map_command_error)?;
+        }
+        RedisValue::List { items } => {
+            if items.is_empty() {
+                return Err(AppError::CommandFailed);
+            }
+            replace_collection(connection, key).await?;
+            let mut command = ::redis::cmd("RPUSH");
+            command.arg(key);
+            for item in items {
+                command.arg(item);
+            }
+            command
+                .query_async::<i64>(connection)
+                .await
+                .map_err(map_command_error)?;
+        }
+        RedisValue::Set { members } => {
+            if members.is_empty() {
+                return Err(AppError::CommandFailed);
+            }
+            replace_collection(connection, key).await?;
+            let mut command = ::redis::cmd("SADD");
+            command.arg(key);
+            for member in members {
+                command.arg(member);
+            }
+            command
+                .query_async::<i64>(connection)
+                .await
+                .map_err(map_command_error)?;
+        }
+        RedisValue::SortedSet { members } => {
+            if members.is_empty() {
+                return Err(AppError::CommandFailed);
+            }
+            replace_collection(connection, key).await?;
+            let mut command = ::redis::cmd("ZADD");
+            command.arg(key);
+            for entry in members {
+                command.arg(entry.score).arg(&entry.member);
+            }
+            command
+                .query_async::<i64>(connection)
+                .await
+                .map_err(map_command_error)?;
+        }
+    }
+    Ok(())
+}
+
+async fn replace_collection(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+) -> Result<(), AppError> {
+    ::redis::cmd("DEL")
+        .arg(key)
+        .query_async::<i64>(connection)
+        .await
+        .map(|_| ())
+        .map_err(map_command_error)
+}
+
+fn command_result(value: Value) -> Result<CommandResult, AppError> {
+    let kind = match &value {
+        Value::Nil => "null",
+        Value::Int(_) | Value::Double(_) => "number",
+        Value::Boolean(_) => "boolean",
+        Value::Array(_) | Value::Set(_) | Value::Push { .. } => "array",
+        Value::Map(_) => "object",
+        Value::BulkString(_)
+        | Value::SimpleString(_)
+        | Value::Okay
+        | Value::VerbatimString { .. }
+        | Value::BigNumber(_) => "string",
+        Value::Attribute { data, .. } => return command_result(*data.clone()),
+        Value::ServerError(_) => return Err(AppError::CommandFailed),
+        _ => "unknown",
+    }
+    .to_owned();
+    Ok(CommandResult {
+        kind,
+        value: value_to_json(value)?,
+    })
+}
+
+fn value_to_json(value: Value) -> Result<serde_json::Value, AppError> {
+    match value {
+        Value::Nil => Ok(serde_json::Value::Null),
+        Value::Int(value) => Ok(value.into()),
+        Value::Double(value) => serde_json::Number::from_f64(value)
+            .map(serde_json::Value::Number)
+            .ok_or(AppError::CommandFailed),
+        Value::Boolean(value) => Ok(value.into()),
+        Value::BulkString(value) => Ok(String::from_utf8_lossy(&value).into_owned().into()),
+        Value::SimpleString(value) => Ok(value.into()),
+        Value::Okay => Ok("OK".into()),
+        Value::Array(values) | Value::Set(values) => values
+            .into_iter()
+            .map(value_to_json)
+            .collect::<Result<Vec<_>, _>>()
+            .map(serde_json::Value::Array),
+        Value::Map(entries) => entries
+            .into_iter()
+            .map(|(key, value)| {
+                Ok(serde_json::json!([
+                    value_to_json(key)?,
+                    value_to_json(value)?
+                ]))
+            })
+            .collect::<Result<Vec<_>, AppError>>()
+            .map(serde_json::Value::Array),
+        Value::Attribute { data, .. } => value_to_json(*data),
+        Value::VerbatimString { text, .. } => Ok(text.into()),
+        Value::BigNumber(value) => Ok(value.to_string().into()),
+        Value::Push { data, .. } => data
+            .into_iter()
+            .map(value_to_json)
+            .collect::<Result<Vec<_>, _>>()
+            .map(serde_json::Value::Array),
+        Value::ServerError(_) => Err(AppError::CommandFailed),
+        _ => Err(AppError::CommandFailed),
     }
 }
 

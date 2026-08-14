@@ -1,6 +1,7 @@
 pub mod domain;
 pub mod error;
 pub mod persistence;
+pub mod redis;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

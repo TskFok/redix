@@ -2,6 +2,20 @@
 
 ## Session: 2026-08-14
 
+### Task 4：Redis 核心连接服务
+
+- **Status:** in_review
+- Actions taken:
+  - 读取并遵循现有设计、Task 4 执行指令和 TDD/验证约束。
+  - 完成 Standalone 连接生命周期、SCAN、五类数据结构 CRUD、TTL 和 Workbench tokenizer/命令执行。
+  - 运行 Redis 单元、领域、持久化和集成测试编译检查；集成测试因未设置 REDIX_TEST_REDIS_URL 显式忽略。
+  - 完成 Cloud/SQL/阻塞式全量扫描命令范围审查，等待任务级 review。
+- Files created/modified:
+  - `findings.md`
+  - `progress.md`
+  - `src-tauri/src/redis/`
+  - `src-tauri/tests/redis_integration.rs`
+
 ### Phase 1-2：需求与设计
 
 - **Status:** in_progress
@@ -58,6 +72,7 @@
 
 | Timestamp | Error | Attempt | Resolution |
 |-----------|-------|---------|------------|
+| 2026-08-14 | Redis 1.5 `BigNumber` 编译错误 E0599 | 1 | 改为 `BigInt::to_string()` 后重跑指定测试 |
 | 2026-08-14 | `fatal: not a git repository` | 1 | 记录为初始状态，暂不初始化，等待设计确认 |
 
 ## 5-Question Reboot Check

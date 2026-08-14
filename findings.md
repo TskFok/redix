@@ -11,6 +11,12 @@
 
 ## Research Findings
 
+- 2026-08-14 Task 4：用户已明确批准现有设计和实现计划，要求在当前 `main` 分支直接实现 Redis 核心连接服务并提交，不修改 Task 1-3、commands 或前端。
+- Task 4 已完成 Redis Standalone 生命周期、SCAN、五类 CRUD、TTL、Workbench 命令执行和可选集成测试；真实 Redis socket 在当前沙箱受限，集成流按要求保留为显式 ignored。
+- Task 4 明确接口为 `RedisOperations` 九个异步方法；active map 仅保存 `redis::Client`，每次业务操作重新获取 multiplexed async connection；Browser 只能发 `SCAN cursor MATCH pattern COUNT count`。
+- `key_ops.rs`、`workbench.rs` 和 `connection_manager.rs` 的生产错误边界使用固定 `AppError`，不回传 URI、密码或 Redis 底层错误文本。
+- `AppError` 是无底层文本载荷的固定枚举，天然适合作为 Redis 错误安全映射边界。
+
 - `/Users/ushopal/workspace/myself/redix` 初始为空目录，不存在 Tauri、Rust、前端或 Git 骨架。
 - RedisInsight 当前是 Electron + React 18 + TypeScript + Redux Toolkit + NestJS 的桌面应用。
 - 参考项目 README 列出的主要非 Cloud 能力包括：

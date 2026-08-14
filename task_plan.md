@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3：按子代理驱动方式实现中；已完成脚手架和领域模型，正在修正 Tauri 初始化资源顺序
+Phase 3：Task 4 Redis 核心连接服务已实现，等待任务级审查
 
 ## Phases
 
@@ -31,6 +31,15 @@ Phase 3：按子代理驱动方式实现中；已完成脚手架和领域模型�
 - [ ] 实现 Tauri 前端界面与核心交互
 - [ ] 加入 Redis Cloud 功能排除边界
 - **Status:** in_progress
+
+#### 当前 Task 4 执行清单
+
+- [x] 核对计划、领域模型、错误、持久化及 Task 3 已实现边界
+- [x] 以现有 tokenizer/URL/TTL 测试骨架作为 RED 基线实现 `RedisService`
+- [x] 运行指定离线 Redis 单元测试并根据真实编译错误修复
+- [x] 添加可选本地 Redis 五类型集成测试
+- [x] 执行 fmt、领域测试、差异审查并写 Task 4 报告
+- [x] 使用简体中文提交 Task 4
 
 ### Phase 4：测试与验证
 
@@ -66,6 +75,7 @@ Phase 3：按子代理驱动方式实现中；已完成脚手架和领域模型�
 
 | Error | Attempt | Resolution |
 |-------|---------|------------|
+| Redis 1.5 `Value::BigNumber` 是 `num_bigint::BigInt`，不存在 `as_ref()` | 1 | 改用安全的 `to_string()` 转换，不暴露 Redis 错误文本 |
 | 当前目录不是 Git 仓库 | 1 | 记录为当前工作区状态；待设计确认后再初始化项目与 Git 元数据 |
 | 规划文件补丁上下文不匹配 | 1 | 重新读取当前文件后，用精确上下文更新 |
 | `cargo info` 无法解析 crates.io | 1 | 记录错误；依赖安装阶段根据需要申请网络权限，当前使用 `cargo search` 已返回的版本信息 |
