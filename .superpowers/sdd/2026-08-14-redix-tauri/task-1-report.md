@@ -82,3 +82,69 @@ npm test -- --run src/app.smoke.test.tsx
    未使用绕过约束的方式重试。网络恢复后应重新运行 `npm run tauri:build`，确认 Rust 依赖解析和 Tauri 打包链路。
 2. `npm install` 报告 esbuild 的 postinstall script 尚未被 approve；本次测试和前端构建已成功，不影响已验证结果。
 3. 工作区原有的 `task_plan.md` 用户修改未纳入本任务提交，已保留不动。
+
+## Fix round 1：可信 assertion-level TDD 红灯补证
+
+Reviewer 指出：最初红灯阶段因 `./App` 模块不存在而导入失败，不足以证明 smoke test 的断言能够捕获错误；该次 import-error 红灯不计入 TDD 证据。
+
+### 临时失败状态
+
+为保留现有 `App` 模块和测试环境，只临时移除 `src/App.tsx` 中的 `Workbench` 文案。未新增测试文件、未改变测试断言，也未改变最终功能范围。
+
+命令：
+
+```bash
+npm test -- --run src/app.smoke.test.tsx
+```
+
+关键输出：
+
+```text
+❯ src/app.smoke.test.tsx (1 test | 1 failed) 87ms
+× 显示应用名称和默认工作区 87ms
+TestingLibraryElementError: Unable to find an element with the text: Workbench.
+...
+src/app.smoke.test.tsx:11:19
+Test Files  1 failed (1)
+Tests  1 failed (1)
+exit_code=1
+```
+
+这是 assertion-level 失败：测试成功加载并渲染了 `App`，且在 `screen.getByText("Workbench")` 断言处失败，而非模块导入、测试环境或语法错误。
+
+### 恢复动作
+
+立即恢复 `src/App.tsx` 中的 `Workbench` 文案，恢复后的文件与最终实现一致；没有留下错误实现、临时测试文件或其他临时生成物。
+
+### 恢复后的绿灯与构建
+
+smoke test 命令：
+
+```bash
+npm test -- --run src/app.smoke.test.tsx
+```
+
+关键输出：
+
+```text
+Test Files  1 passed (1)
+Tests  1 passed (1)
+exit_code=0
+```
+
+前端构建命令：
+
+```bash
+npm run build
+```
+
+关键输出：
+
+```text
+✓ 29 modules transformed.
+dist/index.html  0.39 kB
+✓ built in 745ms
+exit_code=0
+```
+
+Fix round 1 结论：assertion-level 红灯、恢复动作、绿灯测试和前端构建均已实际执行；Rust Tauri 构建仍仅受既有 crates.io DNS 环境阻塞。
