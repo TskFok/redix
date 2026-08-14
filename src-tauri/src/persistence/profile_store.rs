@@ -6,6 +6,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{domain::ConnectionProfile, error::AppError};
@@ -48,10 +51,73 @@ impl JsonProfileRepository {
     }
 
     fn ensure_parent_directory(path: &Path) -> Result<(), AppError> {
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
             fs::create_dir_all(parent).map_err(|_| AppError::PersistenceFailed)?;
         }
 
+        Ok(())
+    }
+}
+
+fn replace_target(temporary_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    #[cfg(not(windows))]
+    {
+        fs::rename(temporary_path, target_path)
+    }
+
+    #[cfg(windows)]
+    {
+        replace_target_windows(temporary_path, target_path)
+    }
+}
+
+#[cfg(windows)]
+fn replace_target_windows(temporary_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, ReplaceFileW, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let temporary_path_wide = temporary_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let target_path_wide = target_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let target_exists = match fs::metadata(target_path) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
+
+    let succeeded = unsafe {
+        if target_exists {
+            ReplaceFileW(
+                target_path_wide.as_ptr(),
+                temporary_path_wide.as_ptr(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        } else {
+            MoveFileExW(
+                temporary_path_wide.as_ptr(),
+                target_path_wide.as_ptr(),
+                MOVEFILE_WRITE_THROUGH,
+            )
+        }
+    };
+
+    if succeeded == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
         Ok(())
     }
 }
@@ -95,7 +161,7 @@ impl ProfileRepository for JsonProfileRepository {
                 .sync_all()
                 .map_err(|_| AppError::PersistenceFailed)?;
             drop(temporary_file);
-            fs::rename(&temporary_path, &self.path).map_err(|_| AppError::PersistenceFailed)
+            replace_target(&temporary_path, &self.path).map_err(|_| AppError::PersistenceFailed)
         })();
 
         if write_result.is_err() {

@@ -3,6 +3,7 @@ mod support;
 use std::{
     collections::HashMap,
     fs,
+    panic::{catch_unwind, resume_unwind, AssertUnwindSafe},
     path::{Path, PathBuf},
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
@@ -13,6 +14,8 @@ use redix_lib::{
     persistence::{JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring},
 };
 use support::valid_profile;
+
+static CURRENT_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Default)]
 struct InMemorySecretStore {
@@ -61,6 +64,22 @@ fn remove_temporary_directory(path: &Path) {
     fs::remove_dir_all(path).expect("test directory must be removed");
 }
 
+fn in_current_directory<T>(directory: &Path, operation: impl FnOnce() -> T) -> T {
+    let _lock = CURRENT_DIRECTORY_LOCK
+        .lock()
+        .expect("current directory lock must not be poisoned");
+    let previous = std::env::current_dir().expect("test current directory must be readable");
+    std::env::set_current_dir(directory).expect("test current directory must be changed");
+
+    let result = catch_unwind(AssertUnwindSafe(operation));
+    std::env::set_current_dir(previous).expect("test current directory must be restored");
+
+    match result {
+        Ok(value) => value,
+        Err(payload) => resume_unwind(payload),
+    }
+}
+
 #[test]
 fn repository_round_trips_profiles_under_profiles_key_without_password_key() {
     let directory = temporary_directory("round-trip");
@@ -85,6 +104,37 @@ fn repository_round_trips_profiles_under_profiles_key_without_password_key() {
     assert!(stored.contains_key("has_password"));
     assert!(!raw.contains("correct-horse-battery-staple"));
 
+    remove_temporary_directory(&directory);
+}
+
+#[test]
+fn repository_saves_a_relative_filename_without_creating_an_empty_parent() {
+    let directory = tempfile::tempdir().unwrap();
+    let repository = JsonProfileRepository::new(PathBuf::from("connections.json"));
+
+    in_current_directory(directory.path(), || {
+        repository.save(&[valid_profile()]).unwrap();
+        assert_eq!(repository.load().unwrap(), vec![valid_profile()]);
+    });
+}
+
+#[test]
+fn repository_replaces_an_existing_profile_file_with_updated_content() {
+    let directory = temporary_directory("replace-existing");
+    let path = directory.join("connections.json");
+    let repository = JsonProfileRepository::new(path.clone());
+    let first = valid_profile();
+    let mut updated = first.clone();
+    updated.name = "Updated local".into();
+
+    repository.save(&[first]).unwrap();
+    let second_save = repository.save(&[updated.clone()]);
+
+    assert!(
+        second_save.is_ok(),
+        "replacing existing profile file failed: {second_save:?}"
+    );
+    assert_eq!(repository.load().unwrap(), vec![updated]);
     remove_temporary_directory(&directory);
 }
 
@@ -127,6 +177,25 @@ fn repository_leaves_no_temporary_file_after_an_atomic_save() {
         1,
         "a completed atomic save must clean up its sibling temporary file"
     );
+    remove_temporary_directory(&directory);
+}
+
+#[test]
+fn repository_preserves_an_existing_directory_and_marker_when_save_fails() {
+    let directory = temporary_directory("failed-save");
+    let target = directory.join("connections.json");
+    fs::create_dir(&target).unwrap();
+    fs::write(target.join("marker"), "keep me").unwrap();
+    let repository = JsonProfileRepository::new(target.clone());
+
+    let error = repository.save(&[valid_profile()]).unwrap_err();
+
+    assert_eq!(error, AppError::PersistenceFailed);
+    assert_eq!(
+        fs::read_to_string(target.join("marker")).unwrap(),
+        "keep me"
+    );
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
     remove_temporary_directory(&directory);
 }
 
