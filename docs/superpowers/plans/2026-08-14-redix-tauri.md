@@ -336,10 +336,11 @@ fn rejects_empty_host_zero_port_and_database_above_fifteen() {
 #[test]
 fn serializes_profile_without_password_field() {
     let profile = valid_profile();
-    let json = serde_json::to_string(&profile).unwrap();
+    let json = serde_json::to_value(&profile).unwrap();
+    let object = json.as_object().unwrap();
 
-    assert!(!json.contains("password"));
-    assert!(json.contains("has_password"));
+    assert!(!object.contains_key("password"));
+    assert!(object.contains_key("has_password"));
 }
 ```
 
