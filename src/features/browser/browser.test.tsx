@@ -8,7 +8,7 @@ import {
 } from "./browserState";
 import KeyDetails from "./KeyDetails";
 import KeyEditor from "./KeyEditor";
-import type { RedisValue } from "../../lib/types";
+import type { KeyValue, RedisValue } from "../../lib/types";
 
 const {
   scanKeysMock,
@@ -515,6 +515,49 @@ describe("Redis Browser", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("分数必须是有限数字");
     expect(setKeyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("同一详情身份的父级重渲染不会覆盖 TTL 和 Sorted Set score 输入", () => {
+    const detail: KeyValue = {
+      key: "zset:1",
+      key_type: "zset",
+      ttl_ms: -1,
+      value: { SortedSet: { members: [{ member: "member", score: 1 }] } },
+    };
+    const onDetailChange = vi.fn();
+    const onDeleted = vi.fn();
+
+    const { rerender } = render(
+      <KeyDetails
+        connectionId="local"
+        detail={detail}
+        loading={false}
+        onDetailChange={onDetailChange}
+        onDeleted={onDeleted}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("TTL（毫秒）"), {
+      target: { value: "60000" },
+    });
+    fireEvent.change(screen.getByLabelText("分数 1"), {
+      target: { value: "Infinity" },
+    });
+
+    rerender(
+      <KeyDetails
+        connectionId="local"
+        detail={{
+          ...detail,
+          value: { SortedSet: { members: [{ member: "member", score: 1 }] } },
+        }}
+        loading={false}
+        onDetailChange={onDetailChange}
+        onDeleted={onDeleted}
+      />,
+    );
+
+    expect(screen.getByLabelText("TTL（毫秒）")).toHaveValue(60000);
+    expect(screen.getByLabelText("分数 1")).toHaveValue("Infinity");
   });
 
   it("加载失败时显示 alert 并在请求期间禁用重复过滤", async () => {

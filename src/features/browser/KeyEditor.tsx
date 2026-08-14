@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import type { RedisValue } from "../../lib/types";
 import {
@@ -44,12 +44,6 @@ export function KeyEditor({
   const [draft, setDraft] = useState<RedisValue>(() => cloneRedisValue(value));
   const [ttlDraft, setTtlDraft] = useState(() => (ttlMs >= 0 ? String(ttlMs) : ""));
   const [validationError, setValidationError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setDraft(cloneRedisValue(value));
-    setTtlDraft(ttlMs >= 0 ? String(ttlMs) : "");
-    setValidationError(null);
-  }, [ttlMs, value]);
 
   const kind = redisValueKind(draft);
 

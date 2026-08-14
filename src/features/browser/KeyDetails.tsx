@@ -205,6 +205,7 @@ export function KeyDetails({
       </div>
 
       <KeyEditor
+        key={JSON.stringify([detail.key, detail.ttl_ms, detail.value])}
         value={detail.value}
         ttlMs={detail.ttl_ms}
         busy={busy}
