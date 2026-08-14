@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
 import type { ConnectionProfile, Workspace } from "./lib/types";
 
@@ -21,15 +22,21 @@ export default function App() {
         <span className="app-version">桌面版 · MVP</span>
       </header>
       <nav aria-label="工作区导航（后续功能占位）" className="workspace-tabs">
-        {workspaces.map((workspace) => (
-          <span
-            className={`workspace-tab${workspace.id === "browser" ? " workspace-tab-active" : ""}`}
-            key={workspace.id}
-            aria-current={workspace.id === "browser" ? "page" : undefined}
-          >
-            {workspace.label}
-          </span>
-        ))}
+        {workspaces.map((workspace) => {
+          const isAvailable = workspace.id === "browser" && activeProfile !== null;
+          return (
+            <span
+              className={`workspace-tab${workspace.id === "browser" ? " workspace-tab-active" : ""}${
+                !isAvailable && workspace.id === "workbench" ? " workspace-tab-placeholder" : ""
+              }`}
+              key={workspace.id}
+              aria-current={workspace.id === "browser" && activeProfile ? "page" : undefined}
+              aria-disabled={workspace.id === "workbench" ? "true" : undefined}
+            >
+              {workspace.label}
+            </span>
+          );
+        })}
       </nav>
       <section className="workspace" aria-label="默认工作区">
         <ConnectionPage onOpenConnection={setActiveProfile} />
@@ -38,6 +45,9 @@ export default function App() {
             ? `当前连接：${activeProfile.name} · ${activeProfile.host}:${activeProfile.port}`
             : "选择一个工作区开始。"}
         </p>
+        {activeProfile ? (
+          <BrowserPage connectionId={activeProfile.id} />
+        ) : null}
       </section>
     </main>
   );
