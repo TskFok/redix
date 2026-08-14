@@ -39,10 +39,13 @@ fn accepts_a_valid_connection_profile() {
 #[test]
 fn serializes_profile_without_password_field() {
     let profile = valid_profile();
-    let json = serde_json::to_string(&profile).unwrap();
+    let json = serde_json::to_value(&profile).unwrap();
+    let object = json
+        .as_object()
+        .expect("profile must serialize as an object");
 
-    assert!(!json.contains("password"));
-    assert!(json.contains("has_password"));
+    assert!(!object.contains_key("password"));
+    assert!(object.contains_key("has_password"));
 }
 
 #[test]
