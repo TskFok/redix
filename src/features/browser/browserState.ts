@@ -32,10 +32,16 @@ export function applyScanPage(
   page: ScanPage,
   replace: boolean,
 ): BrowserPageState {
+  const mergedKeys = replace ? page.keys : [...current.keys, ...page.keys];
+  const keysByName = new Map<string, KeySummary>();
+  for (const key of mergedKeys) {
+    keysByName.set(key.key, key);
+  }
+
   return {
     ...current,
     cursor: page.cursor,
-    keys: replace ? page.keys : [...current.keys, ...page.keys],
+    keys: [...keysByName.values()],
     selectedKey: replace ? null : current.selectedKey,
     detail: replace ? null : current.detail,
     hasMore: page.has_more || page.cursor !== 0,

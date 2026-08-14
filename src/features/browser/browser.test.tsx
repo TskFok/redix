@@ -2,6 +2,13 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import BrowserPage from "./BrowserPage";
+import {
+  applyScanPage,
+  initialBrowserPageState,
+} from "./browserState";
+import KeyDetails from "./KeyDetails";
+import KeyEditor from "./KeyEditor";
+import type { RedisValue } from "../../lib/types";
 
 const {
   scanKeysMock,
@@ -39,9 +46,20 @@ const stringDetail = {
   value: { String: { value: "Alice" } },
 };
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("Redis Browser", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal("confirm", vi.fn(() => true));
     scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
     getKeyMock.mockResolvedValue(stringDetail);
     setKeyMock.mockResolvedValue(stringDetail);
@@ -51,6 +69,7 @@ describe("Redis Browser", () => {
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("按模式加载键并在点击键后读取详情", async () => {
@@ -186,6 +205,46 @@ describe("Redis Browser", () => {
     expect(screen.getByText("请选择一个键查看详情")).toBeInTheDocument();
   });
 
+  it("取消删除确认时不调用 deleteKey，也不进入 busy", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "user:1" }));
+    await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
+    expect(confirm).toHaveBeenCalledWith("确定删除键“user:1”吗？");
+    expect(deleteKeyMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "删除" })).not.toBeDisabled();
+  });
+
+  it("确认删除后调用 deleteKey 并清理键", async () => {
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "user:1" }));
+    await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
+    await waitFor(() => {
+      expect(confirm).toHaveBeenCalledWith("确定删除键“user:1”吗？");
+      expect(deleteKeyMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "user:1",
+      });
+    });
+    expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
+  });
+
   it("设置 TTL 后刷新详情", async () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
@@ -214,6 +273,113 @@ describe("Redis Browser", () => {
       });
     });
     expect(getKeyMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("TTL 为 0 时按立即删除处理，不刷新已删除详情", async () => {
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+    setKeyTtlMock.mockResolvedValue(-2);
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "user:1" }));
+    await screen.findByDisplayValue("Alice");
+    fireEvent.change(screen.getByLabelText("TTL（毫秒）"), {
+      target: { value: "0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "设置 TTL" }));
+
+    await waitFor(() => {
+      expect(setKeyTtlMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "user:1",
+        ttl_ms: 0,
+      });
+    });
+    expect(getKeyMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
+    expect(screen.getByText("请选择一个键查看详情")).toBeInTheDocument();
+  });
+
+  it("连接切换后忽略旧连接保存完成，不刷新旧详情", async () => {
+    const save = deferred<typeof stringDetail>();
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+    setKeyMock.mockImplementation(() => save.promise);
+
+    const { rerender } = render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "user:1" }));
+    await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    const getCallsBeforeSwitch = getKeyMock.mock.calls.length;
+
+    rerender(<BrowserPage connectionId="remote" />);
+    await waitFor(() => {
+      expect(scanKeysMock).toHaveBeenCalledWith({
+        connection_id: "remote",
+        cursor: 0,
+        pattern: "*",
+        count: 100,
+      });
+    });
+    save.resolve(stringDetail);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(getKeyMock).toHaveBeenCalledTimes(getCallsBeforeSwitch);
+    expect(screen.getByText("请选择一个键查看详情")).toBeInTheDocument();
+  });
+
+  it("详情组件卸载后忽略未完成 TTL，不刷新或更新详情", async () => {
+    const ttl = deferred<number>();
+    const onDetailChange = vi.fn();
+    setKeyTtlMock.mockImplementation(() => ttl.promise);
+
+    const { unmount } = render(
+      <KeyDetails
+        connectionId="local"
+        detail={stringDetail}
+        loading={false}
+        onDetailChange={onDetailChange}
+        onDeleted={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("TTL（毫秒）"), {
+      target: { value: "1000" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "设置 TTL" }));
+    unmount();
+    ttl.resolve(1000);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(getKeyMock).not.toHaveBeenCalled();
+    expect(onDetailChange).not.toHaveBeenCalled();
+  });
+
+  it("详情组件卸载后忽略未完成删除，不调用 onDeleted", async () => {
+    const deletion = deferred<void>();
+    const onDeleted = vi.fn();
+    deleteKeyMock.mockImplementation(() => deletion.promise);
+
+    const { unmount } = render(
+      <KeyDetails
+        connectionId="local"
+        detail={stringDetail}
+        loading={false}
+        onDetailChange={vi.fn()}
+        onDeleted={onDeleted}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    unmount();
+    deletion.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onDeleted).not.toHaveBeenCalled();
   });
 
   it("保存 Hash、List、Set 和 Sorted Set 时生成对应 RedisValue", async () => {
@@ -367,5 +533,74 @@ describe("Redis Browser", () => {
 
     rejectScan?.({ code: "COMMAND_FAILED", message: "加载失败" });
     expect(await screen.findByRole("alert")).toHaveTextContent("加载键失败");
+  });
+
+  it("SCAN 替换和追加按 key 去重，并保留最新摘要", () => {
+    const current = {
+      ...initialBrowserPageState,
+      keys: [{ ...stringSummary, ttl_ms: 1000 }],
+      cursor: 7,
+      hasMore: true,
+    };
+    const page = {
+      cursor: 0,
+      keys: [
+        { ...stringSummary, ttl_ms: 2000 },
+        { ...stringSummary, ttl_ms: 3000 },
+        { ...stringSummary, key: "user:2", size: 3 },
+      ],
+      has_more: false,
+    };
+
+    expect(applyScanPage(current, page, true).keys).toEqual([
+      { ...stringSummary, ttl_ms: 3000 },
+      { ...stringSummary, key: "user:2", size: 3 },
+    ]);
+    expect(applyScanPage(current, page, false).keys).toEqual([
+      { ...stringSummary, ttl_ms: 3000 },
+      { ...stringSummary, key: "user:2", size: 3 },
+    ]);
+  });
+
+  it("四类集合为空时阻止保存并显示 inline alert", () => {
+    const cases: Array<{ value: RedisValue; remove: string }> = [
+      {
+        value: { Hash: { fields: [{ field: "field", value: "value" }] } },
+        remove: "删除字段 1",
+      },
+      {
+        value: { List: { items: ["item"] } },
+        remove: "删除元素 1",
+      },
+      {
+        value: { Set: { members: ["member"] } },
+        remove: "删除成员 1",
+      },
+      {
+        value: { SortedSet: { members: [{ member: "member", score: 1 }] } },
+        remove: "删除成员 1",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const onSave = vi.fn().mockResolvedValue(undefined);
+      render(
+        <KeyEditor
+          value={testCase.value}
+          ttlMs={-1}
+          busy={false}
+          error={null}
+          onSave={onSave}
+          onDelete={vi.fn().mockResolvedValue(undefined)}
+          onSetTtl={vi.fn().mockResolvedValue(undefined)}
+        />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: testCase.remove }));
+      fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+      expect(screen.getByRole("alert")).toHaveTextContent("至少保留一项");
+      expect(onSave).not.toHaveBeenCalled();
+      cleanup();
+    }
   });
 });

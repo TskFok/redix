@@ -156,6 +156,15 @@ export function KeyEditor({
       };
     }
     if (
+      ("Hash" in nextValue && nextValue.Hash.fields.length === 0) ||
+      ("List" in nextValue && nextValue.List.items.length === 0) ||
+      ("Set" in nextValue && nextValue.Set.members.length === 0) ||
+      ("SortedSet" in nextValue && nextValue.SortedSet.members.length === 0)
+    ) {
+      setValidationError("至少保留一项，或使用“删除”操作删除键。");
+      return;
+    }
+    if (
       "SortedSet" in nextValue &&
       nextValue.SortedSet.members.some((entry) => !Number.isFinite(entry.score))
     ) {

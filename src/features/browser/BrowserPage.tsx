@@ -24,6 +24,8 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
   }));
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
+  const connectionIdRef = useRef(connectionId);
+  connectionIdRef.current = connectionId;
   const mountedRef = useRef(false);
   const scanLoadingRef = useRef(false);
   const scanRequestRef = useRef(0);
@@ -195,6 +197,9 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
   };
 
   const handleDetailChange = (detail: KeyValue) => {
+    if (connectionIdRef.current !== connectionId) {
+      return;
+    }
     setState((current) => ({
       ...current,
       detail,
@@ -208,6 +213,9 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
   };
 
   const handleDeleted = (key: string) => {
+    if (connectionIdRef.current !== connectionId) {
+      return;
+    }
     detailRequestRef.current += 1;
     setDetailLoading(false);
     setDetailActionLoading(false);

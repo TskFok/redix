@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   deleteKey,
@@ -19,6 +19,12 @@ interface KeyDetailsProps {
   onBusyChange?: (busy: boolean) => void;
 }
 
+interface OperationContext {
+  token: number;
+  connectionId: string;
+  key: string;
+}
+
 export function KeyDetails({
   connectionId,
   detail,
@@ -29,10 +35,47 @@ export function KeyDetails({
 }: KeyDetailsProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(false);
+  const operationRef = useRef(0);
+  const currentConnectionRef = useRef(connectionId);
+  const currentKeyRef = useRef(detail?.key ?? null);
+  currentConnectionRef.current = connectionId;
+  currentKeyRef.current = detail?.key ?? null;
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      operationRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    operationRef.current += 1;
+    setBusy(false);
     setError(null);
-  }, [detail?.key]);
+    onBusyChange?.(false);
+  }, [connectionId, detail?.key, onBusyChange]);
+
+  const isCurrent = (operation: OperationContext) =>
+    mountedRef.current &&
+    operationRef.current === operation.token &&
+    currentConnectionRef.current === operation.connectionId &&
+    currentKeyRef.current === operation.key;
+
+  const beginOperation = (key: string): OperationContext => ({
+    token: operationRef.current + 1,
+    connectionId,
+    key,
+  });
+
+  const setOperationBusy = (operation: OperationContext, nextBusy: boolean) => {
+    if (!isCurrent(operation)) {
+      return;
+    }
+    setBusy(nextBusy);
+    onBusyChange?.(nextBusy);
+  };
 
   if (!detail) {
     return (
@@ -48,53 +91,87 @@ export function KeyDetails({
     );
   }
 
-  const refreshDetail = async () => {
-    const refreshed = await getKey({ connection_id: connectionId, key: detail.key });
-    onDetailChange(refreshed);
+  const refreshDetail = async (operation: OperationContext) => {
+    if (!isCurrent(operation)) {
+      return null;
+    }
+    const refreshed = await getKey({
+      connection_id: operation.connectionId,
+      key: operation.key,
+    });
+    return isCurrent(operation) ? refreshed : null;
   };
 
   const handleSave = async (value: RedisValue) => {
-    setBusy(true);
-    onBusyChange?.(true);
+    const operation = beginOperation(detail.key);
+    operationRef.current = operation.token;
+    setOperationBusy(operation, true);
     setError(null);
     try {
-      await setKey({ connection_id: connectionId, key: detail.key, value });
-      await refreshDetail();
+      await setKey({ connection_id: operation.connectionId, key: operation.key, value });
+      const refreshed = await refreshDetail(operation);
+      if (refreshed && isCurrent(operation)) {
+        onDetailChange(refreshed);
+      }
     } catch (caught) {
-      setError(browserErrorMessage(caught, "保存键失败，请稍后重试。"));
+      if (isCurrent(operation)) {
+        setError(browserErrorMessage(caught, "保存键失败，请稍后重试。"));
+      }
     } finally {
-      setBusy(false);
-      onBusyChange?.(false);
+      setOperationBusy(operation, false);
     }
   };
 
   const handleDelete = async () => {
-    setBusy(true);
-    onBusyChange?.(true);
+    if (!window.confirm(`确定删除键“${detail.key}”吗？`)) {
+      return;
+    }
+    const operation = beginOperation(detail.key);
+    operationRef.current = operation.token;
+    setOperationBusy(operation, true);
     setError(null);
     try {
-      await deleteKey({ connection_id: connectionId, key: detail.key });
-      onDeleted(detail.key);
+      await deleteKey({ connection_id: operation.connectionId, key: operation.key });
+      if (isCurrent(operation)) {
+        onDeleted(operation.key);
+      }
     } catch (caught) {
-      setError(browserErrorMessage(caught, "删除键失败，请稍后重试。"));
+      if (isCurrent(operation)) {
+        setError(browserErrorMessage(caught, "删除键失败，请稍后重试。"));
+      }
     } finally {
-      setBusy(false);
-      onBusyChange?.(false);
+      setOperationBusy(operation, false);
     }
   };
 
   const handleSetTtl = async (ttlMs: number) => {
-    setBusy(true);
-    onBusyChange?.(true);
+    const operation = beginOperation(detail.key);
+    operationRef.current = operation.token;
+    setOperationBusy(operation, true);
     setError(null);
     try {
-      await setKeyTtl({ connection_id: connectionId, key: detail.key, ttl_ms: ttlMs });
-      await refreshDetail();
+      await setKeyTtl({
+        connection_id: operation.connectionId,
+        key: operation.key,
+        ttl_ms: ttlMs,
+      });
+      if (!isCurrent(operation)) {
+        return;
+      }
+      if (ttlMs === 0) {
+        onDeleted(operation.key);
+        return;
+      }
+      const refreshed = await refreshDetail(operation);
+      if (refreshed && isCurrent(operation)) {
+        onDetailChange(refreshed);
+      }
     } catch (caught) {
-      setError(browserErrorMessage(caught, "设置 TTL 失败，请稍后重试。"));
+      if (isCurrent(operation)) {
+        setError(browserErrorMessage(caught, "设置 TTL 失败，请稍后重试。"));
+      }
     } finally {
-      setBusy(false);
-      onBusyChange?.(false);
+      setOperationBusy(operation, false);
     }
   };
 
