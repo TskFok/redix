@@ -1,0 +1,91 @@
+export type Workspace = "browser" | "workbench";
+
+export interface ConnectionProfile {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  username: string | null;
+  database: number;
+  has_password: boolean;
+}
+
+export interface SaveConnectionInput {
+  profile: ConnectionProfile;
+  password: string | null;
+}
+
+export interface ConnectionInfo {
+  server_version: string;
+}
+
+export interface ScanKeysInput {
+  connection_id: string;
+  cursor: number;
+  pattern: string;
+  count: number;
+}
+
+export interface ScanPage {
+  cursor: number;
+  keys: KeySummary[];
+  has_more: boolean;
+}
+
+export interface KeySummary {
+  key: string;
+  key_type: string;
+  ttl_ms: number;
+  size: number | null;
+}
+
+export type RedisValue =
+  | { String: { value: string } }
+  | { Hash: { fields: Array<{ field: string; value: string }> } }
+  | { List: { items: string[] } }
+  | { Set: { members: string[] } }
+  | { SortedSet: { members: Array<{ member: string; score: number }> } };
+
+export interface KeyValue {
+  key: string;
+  key_type: string;
+  ttl_ms: number;
+  value: RedisValue;
+}
+
+export interface GetKeyInput {
+  connection_id: string;
+  key: string;
+}
+
+export interface SetKeyInput {
+  connection_id: string;
+  key: string;
+  value: RedisValue;
+}
+
+export interface DeleteKeyInput {
+  connection_id: string;
+  key: string;
+}
+
+export interface SetKeyTtlInput {
+  connection_id: string;
+  key: string;
+  ttl_ms: number;
+}
+
+export interface ExecuteCommandInput {
+  connection_id: string;
+  command: string;
+}
+
+export interface CommandResult {
+  kind: string;
+  value: unknown;
+}
+
+export interface IpcError {
+  code: string;
+  message: string;
+}
