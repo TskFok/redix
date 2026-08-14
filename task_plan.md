@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3：Task 4 Redis 核心连接服务已完成，进入 Task 5 Tauri 命令层
+Phase 3：Task 5 Tauri 命令层已完成，进入 Task 6 前端 IPC bridge
 
 ## Phases
 
@@ -44,11 +44,20 @@ Phase 3：Task 4 Redis 核心连接服务已完成，进入 Task 5 Tauri 命令�
 
 #### 当前 Task 5 执行清单
 
-- [ ] 先写 Tauri 命令层行为测试，覆盖 AppState、无效配置和密钥写入边界
-- [ ] 实现连接配置、Browser、Workbench 命令及统一错误映射
-- [ ] 验证命令层不暴露密码、不执行 SQL/Cloud 逻辑
-- [ ] 运行 Rust 命令层测试、fmt 和差异审查并写 Task 5 报告
-- [ ] 使用简体中文提交 Task 5
+- [x] 先写 Tauri 命令层行为测试，覆盖 AppState、无效配置和密钥写入边界
+- [x] 实现连接配置、Browser、Workbench 命令及统一错误映射
+- [x] 验证命令层不暴露密码、不执行 SQL/Cloud 逻辑
+- [x] 运行 Rust 命令层测试、fmt 和差异审查并写 Task 5 报告
+- [x] 使用简体中文提交 Task 5
+- **Status:** complete（修复复审 PASS）
+
+#### 当前 Task 6 执行清单
+
+- [ ] 先写前端 IPC bridge 失败测试并确认失败原因
+- [ ] 实现与 Rust DTO 对齐的 TypeScript 类型和 12 个 typed wrappers
+- [ ] 统一保留 `{ code, message }` 的 IPC 错误形态，不暴露密码
+- [ ] 运行 bridge 测试、前端生产构建并写 Task 6 报告
+- [ ] 使用简体中文提交 Task 6
 
 ### Phase 4：测试与验证
 
