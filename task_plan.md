@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3：Task 5 Tauri 命令层已完成，进入 Task 6 前端 IPC bridge
+Phase 3：Task 6 前端 IPC bridge 已完成，进入 Task 7 连接管理页面
 
 ## Phases
 
@@ -53,11 +53,20 @@ Phase 3：Task 5 Tauri 命令层已完成，进入 Task 6 前端 IPC bridge
 
 #### 当前 Task 6 执行清单
 
-- [ ] 先写前端 IPC bridge 失败测试并确认失败原因
-- [ ] 实现与 Rust DTO 对齐的 TypeScript 类型和 12 个 typed wrappers
-- [ ] 统一保留 `{ code, message }` 的 IPC 错误形态，不暴露密码
-- [ ] 运行 bridge 测试、前端生产构建并写 Task 6 报告
-- [ ] 使用简体中文提交 Task 6
+- [x] 先写前端 IPC bridge 失败测试并确认失败原因
+- [x] 实现与 Rust DTO 对齐的 TypeScript 类型和 12 个 typed wrappers
+- [x] 统一保留 `{ code, message }` 的 IPC 错误形态，不暴露密码
+- [x] 运行 bridge 测试、前端生产构建并写 Task 6 报告
+- [x] 使用简体中文提交 Task 6
+- **Status:** complete（任务审查 PASS）
+
+#### 当前 Task 7 执行清单
+
+- [ ] 先写连接页面失败测试，覆盖空连接列表、表单和保存/连接动作
+- [ ] 实现连接状态、连接列表、表单校验和错误提示
+- [ ] 实现保存、测试连接、打开连接、删除连接的交互顺序
+- [ ] 运行前端连接测试和生产构建并写 Task 7 报告
+- [ ] 使用简体中文提交 Task 7
 
 ### Phase 4：测试与验证
 
