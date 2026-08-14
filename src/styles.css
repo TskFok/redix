@@ -123,7 +123,7 @@ textarea:disabled {
   border-radius: 6px;
   color: var(--color-muted);
   background: transparent;
-  cursor: default;
+  cursor: pointer;
   text-align: left;
   transition: border-color 160ms ease, color 160ms ease, background-color 160ms ease;
 }
@@ -142,6 +142,17 @@ textarea:disabled {
 .workspace-tab-placeholder {
   color: #64748b;
   opacity: 0.75;
+}
+
+.workspace-tab:disabled {
+  cursor: not-allowed;
+}
+
+.workspace-tab-placeholder:hover,
+.workspace-tab-placeholder:disabled:hover {
+  border-color: transparent;
+  color: #64748b;
+  background: transparent;
 }
 
 .workspace {
@@ -478,6 +489,184 @@ code {
   margin: 0;
   padding: 24px 0;
   color: var(--color-muted);
+}
+
+.workbench-page {
+  margin-top: 48px;
+  padding-top: 40px;
+  border-top: 1px solid var(--color-border);
+}
+
+.workbench-page-heading {
+  margin-bottom: 24px;
+}
+
+.workbench-connection-id,
+.command-result-kind {
+  color: var(--color-muted);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.78rem;
+}
+
+.workbench-connection-id {
+  padding-top: 5px;
+}
+
+.workbench-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
+  gap: 16px;
+}
+
+.workbench-command-column {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.workbench-command-panel,
+.workbench-history-panel,
+.workbench-result-panel {
+  min-width: 0;
+  padding: clamp(20px, 3vw, 32px);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+}
+
+.workbench-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workbench-panel-heading h2 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 1.15rem;
+}
+
+.command-form {
+  margin-top: 24px;
+}
+
+.command-form textarea {
+  min-height: 196px;
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.86rem;
+}
+
+.command-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.command-shortcut {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.workbench-history-list {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  margin: 20px 0 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.workbench-history-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 44px;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--color-text);
+  background: var(--color-surface-interactive);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 160ms ease, background-color 160ms ease;
+}
+
+.workbench-history-button:hover,
+.workbench-history-button:focus-visible {
+  border-color: var(--color-primary);
+  background: var(--color-surface-selected);
+}
+
+.workbench-history-button code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workbench-history-button time {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.72rem;
+}
+
+.workbench-result-panel {
+  min-height: 424px;
+}
+
+.command-result-kind {
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  color: var(--color-primary);
+  background: var(--color-primary-surface);
+  text-transform: uppercase;
+}
+
+.command-result-details {
+  margin-top: 24px;
+  border-top: 1px solid var(--color-border);
+}
+
+.command-result-summary {
+  min-height: 44px;
+  padding: 12px 0;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-weight: 650;
+}
+
+.command-result-pre {
+  max-height: 560px;
+  margin: 0;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: #d1fae5;
+  background: var(--color-background);
+  font-family: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.workbench-empty-result {
+  margin: 24px 0 0;
+  color: var(--color-muted);
+  line-height: 1.6;
 }
 
 .browser-page {
@@ -846,7 +1035,16 @@ code {
     padding-top: 28px;
   }
 
+  .workbench-page {
+    margin-top: 36px;
+    padding-top: 28px;
+  }
+
   .browser-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .workbench-layout {
     grid-template-columns: 1fr;
   }
 
@@ -877,6 +1075,21 @@ code {
   }
 
   .editor-actions .button {
+    width: 100%;
+  }
+
+  .workbench-command-panel,
+  .workbench-history-panel,
+  .workbench-result-panel {
+    padding: 20px;
+  }
+
+  .command-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .command-actions .button {
     width: 100%;
   }
 }

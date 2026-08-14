@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
+import WorkbenchPage from "./features/workbench/WorkbenchPage";
 import type { ConnectionProfile, Workspace } from "./lib/types";
 
 const workspaces: Array<{ id: Workspace; label: string }> = [
@@ -11,6 +12,14 @@ const workspaces: Array<{ id: Workspace; label: string }> = [
 
 export default function App() {
   const [activeProfile, setActiveProfile] = useState<ConnectionProfile | null>(null);
+  const [activeWorkspace, setActiveWorkspace] = useState<Workspace>("browser");
+
+  const handleOpenConnection = (profile: ConnectionProfile | null) => {
+    setActiveProfile(profile);
+    if (!profile) {
+      setActiveWorkspace("browser");
+    }
+  };
 
   return (
     <main className="app-shell">
@@ -21,32 +30,39 @@ export default function App() {
         </div>
         <span className="app-version">桌面版 · MVP</span>
       </header>
-      <nav aria-label="工作区导航（后续功能占位）" className="workspace-tabs">
+      <nav aria-label="工作区导航" className="workspace-tabs">
         {workspaces.map((workspace) => {
-          const isAvailable = workspace.id === "browser" && activeProfile !== null;
+          const isAvailable = activeProfile !== null;
+          const isActive = activeWorkspace === workspace.id && isAvailable;
           return (
-            <span
-              className={`workspace-tab${workspace.id === "browser" ? " workspace-tab-active" : ""}${
-                !isAvailable && workspace.id === "workbench" ? " workspace-tab-placeholder" : ""
+            <button
+              type="button"
+              className={`workspace-tab${isActive ? " workspace-tab-active" : ""}${
+                !isAvailable ? " workspace-tab-placeholder" : ""
               }`}
               key={workspace.id}
-              aria-current={workspace.id === "browser" && activeProfile ? "page" : undefined}
-              aria-disabled={workspace.id === "workbench" ? "true" : undefined}
+              aria-current={isActive ? "page" : undefined}
+              aria-disabled={!isAvailable}
+              disabled={!isAvailable}
+              onClick={() => setActiveWorkspace(workspace.id)}
             >
               {workspace.label}
-            </span>
+            </button>
           );
         })}
       </nav>
-      <section className="workspace" aria-label="默认工作区">
-        <ConnectionPage onOpenConnection={setActiveProfile} />
+      <section className="workspace" aria-label="当前工作区">
+        <ConnectionPage onOpenConnection={handleOpenConnection} />
         <p className="workspace-context" aria-live="polite">
           {activeProfile
             ? `当前连接：${activeProfile.name} · ${activeProfile.host}:${activeProfile.port}`
-            : "选择一个工作区开始。"}
+            : "请先连接 Redis 后使用工作区。"}
         </p>
-        {activeProfile ? (
+        {activeProfile && activeWorkspace === "browser" ? (
           <BrowserPage connectionId={activeProfile.id} />
+        ) : null}
+        {activeProfile && activeWorkspace === "workbench" ? (
+          <WorkbenchPage connectionId={activeProfile.id} />
         ) : null}
       </section>
     </main>
