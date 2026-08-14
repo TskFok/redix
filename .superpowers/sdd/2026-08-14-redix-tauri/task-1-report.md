@@ -6,6 +6,8 @@ DONE_WITH_CONCERNS
 
 Task 1 的前端脚手架、React 应用壳和 Tauri 配置已实现并提交。Tauri Rust 完整构建未能完成，原因是当前环境无法解析 crates.io，详见“疑问/顾虑”。
 
+最终确认：当前没有仍在运行的长时间命令；代码已完成，验证结论维持 `DONE_WITH_CONCERNS`。
+
 ## 改动文件
 
 - `.gitignore`
