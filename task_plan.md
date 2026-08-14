@@ -37,8 +37,8 @@ Phase 3：Task 4 Redis 核心连接服务已实现，等待任务级审查
 - [x] 核对计划、领域模型、错误、持久化及 Task 3 已实现边界
 - [x] 以现有 tokenizer/URL/TTL 测试骨架作为 RED 基线实现 `RedisService`
 - [x] 运行指定离线 Redis 单元测试并根据真实编译错误修复
-- [x] 添加可选本地 Redis 五类型集成测试
-- [x] 执行 fmt、领域测试、差异审查并写 Task 4 报告
+- [x] 添加可选本地 Redis 五类型集成测试（普通运行明确 `ignored`；设置 `REDIX_TEST_REDIS_URL` 后须传 `--ignored --nocapture` 执行）
+- [x] 执行 fmt、领域测试、差异审查并写 Task 4 报告（真实 Redis 流受环境限制时如实记录）
 - [x] 使用简体中文提交 Task 4
 
 ### Phase 4：测试与验证

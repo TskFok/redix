@@ -621,7 +621,7 @@ cargo test --manifest-path src-tauri/Cargo.toml redis:: --lib
 
 - [ ] **Step 5: 写集成测试**
 
-`src-tauri/tests/redis_integration.rs` 使用环境变量 `REDIX_TEST_REDIS_URL`，覆盖以下可复现流程：连接 `PING`、写入并读取 String、Hash、List、Set、Sorted Set、`SCAN` 过滤、设置 TTL、删除 key、执行 `PING`。没有设置环境变量时测试使用 `#[ignore]` 并输出启动提示，不能静默通过。
+`src-tauri/tests/redis_integration.rs` 使用环境变量 `REDIX_TEST_REDIS_URL`，覆盖以下可复现流程：连接 `PING`、写入并读取 String、Hash、List、Set、Sorted Set、`SCAN` 分页的类型/大小元数据、设置 TTL 后读取 TTL、删除后确认缺失 key、执行 Workbench `PING`。测试只使用内存 secret double，不触碰真实系统钥匙串。没有设置环境变量时测试保留 `#[ignore]`，普通运行必须明确显示 `ignored`；环境变量存在时必须额外传入 `--ignored` 才会执行，缺少环境变量却使用 `--ignored` 必须显式失败，不能静默通过。
 
 - [ ] **Step 6: 启动本地 Redis 并运行集成测试**
 
@@ -629,10 +629,10 @@ cargo test --manifest-path src-tauri/Cargo.toml redis:: --lib
 
 ```bash
 redis-server --daemonize yes
-REDIX_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration -- --nocapture
+REDIX_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration -- --ignored --nocapture
 ```
 
-预期：所有集成测试通过；失败时记录具体 Redis 命令和错误码，不打印密码。
+预期：设置 `REDIX_TEST_REDIS_URL` 后所有实际集成测试通过；未设置变量的普通命令显示 `1 ignored`，不能作为真实集成通过。失败时记录具体 Redis 命令和错误码，不打印密码。
 
 - [ ] **Step 7: 提交**
 
@@ -1326,7 +1326,7 @@ npm run check:non-cloud
 npm run test:frontend
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
-REDIX_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration -- --nocapture
+REDIX_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration -- --ignored --nocapture
 npm run tauri:build
 git diff --check
 git status --short

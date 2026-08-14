@@ -83,18 +83,20 @@ impl RedisService {
             return Err(AppError::ConnectionFailed);
         }
 
-        let server_info: String = ::redis::cmd("INFO")
+        let server_info: Result<String, _> = ::redis::cmd("INFO")
             .arg("server")
             .query_async(&mut connection)
-            .await
-            .map_err(map_command_error)?;
+            .await;
         let server_version = server_info
-            .lines()
-            .find_map(|line| line.strip_prefix("redis_version:"))
-            .map(str::trim)
-            .filter(|version| !version.is_empty())
-            .unwrap_or("unknown")
-            .to_owned();
+            .ok()
+            .and_then(|info| {
+                info.lines()
+                    .find_map(|line| line.strip_prefix("redis_version:"))
+                    .map(str::trim)
+                    .filter(|version| !version.is_empty())
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| "unknown".into());
 
         Ok(ConnectionInfo { server_version })
     }
@@ -430,7 +432,7 @@ fn command_result(value: Value) -> Result<CommandResult, AppError> {
         Value::Int(_) | Value::Double(_) => "number",
         Value::Boolean(_) => "boolean",
         Value::Array(_) | Value::Set(_) | Value::Push { .. } => "array",
-        Value::Map(_) => "object",
+        Value::Map(_) => "array",
         Value::BulkString(_)
         | Value::SimpleString(_)
         | Value::Okay
@@ -561,7 +563,7 @@ fn map_command_error(error: ::redis::RedisError) -> AppError {
 mod tests {
     use crate::{domain::ConnectionProfile, error::AppError};
 
-    use super::{connection_url, validate_ttl};
+    use super::{command_result, connection_url, validate_ttl};
 
     fn valid_profile() -> ConnectionProfile {
         ConnectionProfile {
@@ -592,5 +594,17 @@ mod tests {
 
         assert_eq!(error, AppError::CommandFailed);
         assert_eq!(error.to_string(), "Redis 命令执行失败");
+    }
+
+    #[test]
+    fn serializes_redis_map_as_pair_array_with_array_kind() {
+        let result = command_result(::redis::Value::Map(vec![(
+            ::redis::Value::SimpleString("field".into()),
+            ::redis::Value::Int(1),
+        )]))
+        .unwrap();
+
+        assert_eq!(result.kind, "array");
+        assert_eq!(result.value, serde_json::json!([["field", 1]]));
     }
 }
