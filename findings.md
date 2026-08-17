@@ -57,6 +57,22 @@
 
 ## Issues Encountered
 
+## Task 10 初始核对（2026-08-17）
+
+- 工作区位于 `main` 分支且初始干净；本任务不创建分支。
+- `README.md` 当前不存在，`package-lock.json` 存在且需要随 `package.json` scripts 变更保持一致。
+- `src-tauri/icons/icon.png`、`icon.ico`、`icon.icns`、`icon.svg` 及平台资源均已存在，因此只需引用既有资源，不下载外部图标。
+- `src-tauri/tauri.conf.json` 当前 identifier 为 `com.redix.app`，bundle `active` 为 `false`；Task 10 需改为正式配置。
+- `src/styles.css` 已有深色基础、44px 部分控件和 reduced-motion，但尚无浅色主题类/系统偏好、统一 `role="alert"`/`role="status"` 样式与明确的 375/768/1024 响应式分层。
+- RED 阶段测试已按要求先写；运行 `npm test -- --run scripts/check-non-cloud-scope.test.mjs` 因实现文件缺失而退出 1，失败原因符合预期。
+- GREEN 阶段同一命令通过 2/2；扫描器按文本位置排序、大小写不敏感并去重，生产入口不读取文档和脚本目录。
+- `npm install --package-lock-only --ignore-scripts --offline` 报告 lockfile 与依赖已同步，未产生 package-lock 差异。
+- `npm run check:non-cloud` 通过；`npm run test:frontend` 通过 6 个测试文件、55 个测试；`npm run build` 通过。
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 通过；`CARGO_NET_OFFLINE=true cargo test --manifest-path src-tauri/Cargo.toml` 通过既有 Rust 测试（23 + 1 + 6 + 9），Redis 集成测试 1 项按设计 ignored，另有既有 `tests/support/mod.rs::invalid_profile` dead-code 警告。
+- `npm run tauri:build` 的 Rust release 编译和 `.app` 生成成功，但整体退出码为 1。DMG 阶段的 `bundle_dmg.sh` 失败；直接诊断显示 `hdiutil resize: failed. 设备未配置 (6)`，属于当前桌面沙箱/镜像设备环境限制，未伪造为通过。
+- 在沙箱外重跑 `npm run tauri:build` 成功，最终生成 `src-tauri/target/release/bundle/macos/Redix.app` 和 `src-tauri/target/release/bundle/dmg/Redix_0.1.0_aarch64.dmg`。
+- 沙箱外本机 Redis 返回 `PONG`，真实 Standalone 集成测试通过 1/1；前端 55/55、Rust 39 个普通测试、非 Cloud 扫描、格式检查和生产构建均通过。
+
 ## Task 9 独立复审观察（2026-08-17）
 
 - 当前提交为 `5bcfe489dcaf578c69e9d9c643678d633f30fbfc`，工作区初始干净。

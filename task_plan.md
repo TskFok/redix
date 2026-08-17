@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3：Task 9 Workbench 已完成，进入 Task 10 最终主题、非 Cloud 审查、文档与验证
+Phase 5：Redix MVP 已完成，最终验证与运行说明已记录
 
 ## Phases
 
@@ -26,11 +26,11 @@ Phase 3：Task 9 Workbench 已完成，进入 Task 10 最终主题、非 Cloud �
 
 ### Phase 3：实现
 
-- [ ] 按测试驱动方式先写可失败的行为测试
-- [ ] 实现 Rust 核心命令与本地持久化
-- [ ] 实现 Tauri 前端界面与核心交互
-- [ ] 加入 Redis Cloud 功能排除边界
-- **Status:** in_progress
+- [x] 按测试驱动方式先写可失败的行为测试
+- [x] 实现 Rust 核心命令与本地持久化
+- [x] 实现 Tauri 前端界面与核心交互
+- [x] 加入 Redis Cloud 功能排除边界
+- **Status:** complete
 
 #### 当前 Task 4 执行清单
 
@@ -89,27 +89,28 @@ Phase 3：Task 9 Workbench 已完成，进入 Task 10 最终主题、非 Cloud �
 
 #### 当前 Task 10 执行清单
 
-- [ ] 先写非 Cloud 范围扫描失败测试并确认失败原因
-- [ ] 实现范围扫描脚本、深浅主题、焦点态、正式 Tauri bundle 配置和图标引用
-- [ ] 更新 README、npm scripts、非 Cloud 范围文档与验证记录
-- [ ] 运行非 Cloud 扫描、前端测试/构建、Rust 测试、可用时的 Redis 集成测试、Tauri 构建和差异检查
-- [ ] 对照 Redis Cloud 排除项、Browser `SCAN` 约束、密码持久化边界和 SQL 约束进行最终静态审查
-- [ ] 使用简体中文提交最终 MVP
+- [x] 先写非 Cloud 范围扫描失败测试并确认失败原因
+- [x] 实现范围扫描脚本、深浅主题、焦点态、正式 Tauri bundle 配置和图标引用
+- [x] 更新 README、npm scripts、非 Cloud 范围文档与验证记录
+- [x] 运行非 Cloud 扫描、前端测试/构建、Rust 测试、可用时的 Redis 集成测试、Tauri 构建和差异检查
+- [x] 对照 Redis Cloud 排除项、Browser `SCAN` 约束、密码持久化边界和 SQL 约束进行最终静态审查
+- [x] 使用简体中文提交最终 MVP
+- **Status:** complete（真实 Redis 集成和沙箱外 Tauri bundle 均通过）
 
 ### Phase 4：测试与验证
 
-- [ ] 运行 Rust 单元测试与前端检查
-- [ ] 构建 Tauri 开发/生产包
-- [ ] 验证本地 Redis 连接、键浏览、命令执行与错误提示
-- [ ] 对照需求逐项检查 Cloud 功能未进入产品
-- **Status:** pending
+- [x] 运行 Rust 单元测试与前端检查
+- [x] 构建 Tauri 开发/生产包
+- [x] 验证本地 Redis 连接、键浏览、命令执行与错误提示
+- [x] 对照需求逐项检查 Cloud 功能未进入产品
+- **Status:** complete
 
 ### Phase 5：交付
 
-- [ ] 审查变更与运行说明
-- [ ] 使用简体中文提交 commit（如需要提交）
-- [ ] 向用户交付文件路径与验证结果
-- **Status:** pending
+- [x] 审查变更与运行说明
+- [x] 使用简体中文提交 commit（如需要提交）
+- [x] 向用户交付文件路径与验证结果
+- **Status:** complete
 
 ## Key Questions
 

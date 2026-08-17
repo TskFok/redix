@@ -70,9 +70,23 @@
 
 ## Error Log
 
+## Session: 2026-08-17 — Task 10
+
+- **Status:** complete
+- 已读取 Task 10 brief、实现计划、规划记录、package.json、样式、Tauri 配置和图标资源；确认当前分支为 `main` 且工作区初始干净。
+- 已按 TDD 先创建 `scripts/check-non-cloud-scope.test.mjs`，覆盖本地文本通过、大小写不敏感的入口词、出现顺序和去重。
+- RED 验证：`npm test -- --run scripts/check-non-cloud-scope.test.mjs` 退出码 1，Vitest 报告无法解析缺失的 `scripts/check-non-cloud-scope.mjs`；尚未写入生产实现。
+- 已实现 `scripts/check-non-cloud-scope.mjs`，GREEN 验证同一测试命令为 2/2 通过。
+- 已更新 package scripts、README、`docs/non-cloud-scope.md`、深浅主题与响应式 CSS、Tauri identifier/bundle/icon 配置。
+- 已执行离线 lockfile 同步；`npm run check:non-cloud`、`npm run test:frontend`（55/55）和 `npm run build` 均通过。
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 通过；`CARGO_NET_OFFLINE=true cargo test --manifest-path src-tauri/Cargo.toml` 通过 39 个已执行测试，1 个 Redis 集成测试 ignored，存在既有 dead-code 警告。
+- 首次沙箱内 `npm run tauri:build` 在 DMG 的 `hdiutil resize` 处以 `设备未配置 (6)` 失败；申请沙箱外验证后重跑成功，生成 `src-tauri/target/release/bundle/macos/Redix.app` 和 `src-tauri/target/release/bundle/dmg/Redix_0.1.0_aarch64.dmg`。
+- 沙箱外 `redis-cli ping` 返回 `PONG`；`REDIX_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration -- --ignored --nocapture` 通过 1/1。
+- 补充修正浅色主题根节点继承、危险按钮对比度和状态色后，前端 55/55、构建、非 Cloud 扫描和差异检查再次通过。
+
 ## Session: 2026-08-17 — Task 9 独立修复复审
 
-- **Status:** in_progress
+- **Status:** complete
 - 已确认当前 HEAD 为 `5bcfe489dcaf578c69e9d9c643678d633f30fbfc`，工作区初始干净。
 - 已读取 Task 9 原始审查报告；前次结论为 NEEDS_FIX，已逐项验证四个修复目标。
 - 尚未修改源码；最终复审报告写入 `.superpowers/sdd/2026-08-14-redix-tauri/task-9-fix-review.md`。
