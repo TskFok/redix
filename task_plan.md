@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 3：Task 8 Browser 与数据类型编辑器已完成，进入 Task 9 Workbench
+Phase 3：Task 9 Workbench 已完成，进入 Task 10 最终主题、非 Cloud 审查、文档与验证
 
 ## Phases
 
@@ -80,11 +80,21 @@ Phase 3：Task 8 Browser 与数据类型编辑器已完成，进入 Task 9 Workb
 
 #### 当前 Task 9 执行清单
 
-- [ ] 先写 Workbench 命令输入、执行、结果和历史测试
-- [ ] 实现 PING/GET/SET 等命令执行 bridge 调用及结构化结果展示
-- [ ] 实现 Cmd/Ctrl+Enter、loading、错误状态和历史回填
-- [ ] 运行 Workbench 测试、全量前端测试和生产构建并写 Task 9 报告
-- [ ] 使用简体中文提交 Task 9
+- [x] 先写 Workbench 命令输入、执行、结果和历史测试
+- [x] 实现 PING/GET/SET 等命令执行 bridge 调用及结构化结果展示
+- [x] 实现 Cmd/Ctrl+Enter、loading、错误状态和历史回填
+- [x] 运行 Workbench 测试、全量前端测试和生产构建并写 Task 9 报告
+- [x] 使用简体中文提交 Task 9
+- **Status:** complete（修复复审 PASS）
+
+#### 当前 Task 10 执行清单
+
+- [ ] 先写非 Cloud 范围扫描失败测试并确认失败原因
+- [ ] 实现范围扫描脚本、深浅主题、焦点态、正式 Tauri bundle 配置和图标引用
+- [ ] 更新 README、npm scripts、非 Cloud 范围文档与验证记录
+- [ ] 运行非 Cloud 扫描、前端测试/构建、Rust 测试、可用时的 Redis 集成测试、Tauri 构建和差异检查
+- [ ] 对照 Redis Cloud 排除项、Browser `SCAN` 约束、密码持久化边界和 SQL 约束进行最终静态审查
+- [ ] 使用简体中文提交最终 MVP
 
 ### Phase 4：测试与验证
 

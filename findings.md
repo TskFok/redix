@@ -57,6 +57,13 @@
 
 ## Issues Encountered
 
+## Task 9 独立复审观察（2026-08-17）
+
+- 当前提交为 `5bcfe489dcaf578c69e9d9c643678d633f30fbfc`，工作区初始干净。
+- 当前 Workbench 已将 `connectionId?.trim()` 用于守卫、展示和 IPC payload；命令使用 `trim()` 后的值写入状态、IPC 和成功历史。
+- 当前 Workbench 错误映射按固定 code 白名单生成固定文案，未知 code 降级为 `COMMAND_FAILED`；原始 `message` 不进入 Workbench alert。
+- 当前连接切换顺序为 `open(B)` → `close(A)` → 通知父级切换成功；关闭 A 失败时尝试 `close(B)` 并恢复前端 activeId 为 A。Task 9 修复复审已确认该异常路径有回归测试且不会把新连接泄漏给前端。
+
 | Issue | Resolution |
 |-------|------------|
 | 目标目录没有既有工程可增量修改 | 先完成范围确认和设计，再初始化 Tauri 工程 |
