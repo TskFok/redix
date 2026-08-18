@@ -1,4 +1,5 @@
 use crate::error::AppError;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScanKeysInput {
@@ -52,6 +53,71 @@ pub struct SetKeyInput {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CreateKeyInput {
+    pub connection_id: String,
+    pub key: String,
+    pub value: RedisValue,
+    pub ttl_ms: Option<i64>,
+}
+
+impl CreateKeyInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        validate_connection_and_key(&self.connection_id, &self.key)?;
+        if self.ttl_ms.is_some_and(|ttl| ttl < 0) {
+            return Err(AppError::InvalidConnection);
+        }
+        self.value.validate()
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RenameKeyInput {
+    pub connection_id: String,
+    pub key: String,
+    pub new_key: String,
+}
+
+impl RenameKeyInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        validate_connection_and_key(&self.connection_id, &self.key)?;
+        if self.new_key.trim().is_empty() {
+            return Err(AppError::InvalidConnection);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DeleteKeysInput {
+    pub connection_id: String,
+    pub keys: Vec<String>,
+}
+
+impl DeleteKeysInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.connection_id.trim().is_empty()
+            || self.keys.is_empty()
+            || self.keys.iter().any(|key| key.trim().is_empty())
+        {
+            return Err(AppError::InvalidConnection);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct KeyInfoInput {
+    pub connection_id: String,
+    pub key: String,
+}
+
+impl KeyInfoInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        validate_connection_and_key(&self.connection_id, &self.key)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteKeyInput {
     pub connection_id: String,
     pub key: String,
@@ -77,6 +143,76 @@ pub enum RedisValue {
     List { items: Vec<String> },
     Set { members: Vec<String> },
     SortedSet { members: Vec<SortedSetEntry> },
+    Json { value: serde_json::Value },
+    Stream { entries: Vec<StreamEntry> },
+}
+
+impl RedisValue {
+    pub fn validate(&self) -> Result<(), AppError> {
+        match self {
+            Self::String { .. } | Self::Json { .. } => Ok(()),
+            Self::Hash { fields } => {
+                let mut names = HashSet::with_capacity(fields.len());
+                if fields.is_empty()
+                    || fields.iter().any(|entry| entry.field.trim().is_empty())
+                    || fields
+                        .iter()
+                        .any(|entry| !names.insert(entry.field.as_str()))
+                {
+                    return Err(AppError::CommandFailed);
+                }
+                Ok(())
+            }
+            Self::List { items } => {
+                if items.is_empty() {
+                    Err(AppError::CommandFailed)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Set { members } => {
+                if members.is_empty() {
+                    Err(AppError::CommandFailed)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::SortedSet { members } => {
+                if members.is_empty()
+                    || members
+                        .iter()
+                        .any(|entry| entry.member.trim().is_empty() || !entry.score.is_finite())
+                {
+                    Err(AppError::CommandFailed)
+                } else {
+                    Ok(())
+                }
+            }
+            Self::Stream { entries } => {
+                if entries.is_empty()
+                    || entries.iter().any(|entry| {
+                        entry.id.trim().is_empty()
+                            || entry.fields.is_empty()
+                            || entry
+                                .fields
+                                .iter()
+                                .any(|field| field.field.trim().is_empty())
+                            || {
+                                let mut names = HashSet::with_capacity(entry.fields.len());
+                                entry
+                                    .fields
+                                    .iter()
+                                    .any(|field| !names.insert(field.field.as_str()))
+                            }
+                    })
+                {
+                    Err(AppError::CommandFailed)
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -91,10 +227,41 @@ pub struct SortedSetEntry {
     pub score: f64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StreamEntry {
+    pub id: String,
+    pub fields: Vec<StreamField>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StreamField {
+    pub field: String,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct KeyInfo {
+    pub key: String,
+    pub key_type: String,
+    pub ttl_ms: i64,
+    pub size: Option<u64>,
+    pub memory_bytes: Option<u64>,
+    pub encoding: Option<String>,
+    pub idle_seconds: Option<u64>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct KeyValue {
     pub key: String,
     pub key_type: String,
     pub ttl_ms: i64,
     pub value: RedisValue,
+}
+
+fn validate_connection_and_key(connection_id: &str, key: &str) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() || key.trim().is_empty() {
+        Err(AppError::InvalidConnection)
+    } else {
+        Ok(())
+    }
 }

@@ -1,7 +1,59 @@
 use crate::{
-    domain::{HashEntry, RedisValue, SortedSetEntry},
+    domain::{HashEntry, RedisValue, SortedSetEntry, StreamEntry, StreamField},
     error::AppError,
 };
+
+pub fn decode_stream_entry(id: &str, entries: Vec<String>) -> Result<StreamEntry, AppError> {
+    if id.trim().is_empty() || entries.is_empty() || entries.len() % 2 != 0 {
+        return Err(AppError::CommandFailed);
+    }
+
+    let fields = entries
+        .chunks_exact(2)
+        .map(|pair| {
+            if pair[0].trim().is_empty() {
+                return Err(AppError::CommandFailed);
+            }
+            Ok(StreamField {
+                field: pair[0].clone(),
+                value: pair[1].clone(),
+            })
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+
+    let entry = StreamEntry {
+        id: id.to_owned(),
+        fields,
+    };
+    RedisValue::Stream {
+        entries: vec![entry.clone()],
+    }
+    .validate()?;
+    Ok(entry)
+}
+
+pub fn encode_stream_entry(entry: &StreamEntry) -> Result<Vec<String>, AppError> {
+    RedisValue::Stream {
+        entries: vec![entry.clone()],
+    }
+    .validate()?;
+
+    let mut values = Vec::with_capacity(entry.fields.len() * 2 + 1);
+    values.push(entry.id.clone());
+    for field in &entry.fields {
+        values.push(field.field.clone());
+        values.push(field.value.clone());
+    }
+    Ok(values)
+}
+
+pub fn decode_json_value(raw: &str) -> Result<serde_json::Value, AppError> {
+    serde_json::from_str(raw).map_err(|_| AppError::CommandFailed)
+}
+
+pub fn encode_json_value(value: &serde_json::Value) -> Result<String, AppError> {
+    serde_json::to_string(value).map_err(|_| AppError::CommandFailed)
+}
 
 pub fn decode_key_value(key_type: &str, entries: Vec<String>) -> Result<RedisValue, AppError> {
     match key_type {
@@ -45,8 +97,8 @@ pub fn decode_key_value(key_type: &str, entries: Vec<String>) -> Result<RedisVal
 
 #[cfg(test)]
 mod tests {
-    use super::decode_key_value;
-    use crate::domain::{HashEntry, RedisValue, SortedSetEntry};
+    use super::{decode_json_value, decode_key_value, decode_stream_entry, encode_json_value};
+    use crate::domain::{HashEntry, RedisValue, SortedSetEntry, StreamEntry, StreamField};
 
     #[test]
     fn maps_unknown_redis_type_to_unsupported_data_type() {
@@ -101,5 +153,62 @@ mod tests {
 
         assert_eq!(error.code(), "COMMAND_FAILED");
         assert_eq!(error.to_string(), "Redis 命令执行失败");
+    }
+
+    #[test]
+    fn decodes_stream_entries_from_flattened_redis_fields() {
+        assert_eq!(
+            decode_stream_entry(
+                "1710000000000-0",
+                vec![
+                    "event".into(),
+                    "created".into(),
+                    "owner".into(),
+                    "redix".into()
+                ],
+            )
+            .unwrap(),
+            StreamEntry {
+                id: "1710000000000-0".into(),
+                fields: vec![
+                    StreamField {
+                        field: "event".into(),
+                        value: "created".into(),
+                    },
+                    StreamField {
+                        field: "owner".into(),
+                        value: "redix".into(),
+                    },
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_odd_stream_fields_without_exposing_field_values() {
+        let error = decode_stream_entry("1-0", vec!["event".into()]).unwrap_err();
+
+        assert_eq!(error.code(), "COMMAND_FAILED");
+        assert_eq!(error.to_string(), "Redis 命令执行失败");
+    }
+
+    #[test]
+    fn parses_and_serializes_json_as_a_valid_document() {
+        let value = decode_json_value(r#"{"name":"Alice","items":[1,true]}"#).unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({"name": "Alice", "items": [1, true]})
+        );
+        let encoded = encode_json_value(&value).unwrap();
+        assert_eq!(decode_json_value(&encoded).unwrap(), value);
+    }
+
+    #[test]
+    fn rejects_invalid_json_as_command_failure() {
+        let error = decode_json_value(r#"{"name":"#).unwrap_err();
+
+        assert_eq!(error.code(), "COMMAND_FAILED");
+        assert!(!error.to_string().contains("name"));
     }
 }

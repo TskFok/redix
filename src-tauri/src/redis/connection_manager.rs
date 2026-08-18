@@ -410,6 +410,9 @@ async fn write_key(
                 .await
                 .map_err(map_command_error)?;
         }
+        RedisValue::Json { .. } | RedisValue::Stream { .. } => {
+            return Err(AppError::UnsupportedDataType);
+        }
     }
     Ok(())
 }
