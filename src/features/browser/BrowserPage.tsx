@@ -4,6 +4,8 @@ import { getKey, scanKeys } from "../../lib/tauri";
 import type { KeyValue } from "../../lib/types";
 import KeyDetails from "./KeyDetails";
 import KeyList from "./KeyList";
+import AddKey from "./AddKey";
+import BulkKeyActions from "./BulkKeyActions";
 import {
   applyScanPage,
   browserErrorMessage,
@@ -24,6 +26,8 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
   }));
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [showAddKey, setShowAddKey] = useState(false);
   const connectionIdRef = useRef(connectionId);
   connectionIdRef.current = connectionId;
   const mountedRef = useRef(false);
@@ -56,6 +60,9 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
         loading: true,
         error: null,
       }));
+      if (replace) {
+        setSelectedKeys([]);
+      }
 
       try {
         const page = await scanKeys({
@@ -89,6 +96,8 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
     scanLoadingRef.current = false;
     skipDebounceForPatternRef.current = "*";
     setDetailActionLoading(false);
+    setSelectedKeys([]);
+    setShowAddKey(false);
     setState({
       ...initialBrowserPageState,
       pattern: "*",
@@ -160,6 +169,38 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
       return;
     }
     void scanPage(state.cursor, state.pattern.trim() || "*", false);
+  };
+
+  const handleRefresh = () => {
+    if (state.loading) {
+      return;
+    }
+    setSelectedKeys([]);
+    void scanPage(0, state.pattern.trim() || "*", true);
+  };
+
+  const handleToggleSelect = (key: string) => {
+    if (state.loading || detailActionLoading) {
+      return;
+    }
+    setSelectedKeys((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  };
+
+  const handleCreated = () => {
+    setShowAddKey(false);
+    setSelectedKeys([]);
+    void scanPage(0, state.pattern.trim() || "*", true);
+  };
+
+  const handleBulkDeleted = () => {
+    setSelectedKeys([]);
+    void scanPage(0, state.pattern.trim() || "*", true);
+  };
+
+  const handleBulkError = (message: string) => {
+    setState((current) => ({ ...current, error: message }));
   };
 
   const handleSelect = async (key: string) => {
@@ -249,16 +290,53 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
         </p>
       ) : null}
 
+      <div className="browser-actions" aria-label="Browser 操作">
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => setShowAddKey(true)}
+          disabled={listBusy || showAddKey}
+        >
+          新增键
+        </button>
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={handleRefresh}
+          disabled={listBusy}
+        >
+          刷新键列表
+        </button>
+        <BulkKeyActions
+          connectionId={connectionId}
+          selectedKeys={selectedKeys}
+          busy={listBusy}
+          onDeleted={handleBulkDeleted}
+          onError={handleBulkError}
+        />
+      </div>
+
+      {showAddKey ? (
+        <AddKey
+          connectionId={connectionId}
+          busy={listBusy}
+          onCreated={handleCreated}
+          onCancel={() => setShowAddKey(false)}
+        />
+      ) : null}
+
       <div className="browser-layout">
         <KeyList
           pattern={state.pattern}
           keys={state.keys}
           selectedKey={state.selectedKey}
+          selectedKeys={selectedKeys}
           hasMore={state.hasMore}
           loading={listBusy}
           onPatternChange={handlePatternChange}
           onPatternKeyDown={handlePatternKeyDown}
           onSelect={(key) => void handleSelect(key)}
+          onToggleSelect={handleToggleSelect}
           onLoadMore={handleLoadMore}
         />
         <KeyDetails

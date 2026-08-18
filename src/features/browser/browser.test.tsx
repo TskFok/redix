@@ -15,12 +15,16 @@ const {
   getKeyMock,
   setKeyMock,
   deleteKeyMock,
+  createKeyMock,
+  deleteKeysMock,
   setKeyTtlMock,
 } = vi.hoisted(() => ({
   scanKeysMock: vi.fn(),
   getKeyMock: vi.fn(),
   setKeyMock: vi.fn(),
   deleteKeyMock: vi.fn(),
+  createKeyMock: vi.fn(),
+  deleteKeysMock: vi.fn(),
   setKeyTtlMock: vi.fn(),
 }));
 
@@ -29,6 +33,8 @@ vi.mock("../../lib/tauri", () => ({
   getKey: getKeyMock,
   setKey: setKeyMock,
   deleteKey: deleteKeyMock,
+  createKey: createKeyMock,
+  deleteKeys: deleteKeysMock,
   setKeyTtl: setKeyTtlMock,
 }));
 
@@ -64,6 +70,8 @@ describe("Redis Browser", () => {
     getKeyMock.mockResolvedValue(stringDetail);
     setKeyMock.mockResolvedValue(stringDetail);
     deleteKeyMock.mockResolvedValue(undefined);
+    createKeyMock.mockResolvedValue(stringDetail);
+    deleteKeysMock.mockResolvedValue(0);
     setKeyTtlMock.mockResolvedValue(-1);
   });
 
@@ -645,5 +653,175 @@ describe("Redis Browser", () => {
       expect(onSave).not.toHaveBeenCalled();
       cleanup();
     }
+  });
+
+  it("新增 String 键并在创建完成后刷新列表", async () => {
+    const created = {
+      ...stringDetail,
+      key: "new:user",
+    };
+    scanKeysMock
+      .mockResolvedValueOnce({ cursor: 0, keys: [], has_more: false })
+      .mockResolvedValueOnce({
+        cursor: 0,
+        keys: [{ ...stringSummary, key: "new:user" }],
+        has_more: false,
+      });
+    createKeyMock.mockResolvedValue(created);
+
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("没有匹配的键。");
+    fireEvent.click(screen.getByRole("button", { name: "新增键" }));
+    fireEvent.change(screen.getByLabelText("键名"), {
+      target: { value: "new:user" },
+    });
+    fireEvent.change(screen.getByLabelText("字符串值"), {
+      target: { value: "Alice" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+
+    await waitFor(() => {
+      expect(createKeyMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "new:user",
+        value: { String: { value: "Alice" } },
+        ttl_ms: null,
+      });
+      expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    });
+    expect(await screen.findByText("new:user")).toBeInTheDocument();
+  });
+
+  it("新增 Stream 键时生成 Stream DTO", async () => {
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    createKeyMock.mockResolvedValue({
+      key: "events",
+      key_type: "stream",
+      ttl_ms: -1,
+      value: {
+        Stream: {
+          entries: [{ id: "1-0", fields: [{ field: "event", value: "created" }] }],
+        },
+      },
+    });
+
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("没有匹配的键。");
+    fireEvent.click(screen.getByRole("button", { name: "新增键" }));
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "events" } });
+    fireEvent.change(screen.getByLabelText("数据类型"), { target: { value: "stream" } });
+    fireEvent.change(screen.getByLabelText("Stream 条目 JSON"), {
+      target: {
+        value: JSON.stringify([
+          { id: "1-0", fields: [{ field: "event", value: "created" }] },
+        ]),
+      },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+
+    await waitFor(() => {
+      expect(createKeyMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "events",
+        value: {
+          Stream: {
+            entries: [{ id: "1-0", fields: [{ field: "event", value: "created" }] }],
+          },
+        },
+        ttl_ms: null,
+      });
+    });
+  });
+
+  it("拒绝空键名和后端重复键错误", async () => {
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("没有匹配的键。");
+    fireEvent.click(screen.getByRole("button", { name: "新增键" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("键名不能为空");
+    expect(createKeyMock).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "existing" } });
+    createKeyMock.mockRejectedValueOnce({ code: "COMMAND_FAILED", message: "duplicate" });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("创建键失败");
+  });
+
+  it("选择多个键后只发起一次批量删除，并在刷新后清空选择", async () => {
+    const summaries = [
+      stringSummary,
+      { ...stringSummary, key: "user:2" },
+    ];
+    scanKeysMock
+      .mockResolvedValueOnce({ cursor: 0, keys: summaries, has_more: false })
+      .mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    deleteKeysMock.mockResolvedValue(2);
+
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("user:2");
+    fireEvent.click(screen.getByLabelText("选择键 user:1"));
+    fireEvent.click(screen.getByLabelText("选择键 user:2"));
+    expect(screen.getByRole("button", { name: "批量删除（2）" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "批量删除（2）" }));
+
+    await waitFor(() => {
+      expect(deleteKeysMock).toHaveBeenCalledTimes(1);
+      expect(deleteKeysMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        keys: ["user:1", "user:2"],
+      });
+      expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.getByRole("button", { name: "批量删除" })).toBeDisabled();
+  });
+
+  it("显式刷新从游标 0 重新扫描并清空已有选择", async () => {
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("user:1");
+    fireEvent.click(screen.getByLabelText("选择键 user:1"));
+    fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
+
+    await waitFor(() => {
+      expect(scanKeysMock).toHaveBeenLastCalledWith({
+        connection_id: "local",
+        cursor: 0,
+        pattern: "*",
+        count: 100,
+      });
+    });
+    expect(screen.getByLabelText("选择键 user:1")).not.toBeChecked();
+  });
+
+  it("连接切换后忽略未完成新增键响应", async () => {
+    const creation = deferred<typeof stringDetail>();
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    createKeyMock.mockImplementation(() => creation.promise);
+
+    const { rerender } = render(<BrowserPage connectionId="local" />);
+    await screen.findByText("没有匹配的键。");
+    fireEvent.click(screen.getByRole("button", { name: "新增键" }));
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "stale" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+
+    rerender(<BrowserPage connectionId="remote" />);
+    await waitFor(() => {
+      expect(scanKeysMock).toHaveBeenCalledWith({
+        connection_id: "remote",
+        cursor: 0,
+        pattern: "*",
+        count: 100,
+      });
+    });
+    creation.resolve(stringDetail);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("stale")).not.toBeInTheDocument();
   });
 });
