@@ -5,14 +5,18 @@ use tokio::sync::RwLock;
 
 use crate::{
     domain::{
-        CommandResult, ConnectionInfo, ConnectionProfile, HashEntry, KeySummary, KeyValue,
-        RedisValue, ScanKeysInput, ScanPage, SetKeyInput, SetKeyTtlInput, SortedSetEntry,
+        CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput, DeleteKeysInput,
+        HashEntry, KeyInfo, KeyInfoInput, KeySummary, KeyValue, RedisValue, RenameKeyInput,
+        ScanKeysInput, ScanPage, SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
 };
 
-use super::tokenize_command;
+use super::{
+    key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
+    tokenize_command,
+};
 
 #[allow(async_fn_in_trait)]
 pub trait RedisOperations: Send + Sync {
@@ -26,8 +30,12 @@ pub trait RedisOperations: Send + Sync {
     async fn scan_keys(&self, input: crate::domain::ScanKeysInput) -> Result<ScanPage, AppError>;
     async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError>;
     async fn set_key(&self, input: SetKeyInput) -> Result<KeyValue, AppError>;
+    async fn create_key(&self, input: CreateKeyInput) -> Result<KeyValue, AppError>;
+    async fn rename_key(&self, input: RenameKeyInput) -> Result<KeyValue, AppError>;
     async fn delete_key(&self, connection_id: &str, key: &str) -> Result<(), AppError>;
+    async fn delete_keys(&self, input: DeleteKeysInput) -> Result<u64, AppError>;
     async fn set_key_ttl(&self, input: SetKeyTtlInput) -> Result<i64, AppError>;
+    async fn get_key_info(&self, input: KeyInfoInput) -> Result<KeyInfo, AppError>;
     async fn execute_command(
         &self,
         connection_id: &str,
@@ -194,6 +202,40 @@ impl RedisOperations for RedisService {
         read_key(&mut connection, &input.key).await
     }
 
+    async fn create_key(&self, input: CreateKeyInput) -> Result<KeyValue, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let exists: i64 = ::redis::cmd("EXISTS")
+            .arg(&input.key)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if exists > 0 {
+            return Err(AppError::CommandFailed);
+        }
+
+        write_key(&mut connection, &input.key, &input.value).await?;
+        if let Some(ttl_ms) = input.ttl_ms {
+            apply_ttl(&mut connection, &input.key, ttl_ms).await?;
+        }
+        read_key(&mut connection, &input.key).await
+    }
+
+    async fn rename_key(&self, input: RenameKeyInput) -> Result<KeyValue, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let renamed: i64 = ::redis::cmd("RENAMENX")
+            .arg(&input.key)
+            .arg(&input.new_key)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if renamed == 0 {
+            return Err(AppError::CommandFailed);
+        }
+        read_key(&mut connection, &input.new_key).await
+    }
+
     async fn delete_key(&self, connection_id: &str, key: &str) -> Result<(), AppError> {
         let mut connection = self.connection(connection_id).await?;
         ::redis::cmd("DEL")
@@ -202,6 +244,17 @@ impl RedisOperations for RedisService {
             .await
             .map_err(map_command_error)?;
         Ok(())
+    }
+
+    async fn delete_keys(&self, input: DeleteKeysInput) -> Result<u64, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let deleted: i64 = ::redis::cmd("DEL")
+            .arg(&input.keys)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        u64::try_from(deleted).map_err(|_| AppError::CommandFailed)
     }
 
     async fn set_key_ttl(&self, input: SetKeyTtlInput) -> Result<i64, AppError> {
@@ -221,6 +274,12 @@ impl RedisOperations for RedisService {
             .query_async::<i64>(&mut connection)
             .await
             .map_err(map_command_error)
+    }
+
+    async fn get_key_info(&self, input: KeyInfoInput) -> Result<KeyInfo, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        read_key_info(&mut connection, &input.key).await
     }
 
     async fn execute_command(
@@ -251,7 +310,9 @@ async fn key_size(
         "list" => "LLEN",
         "set" => "SCARD",
         "zset" => "ZCARD",
-        _ => return Err(AppError::UnsupportedDataType),
+        "stream" => "XLEN",
+        "ReJSON-RL" | "ReJSON-RS" | "JSON" => return Ok(None),
+        _ => return Ok(None),
     };
     ::redis::cmd(command)
         .arg(key)
@@ -259,6 +320,79 @@ async fn key_size(
         .await
         .map(Some)
         .map_err(map_command_error)
+}
+
+async fn apply_ttl(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+    ttl_ms: i64,
+) -> Result<i64, AppError> {
+    validate_ttl(ttl_ms)?;
+    let updated: i64 = ::redis::cmd("PEXPIRE")
+        .arg(key)
+        .arg(ttl_ms)
+        .query_async::<i64>(connection)
+        .await
+        .map_err(map_command_error)?;
+    if updated == 0 {
+        return Err(AppError::CommandFailed);
+    }
+    ::redis::cmd("PTTL")
+        .arg(key)
+        .query_async::<i64>(connection)
+        .await
+        .map_err(map_command_error)
+}
+
+async fn read_key_info(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+) -> Result<KeyInfo, AppError> {
+    let key_type: String = ::redis::cmd("TYPE")
+        .arg(key)
+        .query_async::<String>(connection)
+        .await
+        .map_err(map_command_error)?;
+    if key_type == "none" {
+        return Err(AppError::CommandFailed);
+    }
+    let ttl_ms: i64 = ::redis::cmd("PTTL")
+        .arg(key)
+        .query_async::<i64>(connection)
+        .await
+        .map_err(map_command_error)?;
+    let size = key_size(connection, key, &key_type).await?;
+    let memory_bytes = ::redis::cmd("MEMORY")
+        .arg("USAGE")
+        .arg(key)
+        .query_async::<Option<u64>>(connection)
+        .await
+        .ok()
+        .flatten();
+    let encoding = ::redis::cmd("OBJECT")
+        .arg("ENCODING")
+        .arg(key)
+        .query_async::<Option<String>>(connection)
+        .await
+        .ok()
+        .flatten();
+    let idle_seconds = ::redis::cmd("OBJECT")
+        .arg("IDLETIME")
+        .arg(key)
+        .query_async::<Option<u64>>(connection)
+        .await
+        .ok()
+        .flatten();
+
+    Ok(KeyInfo {
+        key: key.to_owned(),
+        key_type,
+        ttl_ms,
+        size,
+        memory_bytes,
+        encoding,
+        idle_seconds,
+    })
 }
 
 async fn read_key(
@@ -321,6 +455,34 @@ async fn read_key(
                 .map(|(member, score)| SortedSetEntry { member, score })
                 .collect(),
         },
+        "stream" => {
+            let reply: ::redis::streams::StreamRangeReply = ::redis::cmd("XRANGE")
+                .arg(key)
+                .arg("-")
+                .arg("+")
+                .arg("COUNT")
+                .arg(500)
+                .query_async::<::redis::streams::StreamRangeReply>(connection)
+                .await
+                .map_err(map_command_error)?;
+            let entries = reply
+                .ids
+                .into_iter()
+                .map(stream_entry_from_reply)
+                .collect::<Result<Vec<_>, AppError>>()?;
+            RedisValue::Stream { entries }
+        }
+        "ReJSON-RL" | "ReJSON-RS" | "JSON" => {
+            let raw: String = ::redis::cmd("JSON.GET")
+                .arg(key)
+                .arg(".")
+                .query_async::<String>(connection)
+                .await
+                .map_err(map_json_command_error)?;
+            RedisValue::Json {
+                value: decode_json_value(&raw)?,
+            }
+        }
         _ => return Err(AppError::UnsupportedDataType),
     };
     let ttl_ms = ::redis::cmd("PTTL")
@@ -336,11 +498,30 @@ async fn read_key(
     })
 }
 
+fn stream_entry_from_reply(entry: ::redis::streams::StreamId) -> Result<StreamEntry, AppError> {
+    let id = entry.id;
+    let mut fields = Vec::with_capacity(entry.map.len());
+    for (field, value) in entry.map {
+        let value =
+            ::redis::from_redis_value::<String>(value).map_err(|_| AppError::CommandFailed)?;
+        fields.push((field, value));
+    }
+    fields.sort_by(|left, right| left.0.cmp(&right.0));
+    decode_stream_entry(
+        &id,
+        fields
+            .into_iter()
+            .flat_map(|(field, value)| [field, value])
+            .collect(),
+    )
+}
+
 async fn write_key(
     connection: &mut ::redis::aio::MultiplexedConnection,
     key: &str,
     value: &RedisValue,
 ) -> Result<(), AppError> {
+    value.validate()?;
     match value {
         RedisValue::String { value } => {
             ::redis::cmd("SET")
@@ -396,9 +577,6 @@ async fn write_key(
                 .map_err(map_command_error)?;
         }
         RedisValue::SortedSet { members } => {
-            if members.is_empty() {
-                return Err(AppError::CommandFailed);
-            }
             replace_collection(connection, key).await?;
             let mut command = ::redis::cmd("ZADD");
             command.arg(key);
@@ -410,8 +588,27 @@ async fn write_key(
                 .await
                 .map_err(map_command_error)?;
         }
-        RedisValue::Json { .. } | RedisValue::Stream { .. } => {
-            return Err(AppError::UnsupportedDataType);
+        RedisValue::Json { value } => {
+            let encoded = encode_json_value(value)?;
+            ::redis::cmd("JSON.SET")
+                .arg(key)
+                .arg(".")
+                .arg(encoded)
+                .query_async::<String>(connection)
+                .await
+                .map_err(map_json_command_error)?;
+        }
+        RedisValue::Stream { entries } => {
+            replace_collection(connection, key).await?;
+            for entry in entries {
+                let encoded = encode_stream_entry(entry)?;
+                ::redis::cmd("XADD")
+                    .arg(key)
+                    .arg(&encoded)
+                    .query_async::<String>(connection)
+                    .await
+                    .map_err(map_command_error)?;
+            }
         }
     }
     Ok(())
@@ -559,6 +756,20 @@ fn map_command_error(error: ::redis::RedisError) -> AppError {
         ::redis::ErrorKind::AuthenticationFailed => AppError::AuthenticationFailed,
         ::redis::ErrorKind::Io => AppError::ConnectionFailed,
         _ => AppError::CommandFailed,
+    }
+}
+
+fn map_json_command_error(error: ::redis::RedisError) -> AppError {
+    let unsupported = error.detail().is_some_and(|detail| {
+        let detail = detail.to_ascii_lowercase();
+        detail.contains("unknown command")
+            || detail.contains("unknown subcommand")
+            || detail.contains("module command")
+    });
+    if unsupported {
+        AppError::UnsupportedDataType
+    } else {
+        map_command_error(error)
     }
 }
 

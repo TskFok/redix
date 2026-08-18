@@ -6,8 +6,9 @@ use std::{
 
 use redix_lib::{
     domain::{
-        ConnectionProfile, HashEntry, KeyValue, RedisValue, ScanKeysInput, SetKeyInput,
-        SetKeyTtlInput, SortedSetEntry,
+        ConnectionProfile, CreateKeyInput, DeleteKeysInput, HashEntry, KeyInfoInput, KeyValue,
+        RedisValue, RenameKeyInput, ScanKeysInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry,
+        StreamEntry, StreamField,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -87,6 +88,12 @@ struct TestKeys {
     list: String,
     set: String,
     zset: String,
+    stream: String,
+    json: String,
+    rename_source: String,
+    rename_target: String,
+    batch_a: String,
+    batch_b: String,
 }
 
 impl TestKeys {
@@ -104,11 +111,29 @@ impl TestKeys {
             list: format!("{prefix}:list"),
             set: format!("{prefix}:set"),
             zset: format!("{prefix}:zset"),
+            stream: format!("{prefix}:stream"),
+            json: format!("{prefix}:json"),
+            rename_source: format!("{prefix}:rename-source"),
+            rename_target: format!("{prefix}:rename-target"),
+            batch_a: format!("{prefix}:batch-a"),
+            batch_b: format!("{prefix}:batch-b"),
         }
     }
 
-    fn all(&self) -> [&str; 5] {
-        [&self.string, &self.hash, &self.list, &self.set, &self.zset]
+    fn all(&self) -> [&str; 11] {
+        [
+            &self.string,
+            &self.hash,
+            &self.list,
+            &self.set,
+            &self.zset,
+            &self.stream,
+            &self.json,
+            &self.rename_source,
+            &self.rename_target,
+            &self.batch_a,
+            &self.batch_b,
+        ]
     }
 }
 
@@ -259,6 +284,152 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         .map_err(|error| error.code().to_owned())?;
     if command.kind != "string" || command.value != serde_json::json!("PONG") {
         return Err("Workbench PING did not return the expected result".into());
+    }
+
+    let stream_value = RedisValue::Stream {
+        entries: vec![
+            StreamEntry {
+                id: "1-0".into(),
+                fields: vec![StreamField {
+                    field: "event".into(),
+                    value: "created".into(),
+                }],
+            },
+            StreamEntry {
+                id: "2-0".into(),
+                fields: vec![StreamField {
+                    field: "event".into(),
+                    value: "updated".into(),
+                }],
+            },
+        ],
+    };
+    let stream = service
+        .create_key(CreateKeyInput {
+            connection_id: "integration".into(),
+            key: keys.stream.clone(),
+            value: stream_value.clone(),
+            ttl_ms: None,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    check_key_value(&stream, &keys.stream, "stream", &stream_value)?;
+
+    let stream_fetched = service
+        .get_key("integration", &keys.stream)
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    check_key_value(&stream_fetched, &keys.stream, "stream", &stream_value)?;
+
+    let renamed = service
+        .create_key(CreateKeyInput {
+            connection_id: "integration".into(),
+            key: keys.rename_source.clone(),
+            value: RedisValue::String {
+                value: "rename".into(),
+            },
+            ttl_ms: None,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    check_key_value(
+        &renamed,
+        &keys.rename_source,
+        "string",
+        &RedisValue::String {
+            value: "rename".into(),
+        },
+    )?;
+    let renamed = service
+        .rename_key(RenameKeyInput {
+            connection_id: "integration".into(),
+            key: keys.rename_source.clone(),
+            new_key: keys.rename_target.clone(),
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    check_key_value(
+        &renamed,
+        &keys.rename_target,
+        "string",
+        &RedisValue::String {
+            value: "rename".into(),
+        },
+    )?;
+
+    for key in [&keys.batch_a, &keys.batch_b] {
+        service
+            .create_key(CreateKeyInput {
+                connection_id: "integration".into(),
+                key: key.to_string(),
+                value: RedisValue::String {
+                    value: "batch".into(),
+                },
+                ttl_ms: None,
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+    }
+    let deleted = service
+        .delete_keys(DeleteKeysInput {
+            connection_id: "integration".into(),
+            keys: vec![keys.batch_a.clone(), keys.batch_b.clone()],
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if deleted != 2 {
+        return Err("batch delete did not report two deleted keys".into());
+    }
+    for key in [&keys.batch_a, &keys.batch_b] {
+        if !matches!(service.get_key("integration", key).await, Err(error) if error.code() == "COMMAND_FAILED")
+        {
+            return Err("batch-deleted key is still readable".into());
+        }
+    }
+
+    let info = service
+        .get_key_info(KeyInfoInput {
+            connection_id: "integration".into(),
+            key: keys.rename_target.clone(),
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if info.key != keys.rename_target || info.key_type != "string" || info.size != Some(6) {
+        return Err("key info does not include the renamed string metadata".into());
+    }
+
+    let json_value = RedisValue::Json {
+        value: serde_json::json!({"name": "Alice", "active": true}),
+    };
+    match service
+        .create_key(CreateKeyInput {
+            connection_id: "integration".into(),
+            key: keys.json.clone(),
+            value: json_value.clone(),
+            ttl_ms: None,
+        })
+        .await
+    {
+        Ok(json) => {
+            if !matches!(json.value, RedisValue::Json { .. }) {
+                return Err("RedisJSON key did not read back as JSON".into());
+            }
+            let fetched = service
+                .get_key("integration", &keys.json)
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if fetched.key != keys.json
+                || !matches!(
+                    fetched.key_type.as_str(),
+                    "ReJSON-RL" | "ReJSON-RS" | "JSON"
+                )
+                || fetched.value != json_value
+            {
+                return Err("RedisJSON key did not read back the expected document".into());
+            }
+        }
+        Err(error) if error.code() == "UNSUPPORTED_DATA_TYPE" => {}
+        Err(error) => return Err(format!("RedisJSON operation failed: {}", error.code())),
     }
 
     for key in keys.all() {
