@@ -4,11 +4,16 @@ import type {
   CommandResult,
   ConnectionInfo,
   ConnectionProfile,
+  CreateKeyInput,
+  DeleteKeysInput,
   DeleteKeyInput,
   ExecuteCommandInput,
   GetKeyInput,
   IpcError,
+  KeyInfo,
+  KeyInfoInput,
   KeyValue,
+  RenameKeyInput,
   SaveConnectionInput,
   ScanKeysInput,
   ScanPage,
@@ -86,12 +91,28 @@ export function setKey(input: SetKeyInput): Promise<KeyValue> {
   return call<KeyValue>("set_key", { input });
 }
 
+export function createKey(input: CreateKeyInput): Promise<KeyValue> {
+  return call<KeyValue>("create_key", { input });
+}
+
+export function renameKey(input: RenameKeyInput): Promise<KeyValue> {
+  return call<KeyValue>("rename_key", { input });
+}
+
 export function deleteKey(input: DeleteKeyInput): Promise<void> {
   return call<void>("delete_key", { input });
 }
 
+export function deleteKeys(input: DeleteKeysInput): Promise<number> {
+  return call<number>("delete_keys", { input });
+}
+
 export function setKeyTtl(input: SetKeyTtlInput): Promise<number> {
   return call<number>("set_key_ttl", { input });
+}
+
+export function getKeyInfo(input: KeyInfoInput): Promise<KeyInfo> {
+  return call<KeyInfo>("get_key_info", { input });
 }
 
 export function executeCommand(input: ExecuteCommandInput): Promise<CommandResult> {

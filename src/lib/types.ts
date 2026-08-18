@@ -39,12 +39,32 @@ export interface KeySummary {
   size: number | null;
 }
 
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export interface StreamField {
+  field: string;
+  value: string;
+}
+
+export interface StreamEntry {
+  id: string;
+  fields: StreamField[];
+}
+
 export type RedisValue =
   | { String: { value: string } }
   | { Hash: { fields: Array<{ field: string; value: string }> } }
   | { List: { items: string[] } }
   | { Set: { members: string[] } }
-  | { SortedSet: { members: Array<{ member: string; score: number }> } };
+  | { SortedSet: { members: Array<{ member: string; score: number }> } }
+  | { Json: { value: JsonValue } }
+  | { Stream: { entries: StreamEntry[] } };
 
 export interface KeyValue {
   key: string;
@@ -62,6 +82,39 @@ export interface SetKeyInput {
   connection_id: string;
   key: string;
   value: RedisValue;
+}
+
+export interface CreateKeyInput {
+  connection_id: string;
+  key: string;
+  value: RedisValue;
+  ttl_ms: number | null;
+}
+
+export interface RenameKeyInput {
+  connection_id: string;
+  key: string;
+  new_key: string;
+}
+
+export interface DeleteKeysInput {
+  connection_id: string;
+  keys: string[];
+}
+
+export interface KeyInfoInput {
+  connection_id: string;
+  key: string;
+}
+
+export interface KeyInfo {
+  key: string;
+  key_type: string;
+  ttl_ms: number;
+  size: number | null;
+  memory_bytes: number | null;
+  encoding: string | null;
+  idle_seconds: number | null;
 }
 
 export interface DeleteKeyInput {

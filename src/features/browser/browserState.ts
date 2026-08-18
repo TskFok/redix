@@ -67,9 +67,26 @@ export function cloneRedisValue(value: RedisValue): RedisValue {
   if ("Set" in value) {
     return { Set: { members: [...value.Set.members] } };
   }
+  if ("SortedSet" in value) {
+    return {
+      SortedSet: {
+        members: value.SortedSet.members.map((entry) => ({ ...entry })),
+      },
+    };
+  }
+  if ("Json" in value) {
+    return {
+      Json: {
+        value: JSON.parse(JSON.stringify(value.Json.value)),
+      },
+    };
+  }
   return {
-    SortedSet: {
-      members: value.SortedSet.members.map((entry) => ({ ...entry })),
+    Stream: {
+      entries: value.Stream.entries.map((entry) => ({
+        id: entry.id,
+        fields: entry.fields.map((field) => ({ ...field })),
+      })),
     },
   };
 }
@@ -79,7 +96,9 @@ export type RedisValueKind =
   | "hash"
   | "list"
   | "set"
-  | "sorted-set";
+  | "sorted-set"
+  | "json"
+  | "stream";
 
 export function redisValueKind(value: RedisValue): RedisValueKind {
   if ("String" in value) {
@@ -94,7 +113,13 @@ export function redisValueKind(value: RedisValue): RedisValueKind {
   if ("Set" in value) {
     return "set";
   }
-  return "sorted-set";
+  if ("SortedSet" in value) {
+    return "sorted-set";
+  }
+  if ("Json" in value) {
+    return "json";
+  }
+  return "stream";
 }
 
 export function keyTypeLabel(keyType: string): string {
@@ -111,6 +136,12 @@ export function keyTypeLabel(keyType: string): string {
     case "sortedset":
     case "sorted-set":
       return "Sorted Set";
+    case "stream":
+      return "Stream";
+    case "rejson-rl":
+    case "rejson-rs":
+    case "json":
+      return "JSON";
     default:
       return keyType || "未知";
   }

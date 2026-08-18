@@ -3,12 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   closeConnection,
+  createKey,
+  deleteKeys,
   deleteConnection,
   deleteKey,
   executeCommand,
   getKey,
+  getKeyInfo,
   listConnections,
   openConnection,
+  renameKey,
   saveConnection,
   scanKeys,
   setKey,
@@ -127,6 +131,57 @@ describe("Tauri IPC bridge", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("execute_command", {
       input: commandInput,
     });
+  });
+
+  it("为 Browser 扩展命令使用稳定命令名和 input 包装", async () => {
+    const keyValue: KeyValue = {
+      key: "demo",
+      key_type: "string",
+      ttl_ms: -1,
+      value: stringValue,
+    };
+    const keyInfo = {
+      key: "demo",
+      key_type: "string",
+      ttl_ms: -1,
+      size: 5,
+      memory_bytes: 64,
+      encoding: "embstr",
+      idle_seconds: 2,
+    };
+    invokeMock
+      .mockResolvedValueOnce(keyValue)
+      .mockResolvedValueOnce(keyValue)
+      .mockResolvedValueOnce(2)
+      .mockResolvedValueOnce(keyInfo);
+
+    const createInput = {
+      connection_id: "local",
+      key: "demo",
+      value: stringValue,
+      ttl_ms: null,
+    };
+    await expect(createKey(createInput)).resolves.toEqual(keyValue);
+    expect(invokeMock).toHaveBeenLastCalledWith("create_key", { input: createInput });
+
+    const renameInput = {
+      connection_id: "local",
+      key: "demo",
+      new_key: "demo:renamed",
+    };
+    await expect(renameKey(renameInput)).resolves.toEqual(keyValue);
+    expect(invokeMock).toHaveBeenLastCalledWith("rename_key", { input: renameInput });
+
+    const deleteInput = {
+      connection_id: "local",
+      keys: ["demo:renamed", "other"],
+    };
+    await expect(deleteKeys(deleteInput)).resolves.toBe(2);
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_keys", { input: deleteInput });
+
+    const infoInput = { connection_id: "local", key: "demo:renamed" };
+    await expect(getKeyInfo(infoInput)).resolves.toEqual(keyInfo);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_key_info", { input: infoInput });
   });
 
   it("list_connections 使用无参数调用并返回 profile 列表", async () => {

@@ -29,6 +29,10 @@ function editorTitle(kind: RedisValueKind): string {
       return "Set 成员";
     case "sorted-set":
       return "Sorted Set 成员";
+    case "json":
+      return "JSON 文档";
+    case "stream":
+      return "Stream 条目";
   }
 }
 
