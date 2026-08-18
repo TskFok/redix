@@ -109,3 +109,40 @@
 | What's the goal? | 在当前目录创建排除 Redis Cloud 的 Rust + Tauri Redis 客户端 |
 | What have I learned? | 参考项目是大型 Electron + React + NestJS 应用，目标目录为空 |
 | What have I done? | 完成范围确认、设计、自审和设计文档提交 |
+
+## Session: 2026-08-18 — Task 11 视觉与排版对齐
+
+- **Status:** complete
+- 已读取当前项目与 RedisInsight 参考项目的前端入口、全局样式 token、主题变量、Browser/Workbench 页面样式和当前工作区状态。
+- 已确认本轮只需要处理 React 前端视觉层与应用壳层，不修改现有 `src-tauri/` 未提交变更。
+- 已使用 `ui-ux-pro-max` 生成开发者工具设计基线；由于用户指定参考项目，最终颜色和布局以 RedisInsight 源码为准。
+- 已将观察记录写入 `findings.md`，并得到用户确认“左侧导航 + 顶部连接上下文 + 全高双栏/上下工作区”的改造方向。
+- 已按 TDD 先补充应用壳层回归测试，再实现 `src/App.tsx` 的应用壳层和 `src/styles.css` 的 RedisInsight 风格 token、导航、全高工作区、连接页、Browser/Workbench 排版。
+- 已保留连接管理、Browser、Workbench 的现有业务组件与 IPC 边界，未修改现有 `src-tauri/` 用户变更。
+- 前端全量测试通过 56/56，生产构建通过；应用内浏览器核验默认桌面视口和 375px 窄窗口，移动端文档宽度为 366px，小于 375px 视口，无横向溢出。
+- 已恢复应用内浏览器默认视口，并完成最终差异检查与交付前验证。
+
+## Session: 2026-08-18 — Task 12 Browser 能力扩展实现
+
+- **Status:** in_progress
+- 用户确认先补齐 Browser 新增/重命名/批量删除/元数据刷新以及基础 Stream/JSON。
+- 已读取当前 Browser 组件、Tauri bridge、Rust Redis service、集成测试和 RedisInsight 对应模块。
+- 已写入设计文档：docs/superpowers/specs/2026-08-18-browser-capability-expansion-design.md。
+- 已写入实施计划：docs/superpowers/plans/2026-08-18-browser-capability-expansion.md。
+- 本轮计划保留当前用户未提交修改，不创建分支；实现继续按 TDD 执行。
+- Task 1 已先写失败测试，再完成 RedisValue 的 JSON/Stream DTO、输入校验和纯编解码函数；27 个库测试和 9 个领域测试通过。
+- Task 1 已提交为 `53a7e3f`（`扩展 Browser 数据类型领域模型`）；当前未提交文件仍仅包含用户既有改动及计划记录。
+- Task 2 已先让 command/integration 测试因接口缺失失败，再实现 RedisService 的新增、RENAMENX、单次 DEL 批量删除、元数据、Stream 和 RedisJSON 操作；命令测试 2/2、真实 Redis 集成测试 1/1 通过。
+- Task 2 已提交为 `87ec2f2`（`实现 Browser 新增重命名批量删除和模块数据操作`）；RedisJSON 不可用时验证为稳定的 `UNSUPPORTED_DATA_TYPE`。
+- Task 3 已先让 bridge/state 测试失败，再补充 JsonValue、Stream DTO、四个 typed IPC wrapper 以及 JSON/Stream clone/kind/label helper；聚焦测试 10/10、生产构建通过。
+- Task 4 已先让 Browser 新增/选择/批量/刷新测试失败，再实现 AddKey、BulkKeyActions、列表复选框和 BrowserPage 生命周期；Browser 测试 23/23、生产构建通过。
+- Task 5 已先让编辑器与详情测试失败，再实现 JSON/Stream 编辑、RENAMENX 详情流程、元数据刷新和选中键身份同步；Browser 测试当前 27/27、生产构建通过。
+
+## Session: 2026-08-18 — Task 12 Browser 能力扩展交付验证
+
+- **Status:** complete
+- Browser 首批扩展已完成：新增键、重命名、批量删除、显式刷新、键元数据，以及基础 Stream 和 RedisJSON 根文档读取/编辑。
+- 前端验证：Browser 测试 27/27，全量前端测试 69/69，`npm run build` 通过；`npm run check:non-cloud` 通过。
+- Rust 验证：`cargo fmt --check` 通过；离线 `cargo test` 中 27 个库测试、2 个命令测试、9 个领域测试和 9 个持久化测试通过，Redis 集成测试 1 个 ignored。
+- 真实 Redis 验证：本机 Redis 集成测试 1/1 通过；RedisJSON 不可用时按约定返回 `UNSUPPORTED_DATA_TYPE`。
+- 差异审查：`git diff --check` 通过；仅提交本轮新增的 README 和非 Cloud 范围说明，保留用户原有未提交改动；未引入 SQL 查询、Redis Cloud 或其他排除能力。

@@ -63,7 +63,7 @@ pub(crate) async fn save_connection_inner(
     Ok(profile)
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn delete_connection(
     state: tauri::State<'_, AppState>,
     connection_id: String,
@@ -159,7 +159,7 @@ pub async fn test_connection(
         .await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_connection(
     state: tauri::State<'_, AppState>,
     connection_id: String,
@@ -167,7 +167,7 @@ pub async fn open_connection(
     state.redis.open_connection(&connection_id).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn close_connection(
     state: tauri::State<'_, AppState>,
     connection_id: String,

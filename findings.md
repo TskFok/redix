@@ -95,4 +95,81 @@
 
 ## Visual/Browser Findings
 
-- 尚未进行视觉/浏览器检查；当前阶段通过本地源码和文档完成范围摸底。
+- 已通过应用内浏览器检查本地 Vite 页面：默认桌面视口显示固定左侧导航、顶部连接上下文和全高内容区；未连接时 Browser/Workbench 的禁用状态与视觉层级正常。
+- 已将视口切换到 `375x812` 检查窄屏布局：导航收缩为顶部图标栏，连接页和新增连接表单按单列排列；页面 `documentScrollWidth` 为 `366px`，未产生横向溢出。
+- 检查完成后已调用视口重置并重新加载页面，恢复默认浏览器尺寸。
+
+## Task 11：RedisInsight 视觉与排版对齐（2026-08-18）
+
+### 参考项目视觉基线
+
+- RedisInsight 的桌面壳层采用 `60px` 左侧导航栏，主区域使用整屏高度和内部工作区滚动，而不是居中窄内容卡片。
+- 参考项目的核心间距以 `8px/16px/24px/32px` 为阶梯，页面/面板通常使用 `16px` 内边距和 `6px` 中等圆角。
+- 当前参考分支深色主题的主要颜色为：页面背景 `#121212`、导航背景 `#0f1633`、面板背景 `#202020`、边框 `#383838`、主色 `#8ba2ff`、正文 `#dfe5ef`、次要文字 `#b5b6c0`；浅色主题使用白色面板、蓝色主色和 `#e4eaf2` 附近分隔线。
+- RedisInsight 使用 Graphik/SourceCodePro/Inconsolata 组合；当前项目没有对应字体资源，因此保留系统无衬线字体和 JetBrains Mono 代码字体，重点复用其字重、字号和密度，不新增外部字体下载。
+- Browser 结构重点是左侧键列表 + 右侧详情；Workbench 结构重点是上方命令编辑器 + 下方结果区域，二者均使用面板内滚动和细边界。
+
+### 当前项目差异
+
+- 当前 `src/App.tsx` 将标题、顶部标签、连接管理、Browser/Workbench 纵向堆叠在同一内容流，连接页在有连接后仍然占据主区域；这与参考项目的固定导航/上下文标题/单一工作区不一致。
+- 当前 `src/styles.css` 使用绿色主色和较大的居中容器、10px 圆角、`clamp` 大留白；需要改为 RedisInsight 风格的蓝紫主色、深色中性层级、紧凑间距和全高工作台。
+- 当前 Browser/Workbench 已具备正确的业务交互和测试覆盖，可优先通过 CSS 和轻量应用壳层调整完成视觉对齐，避免修改 Rust IPC 和数据行为。
+- 现有工作区有用户未提交的 `src-tauri/` 变更；本轮不触碰这些文件。
+
+### UI 设计工具基线
+
+- `ui-ux-pro-max` 的生成结果建议开发者工具使用 JetBrains Mono + IBM Plex Sans、语义颜色 token、150–300ms 交互和 375/768/1024/1440 响应式检查。
+- 该工具的通用颜色推荐与 RedisInsight 参考项目存在差异；本轮以用户指定的 RedisInsight 源码配色为主，保留当前项目的字体回退和可访问性要求。
+
+### 已确认并实施的方向
+
+- 应用壳层改为：左侧固定窄导航（连接/Browser/Workbench）+ 顶部连接上下文栏 + 右侧工作区；无活动连接时导航项保持禁用。
+- 连接页改为 RedisInsight 风格的密集面板和空状态，仍保留当前保存/测试/打开/删除行为。
+- Browser 改为更高密度的双栏全高布局，列表与详情分别滚动；Workbench 改为垂直编辑器/结果工作区，保留命令历史和结果展示。
+- 统一浅色/深色 token、按钮/输入框/反馈状态、焦点环、减少动效和窄屏断点；不增加新业务能力、不引入第三方图标或云功能。
+
+### 实施结果
+
+- `src/App.tsx` 现在以单一应用壳层承载连接管理、Browser 和 Workbench；打开连接后只渲染选中的数据工作区，避免连接页与工作区纵向堆叠。
+- `src/styles.css` 已重建为 RedisInsight 参考的深色优先蓝紫色板，并保留浅色主题、系统主题兼容、键盘焦点和 reduced-motion 规则。
+- 前端测试已扩展到 56 项；生产构建和差异空白检查均已执行。
+
+## Task 12：非 Cloud 功能差异勘察（2026-08-18）
+
+### 当前 Redix 已有能力
+
+- 连接管理：本地 Redis Standalone 的 host、port、username、password、database，连接配置 JSON 持久化，密码交给系统钥匙串保存。
+- Browser：使用 `SCAN` 分页和 pattern 过滤，展示 key/type/TTL/size；支持 String、Hash、List、Set、Sorted Set 的整值读取、保存、删除和 TTL 修改。
+- Workbench：当前连接上执行单条命令，支持引号/转义 tokenizer、结构化结果、错误映射、历史回填和 Cmd/Ctrl+Enter。
+- 壳层：React/Vite + Tauri 2，连接管理、Browser、Workbench 三个工作区，深浅主题和 RedisInsight 风格排版。
+
+### RedisInsight 非 Cloud 能力差异
+
+参考项目 `/Users/ushopal/workspace/myself/RedisInsight` 的非 Cloud 页面、API module 和 controller 清单显示，当前缺失能力可分为以下独立批次：
+
+| 批次 | 缺失能力 | 目标项目证据 | 当前 Redix 状态 | 备注 |
+|---|---|---|---|---|
+| A | Browser 完整数据类型 | `api/src/modules/browser/{stream,rejson-rl,vector-set,array,redisearch}` 及 `hash/list/set/string/z-set` controllers | 仅 5 类基础类型 | 优先补齐 Streams、JSON；Vector/Array/Search 依赖 Redis 模块，需独立处理能力探测 |
+| B | Browser 生产力 | `pages/browser/components/{bulk-actions,add-key,browser-search-panel}`、browser-history、keys metadata/info | 无新增键、重命名、批量删除、导入导出、历史和信息面板 | 可在现有 SCAN/CRUD 之上增量实现 |
+| C | Workbench/CLI | `pages/workbench`、`components/cli`、`components/command-helper`、`api/src/modules/{workbench,cli,commands}` | 单条命令、内存历史 | 可先做多命令/脚本执行、命令补全、结果复制/下载，再考虑 Monaco |
+| D | 运维观察 | `pages/{slow-log,pub-sub}`、`components/monitor`、`api/src/modules/{slow-log,pub-sub,profiler}` | 无 | 需要长连接/流式事件和停止/清理生命周期，不能只靠现有 request-response IPC |
+| E | 数据库概览与分析 | `pages/{database-analysis,instance,home}`、`api/src/modules/{database,database-info,database-analysis,database-recommendation}` | 无服务器信息、数据库切换、分析/推荐 | 适合在连接模型支持多 DB 后实现 |
+| F | 连接拓扑与安全 | `pages/{autodiscover-sentinel,redis-cluster}`、`api/src/modules/{redis-cluster,redis-sentinel,ssh,certificate}` | 仅 Standalone TCP，无 TLS/SSH/Cluster/Sentinel | 需要扩展连接配置、Rust client 生命周期和拓扑路由，风险最高 |
+| G | 本地设置与资源 | `pages/settings`、`api/src/modules/{settings,query-library,plugin}` | 仅内存页面状态，未持久化设置/查询 | Query Library 可先做本地 JSON 存储；插件和 Cloud/AI 不纳入范围 |
+
+### 明确排除
+
+- `api/src/modules/cloud`、`pages/autodiscover-cloud`、Azure 登录/发现、OAuth 云账户、云端 CAPI/job/subscription 等不移植。
+- AI/Copilot、Telemetry/Analytics、远程插件市场不作为本轮本地 Redis 功能；若未来需要，必须另行确认数据和网络边界。
+- 任何实现仍禁止在循环遍历中查询 SQL；当前架构使用 JSON/钥匙串和 Redis 命令，不引入 SQL 查询循环。
+
+### Scope decision
+
+用户已确认先执行 Browser 增强与 Stream/JSON 支持。首批以 docs/superpowers/specs/2026-08-18-browser-capability-expansion-design.md 为设计基线，以 docs/superpowers/plans/2026-08-18-browser-capability-expansion.md 为执行清单；后续仍按 A → B → C → E → D → F → G 分批，不把长连接运维和拓扑支持混入本批次。
+
+### Task 12 交付验证补充
+
+- Browser 首批能力已落地并通过前端、Rust、非 Cloud 静态检查和本机 Redis 集成验证。
+- Stream 读取上限为 500 条；当前不包含 Consumer Group、实时订阅及其他模块专用编辑器。
+- RedisJSON 采用根文档 `JSON.GET/JSON.SET`；普通 Redis 无 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE`。
+- 本机 Redis 集成测试最初在沙箱内无法访问 `127.0.0.1`，使用授权的沙箱外测试命令重跑后通过；该环境限制不影响实现验证。

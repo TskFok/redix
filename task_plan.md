@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 5：Redix MVP 已完成，最终验证与运行说明已记录
+Phase 6：RedisInsight 视觉与排版对齐（完成）
 
 ## Phases
 
@@ -134,7 +134,10 @@ Phase 5：Redix MVP 已完成，最终验证与运行说明已记录
 | Redis 1.5 `Value::BigNumber` 是 `num_bigint::BigInt`，不存在 `as_ref()` | 1 | 改用安全的 `to_string()` 转换，不暴露 Redis 错误文本 |
 | 当前目录不是 Git 仓库 | 1 | 记录为当前工作区状态；待设计确认后再初始化项目与 Git 元数据 |
 | 规划文件补丁上下文不匹配 | 1 | 重新读取当前文件后，用精确上下文更新 |
+| 追加 Phase 7 记录的首次补丁未命中 | 1 | 拆分为精确定位的小补丁后重新追加，未覆盖历史内容 |
+| Task 1 RED 命令多写测试筛选词 | 1 | 改用 `--lib` 与 `--test domain` 两个独立命令执行聚焦测试 |
 | `cargo info` 无法解析 crates.io | 1 | 记录错误；依赖安装阶段根据需要申请网络权限，当前使用 `cargo search` 已返回的版本信息 |
+| 沙箱内 Redis 集成测试无法访问 `127.0.0.1` | 1 | 使用授权的沙箱外命令确认 Redis 返回 `PONG`，随后集成测试 1/1 通过 |
 
 ## Notes
 
@@ -144,3 +147,65 @@ Phase 5：Redix MVP 已完成，最终验证与运行说明已记录
 - 设计文档已写入并提交：`docs/superpowers/specs/2026-08-14-redix-tauri-design.md`，等待用户审阅后进入实现计划。
 - 实现计划已写入：`docs/superpowers/plans/2026-08-14-redix-tauri.md`，用户已选择子代理驱动执行。
 - 用户已确认将最小 Tauri 图标资源前移到 Task 1，以便 Rust 测试可以独立编译；Task 10 继续负责正式 bundle 配置与最终非 Cloud 审查。
+
+## Phase 6：RedisInsight 视觉与排版对齐（2026-08-18）
+
+### Goal
+
+在不改变 Redis MVP 业务边界和现有 Rust 连接逻辑的前提下，参考 `/Users/ushopal/workspace/myself/RedisInsight` 的桌面端界面层次、色彩、密度和工作区排版，统一改造当前 React 前端。
+
+### Phases
+
+- [x] 勘察当前三类页面与 RedisInsight 对应页面的结构、样式 token 和交互状态
+- [x] 在聊天中确认视觉改造设计与范围
+- [x] 实现全局视觉 token、应用壳层、连接页、Browser 和 Workbench 的排版对齐
+- [x] 使用浏览器/构建检查验证桌面宽度、窄窗口、默认主题和无障碍状态
+- [x] 审查差异，记录未修改的用户 Rust 变更并交付
+- **Status:** complete
+
+### Task 11 实施记录
+
+- `src/App.tsx` 改为左侧工作区导航、顶部连接上下文和单一全高工作区；未连接时 Browser/Workbench 保持禁用。
+- `src/styles.css` 按 RedisInsight 参考色板重建深浅主题 token、间距、边框、按钮、表单、反馈、Browser 双栏和 Workbench 工作区样式，并补充窄屏断点。
+- `src/app.smoke.test.tsx` 增加默认入口和禁用工作区回归测试；修复应用壳层新增标题与 Workbench 标题重复的无障碍查询冲突。
+- 应用内浏览器已检查默认桌面视口、375px 窄窗口和新增连接表单；移动端未发现横向溢出，检查后已恢复默认视口。
+- 当前工作区中的 `src-tauri/Cargo.toml`、`src-tauri/src/commands/connections.rs`、`src-tauri/tests/commands.rs` 为用户既有未提交变更，本轮未修改。
+- 验证命令：`npm run test:frontend`、`npm run build`、`git diff --check`。
+
+### Constraints
+
+- 默认继续在 `main` 分支直接工作，不创建新分支。
+- 不修改现有 `src-tauri/` 用户变更，不引入 Redis Cloud、SQL 查询或新的业务能力。
+- 只在用户批准视觉设计后开始实现代码。
+- 计划、发现和进度文件持续记录本轮工作，不覆盖上一轮 MVP 记录。
+
+## Phase 7：Browser 能力扩展（2026-08-18）
+
+### Goal
+
+在本地 Redis Standalone 上补齐 RedisInsight Browser 的首批高频能力：新增键、重命名、批量删除、元数据刷新，并支持基础 Stream 与 RedisJSON 根文档编辑；Redis Cloud、Azure、AI、Telemetry、远程插件和长连接运维能力不进入本阶段。
+
+### Status
+
+已完成 Browser 首批非 Cloud 能力扩展、真实 Redis 验证、范围审查和文档交付。
+
+### Artifacts
+
+- 设计：docs/superpowers/specs/2026-08-18-browser-capability-expansion-design.md
+- 计划：docs/superpowers/plans/2026-08-18-browser-capability-expansion.md
+
+### Checklist
+
+- [x] 扩展 Rust 领域 DTO、Stream/JSON 编解码和错误边界
+- [x] 实现新增、重命名、批量删除、元数据和 Stream/JSON Redis 操作
+- [x] 实现 Tauri bridge 与 Browser 新增/选择/批量 UI
+- [x] 实现详情重命名、元数据刷新和 Stream/JSON 编辑器
+- [x] 完成前端、Rust、真实 Redis 和非 Cloud 验证
+
+### 交付记录
+
+- 前端：Browser 测试 27/27，全量前端测试 69/69，生产构建通过。
+- Rust：离线测试 27 个库测试、2 个命令测试、9 个领域测试、9 个持久化测试通过；Redis 集成测试 1/1 通过，另有 1 个 ignored 测试；`cargo fmt --check` 通过。
+- 真实 Redis：`redis://127.0.0.1:6379` 集成流程通过；无 RedisJSON 时返回稳定的 `UNSUPPORTED_DATA_TYPE`。
+- 范围：非 Cloud 扫描通过；未引入 SQL、Redis Cloud、Azure、AI、Telemetry 或远程插件入口。
+- 保护：保留用户原有未提交文件和修改，未将其纳入本轮文档提交。
