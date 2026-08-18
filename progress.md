@@ -146,3 +146,16 @@
 - Rust 验证：`cargo fmt --check` 通过；离线 `cargo test` 中 27 个库测试、2 个命令测试、9 个领域测试和 9 个持久化测试通过，Redis 集成测试 1 个 ignored。
 - 真实 Redis 验证：本机 Redis 集成测试 1/1 通过；RedisJSON 不可用时按约定返回 `UNSUPPORTED_DATA_TYPE`。
 - 差异审查：`git diff --check` 通过；仅提交本轮新增的 README 和非 Cloud 范围说明，保留用户原有未提交改动；未引入 SQL 查询、Redis Cloud 或其他排除能力。
+
+## Session: 2026-08-18 — Task 13 非 Cloud 差异补全启动
+
+- **Status:** in_progress
+- 已恢复上一轮计划、发现和进度记录；确认 Browser 首批扩展已经交付，当前工作区干净。
+- 已将本轮目标追加为 Phase 8：先完成 RedisInsight 与 Redix 的非 Cloud 差异盘点、范围分解和设计确认，再进入实现。
+- 用户已确认按“Browser/Workbench/数据库与本地资源 → 运维观察 → 连接拓扑与安全 → 模块专用能力”分批推进，明确排除 Redis Cloud 及相关云/AI/Telemetry/远程插件能力。
+- 用户已确认总体架构：延续 React + Vite + Tauri 2 + Rust，按 typed IPC 和功能批次扩展；第一批先实现 Browser 生产力、Workbench 增强、数据库/实例概览、Query Library/设置。
+- 用户已确认第一批组件边界与数据流：Browser、Workbench、数据库/实例概览、本地 Query Library/设置分别实现，普通功能走 typed request-response，后续长连接能力另走可取消 event channel。
+- 用户已确认错误、安全和兼容策略：固定错误码、能力探测与局部降级、钥匙串密码边界、敏感命令历史过滤、本地 JSON 原子写入和旧请求取消。
+- 已完成第四部分测试与交付标准确认。
+- 已写入并自审正式设计文档 `docs/superpowers/specs/2026-08-18-redisinsight-non-cloud-parity-design.md`；确认无占位符，补充了原生 file input/Blob 导入导出和类型过滤的 SCAN 游标语义。
+- 当前尚未修改业务代码；等待用户审阅 spec 后再生成详细实现计划。

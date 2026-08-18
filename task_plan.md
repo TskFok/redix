@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 6：RedisInsight 视觉与排版对齐（完成）
+Phase 8：RedisInsight 非 Cloud 差异补全（设计确认）
 
 ## Phases
 
@@ -209,3 +209,33 @@ Phase 6：RedisInsight 视觉与排版对齐（完成）
 - 真实 Redis：`redis://127.0.0.1:6379` 集成流程通过；无 RedisJSON 时返回稳定的 `UNSUPPORTED_DATA_TYPE`。
 - 范围：非 Cloud 扫描通过；未引入 SQL、Redis Cloud、Azure、AI、Telemetry 或远程插件入口。
 - 保护：保留用户原有未提交文件和修改，未将其纳入本轮文档提交。
+
+## Phase 8：RedisInsight 非 Cloud 差异补全（2026-08-18）
+
+### Goal
+
+在不引入 Redis Cloud、Azure 云接入、AI、Telemetry 或远程插件能力的前提下，对照 `/Users/ushopal/workspace/myself/RedisInsight` 的本地 Redis 功能，按优先级继续补齐当前 Redix 缺失的可交付能力，并保持 Rust/Tauri/React 架构与测试边界稳定。
+
+### Status
+
+in_progress：先完成差异盘点、范围分解和设计确认，再进入后续实现批次。
+
+### 已确认设计决策
+
+- 用户已确认继续使用 React + Vite + Tauri 2 + Rust，并按 typed IPC 和功能批次扩展。
+- 第一批顺序为 Browser 生产力、Workbench 增强、数据库/实例概览、Query Library/设置。
+- 本地持久化继续使用 JSON 文件和系统钥匙串，不引入 SQL；Redis Cloud、Azure、AI、Telemetry、远程插件不进入产品源码。
+- Slow Log 先使用 request-response IPC；Pub/Sub/Profiler 后续使用可取消的 Tauri event channel；TLS/SSH/Sentinel/Cluster 单独扩展。
+- 第一批按 Browser 生产力、Workbench 增强、数据库/实例概览、Query Library/设置拆分；Browser 保持 SCAN 分页，Workbench 先不引入 Monaco/插件运行时，数据库概览使用聚合只读 DTO，本地资源使用版本化 JSON 原子写入。
+- 统一使用固定错误码；通过 `COMMAND INFO`/`MODULE LIST` 探测能力，模块不可用时局部降级；密码只进系统钥匙串，敏感命令不写历史，连接切换和页面卸载取消旧请求。
+
+### Checklist
+
+- [ ] 盘点目标项目当前版本的非 Cloud 页面、API、数据类型和本地设置能力
+- [ ] 盘点当前项目已有入口、IPC、Redis service、持久化和测试缺口
+- [ ] 将缺失能力拆为可独立验收的批次，明确排除项和依赖关系
+- [x] 与用户确认推荐实施范围
+- [x] 与用户确认详细架构设计
+- [x] 编写并自审正式设计文档
+- [ ] 等待用户审阅正式设计文档
+- [ ] 依照设计按 TDD 实现并验证各批次

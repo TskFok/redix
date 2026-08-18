@@ -173,3 +173,55 @@
 - Stream 读取上限为 500 条；当前不包含 Consumer Group、实时订阅及其他模块专用编辑器。
 - RedisJSON 采用根文档 `JSON.GET/JSON.SET`；普通 Redis 无 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE`。
 - 本机 Redis 集成测试最初在沙箱内无法访问 `127.0.0.1`，使用授权的沙箱外测试命令重跑后通过；该环境限制不影响实现验证。
+
+## Task 13：RedisInsight 非 Cloud 差异补全启动（2026-08-18）
+
+### 当前状态
+
+- 当前仓库工作区干净，分支为 `main`；本轮默认继续在当前分支工作，不创建新分支。
+- 当前 Redix 已完成连接管理、Standalone Redis 数据访问、Browser 首批五类数据结构、Stream/RedisJSON 根文档、新增/重命名/批量删除/元数据刷新、Workbench 单条命令、深浅主题和 RedisInsight 风格应用壳层。
+- 本轮目标从“单个 Browser 扩展批次”升级为“按目标项目差异继续补齐非 Cloud 功能”，需要重新确认分批范围，不能直接把完整 RedisInsight 一次性移植。
+
+### 用户约束
+
+- 对照 `/Users/ushopal/workspace/myself/RedisInsight` 实现缺失功能。
+- Redis Cloud 相关功能排除；同时沿用既有排除边界：Azure 云接入、云账户/OAuth、AI/Copilot、Telemetry/Analytics、远程插件市场不进入默认实现。
+- 默认在当前分支修改；提交信息使用简体中文。
+- 禁止在循环遍历中查询 SQL；当前架构不引入 SQL 查询循环。
+
+### 目标项目证据
+
+- RedisInsight 当前 UI 页面至少包含：`browser`、`workbench`、`analytics`、`database-analysis`、`home`、`instance`、`slow-log`、`pub-sub`、`settings`、`vector-search`、`redis-stack`，另有 `autodiscover-cloud`、`autodiscover-azure`、RDI 等不在本轮范围内。
+- Browser 目录除已有基础键浏览外，还包含键类型过滤、树视图、列配置、批量删除/上传、搜索面板、导入导出、数组、Vector Set、RedisJSON、Stream、Search 索引相关 UI；当前 Redix 仅覆盖分页键列表、基础编辑器、Stream/JSON 根文档和已落地的新增/重命名/批量删除/元数据刷新。
+- Workbench/CLI 入口包含命令历史持久化、CLI 客户端生命周期、命令自动补全/帮助、raw/text/UTF-8 输出格式化、复杂结果摘要和可视化插件入口；当前 Redix 只有单输入框、单次 request-response 执行和当前会话内存历史。
+- 目标 API 的本地 Redis 能力覆盖 `database`、`database-analysis`、`database-info`、`server`、`recommendation`、`query-library`、`settings`、`slow-log`、`pub-sub`、`profiler`、`cli`、`commands`、`workbench`，并支持 Redis Sentinel、SSH 隧道和证书；当前 Redix Rust 端仅有连接、Browser、Workbench 三组命令。
+- `slow-log` 提供读取、清空和配置接口；`pub-sub` 与 `profiler` 使用 WebSocket gateway/订阅模型，说明它们不能只通过现有一次性 Tauri `invoke` 封装实现，需要新增可取消的长连接/事件桥接设计。
+- 目标项目有数据库列表/连接/测试/导入导出、服务器信息、数据库概览与分析扫描、推荐等能力；当前 profile 虽有 `database` 字段，但没有数据库切换、实例信息、分析或推荐工作区。
+- 目标项目 Workbench 的 `commands` API 为命令定义/补全数据源，`cli` API 负责独立 CLI 客户端和输出格式化；当前单次命令执行未提供命令定义、补全、脚本批量执行、raw 模式或持久化历史。
+- 目标项目 `query-library` 与 `settings` 使用本地持久化仓储；当前 Redix 只有连接配置 JSON + 系统钥匙串，没有查询收藏或应用设置存储。
+- 本次只读扫描发现目标项目没有独立的 `api/src/modules/redis-cluster` 目录，Cluster 实现分布在 `redis` client/connection 目录；连接差异不能仅靠模块目录名判断。
+
+### 初步差异分层
+
+1. 高收益、可复用现有架构：Browser 生产力补齐（搜索/类型过滤/导入导出/更丰富元数据）、Workbench 命令补全与多命令/格式化、数据库/实例概览、Query Library、设置持久化。
+2. 需要新增 Rust/前端生命周期但仍属本地 Redis：Slow Log、Pub/Sub、Profiler；其中 Pub/Sub/Profiler 需要事件流与取消协议。
+3. 依赖拓扑或安全连接重构：TLS、证书、SSH、Sentinel、Cluster、多数据库管理。
+4. 可单独开关、依赖 Redis 模块或大型 UI：Vector Set、Array、Search/Query 索引、复杂结果可视化、插件系统；不应与基础批次混做。
+5. 明确排除：Redis Cloud、Azure 云接入、云账户/OAuth、云端 API/发现、AI/Copilot、Telemetry/Analytics、远程插件市场。
+
+### 设计约束
+
+- 现有 Tauri IPC 是同步请求/响应的 typed wrapper；长连接能力需要独立设计事件通道、资源清理和连接切换竞态处理。
+- 继续使用 Redis `SCAN` 分页，不引入阻塞式全量键枚举；当前任务不添加 SQL 查询，更不能在循环遍历中查询 SQL。
+- 目标项目的 Electron/NestJS/Redux/Monaco 代码只能作为功能证据和交互参考，不直接复制运行时依赖；Redix 继续保持 Rust + Tauri + React 的轻量边界。
+
+### 用户已确认的总体架构
+
+- 采用方案 1：在现有 React + Vite + Tauri 2 + Rust 上按批次增量扩展 typed IPC、领域模型、状态和页面。
+- 第一批按 `Browser 生产力 → Workbench 增强 → 数据库/实例概览 → Query Library/设置` 执行。
+- Rust 按 `connections / browser / database / workbench / settings / observability` 组织命令；JSON 文件和系统钥匙串负责本地资源。
+- 长连接能力采用单独的 Tauri event channel；拓扑与安全连接能力独立于第一批实现。
+- 第一批数据流已确认：React 页面 → typed Tauri wrapper → Tauri command → Rust domain/service → 当前 Redis 连接或本地 JSON/钥匙串 → 固定错误/DTO → React 状态。
+- Browser 首批增强保持 SCAN 分页；Workbench 增加内置命令目录、多命令执行、raw/text/JSON 展示、复制和按连接持久化历史；数据库概览集中返回只读聚合 DTO；Query Library/设置使用版本化 JSON 与原子替换。
+- 错误策略已确认：固定错误码 `CONNECTION_NOT_OPEN`、`INVALID_INPUT`、`KEY_NOT_FOUND`、`UNSUPPORTED_DATA_TYPE`、`COMMAND_FAILED`、`PERSISTENCE_FAILED`、`OPERATION_CANCELLED`，不向前端暴露 Redis 底层错误文本。
+- 兼容与安全策略已确认：使用 `COMMAND INFO`/`MODULE LIST` 探测能力；模块不可用时局部降级；密码只存钥匙串；敏感命令不写历史；本地 JSON 版本化并原子替换；连接切换和卸载取消旧请求。
