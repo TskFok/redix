@@ -7,7 +7,9 @@
 - 本地 Redis Standalone TCP 连接和连接配置管理。
 - 使用系统钥匙串保存本地连接密码；前端 DTO 和连接列表不暴露密码。
 - Browser 使用 `SCAN`、`MATCH`、`COUNT` 分页列出键，并读取键类型、TTL 和值。
-- String、Hash、List、Set、Sorted Set 的基础读取、编辑、删除和 TTL 操作。
+- Browser 支持新增键、重命名、批量删除、元数据刷新和显式刷新。
+- String、Hash、List、Set、Sorted Set、Stream 的基础读取、编辑、删除和 TTL 操作；Stream 单次读取最多 500 条记录。
+- RedisJSON 根文档的读取和编辑；未安装 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE` 错误。
 - Workbench 在已打开的本地连接上执行 Redis 命令，并展示结构化结果。
 - React/Tauri 本地 UI、前端测试、Rust 单元测试和本地构建工具链。
 
@@ -16,7 +18,8 @@
 - Redis Cloud、Azure Managed Redis 及其他云托管 Redis 产品。
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
 - Cluster、Sentinel、TLS、SSH、远程托管实例和云资源管理。
-- Redis 模块功能，包括模块专用数据类型、模块查询和模块可视化。
+- Redis 模块专用数据类型、模块查询和模块可视化（RedisJSON 根文档和 Stream 基础能力除外）。
+- Stream Consumer Group、实时订阅和超过 500 条记录的分页编辑。
 - Profiler、Slow Log、Pub/Sub 等非 MVP 运营功能。
 
 ## 人工审查清单
