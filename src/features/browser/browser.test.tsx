@@ -17,6 +17,8 @@ const {
   deleteKeyMock,
   createKeyMock,
   deleteKeysMock,
+  renameKeyMock,
+  getKeyInfoMock,
   setKeyTtlMock,
 } = vi.hoisted(() => ({
   scanKeysMock: vi.fn(),
@@ -25,6 +27,8 @@ const {
   deleteKeyMock: vi.fn(),
   createKeyMock: vi.fn(),
   deleteKeysMock: vi.fn(),
+  renameKeyMock: vi.fn(),
+  getKeyInfoMock: vi.fn(),
   setKeyTtlMock: vi.fn(),
 }));
 
@@ -35,6 +39,8 @@ vi.mock("../../lib/tauri", () => ({
   deleteKey: deleteKeyMock,
   createKey: createKeyMock,
   deleteKeys: deleteKeysMock,
+  renameKey: renameKeyMock,
+  getKeyInfo: getKeyInfoMock,
   setKeyTtl: setKeyTtlMock,
 }));
 
@@ -72,6 +78,16 @@ describe("Redis Browser", () => {
     deleteKeyMock.mockResolvedValue(undefined);
     createKeyMock.mockResolvedValue(stringDetail);
     deleteKeysMock.mockResolvedValue(0);
+    renameKeyMock.mockResolvedValue({ ...stringDetail, key: "user:renamed" });
+    getKeyInfoMock.mockResolvedValue({
+      key: "user:1",
+      key_type: "string",
+      ttl_ms: -1,
+      size: 5,
+      memory_bytes: 64,
+      encoding: "embstr",
+      idle_seconds: 2,
+    });
     setKeyTtlMock.mockResolvedValue(-1);
   });
 
@@ -823,5 +839,172 @@ describe("Redis Browser", () => {
 
     expect(scanKeysMock).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("stale")).not.toBeInTheDocument();
+  });
+
+  it("JSON 编辑器格式化显示、解析保存并拒绝非法 JSON", async () => {
+    const jsonDetail: KeyValue = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      value: { Json: { value: { name: "Alice", active: true } } },
+    };
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <KeyEditor
+        value={jsonDetail.value}
+        ttlMs={-1}
+        busy={false}
+        error={null}
+        onSave={onSave}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+        onSetTtl={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    const editor = screen.getByLabelText("JSON 文档");
+    expect(editor).toHaveValue(JSON.stringify({ name: "Alice", active: true }, null, 2));
+    fireEvent.change(editor, { target: { value: '{"name":' } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("JSON 格式无效");
+    expect(onSave).not.toHaveBeenCalled();
+
+    fireEvent.change(editor, { target: { value: '{"name":"Bob","active":false}' } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith({
+        Json: { value: { name: "Bob", active: false } },
+      });
+    });
+  });
+
+  it("Stream 编辑器允许编辑字段并拒绝空字段名", async () => {
+    const streamValue: RedisValue = {
+      Stream: {
+        entries: [{
+          id: "1-0",
+          fields: [{ field: "event", value: "created" }],
+        }],
+      },
+    };
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    render(
+      <KeyEditor
+        value={streamValue}
+        ttlMs={-1}
+        busy={false}
+        error={null}
+        onSave={onSave}
+        onDelete={vi.fn().mockResolvedValue(undefined)}
+        onSetTtl={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Stream 字段 1 名称"), {
+      target: { value: "kind" },
+    });
+    fireEvent.change(screen.getByLabelText("Stream 字段 1 值"), {
+      target: { value: "created" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => {
+      expect(onSave).toHaveBeenCalledWith({
+        Stream: {
+          entries: [{
+            id: "1-0",
+            fields: [{ field: "kind", value: "created" }],
+          }],
+        },
+      });
+    });
+
+    onSave.mockClear();
+    fireEvent.change(screen.getByLabelText("Stream 字段 1 名称"), {
+      target: { value: " " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Stream 字段名不能为空");
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("详情重命名更新身份，并可刷新详细元数据", async () => {
+    const renamedDetail = { ...stringDetail, key: "user:renamed" };
+    const onRenamed = vi.fn();
+    renameKeyMock.mockResolvedValue(renamedDetail);
+    getKeyInfoMock.mockResolvedValue({
+      key: "user:renamed",
+      key_type: "string",
+      ttl_ms: 5000,
+      size: 5,
+      memory_bytes: 64,
+      encoding: "embstr",
+      idle_seconds: 2,
+    });
+    const { rerender } = render(
+      <KeyDetails
+        connectionId="local"
+        detail={stringDetail}
+        loading={false}
+        onDetailChange={vi.fn()}
+        onRenamed={onRenamed}
+        onDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("新键名"), {
+      target: { value: "user:renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重命名" }));
+    await waitFor(() => {
+      expect(renameKeyMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "user:1",
+        new_key: "user:renamed",
+      });
+      expect(onRenamed).toHaveBeenCalledWith("user:1", renamedDetail);
+    });
+
+    rerender(
+      <KeyDetails
+        connectionId="local"
+        detail={renamedDetail}
+        loading={false}
+        onDetailChange={vi.fn()}
+        onRenamed={onRenamed}
+        onDeleted={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新元数据" }));
+    await waitFor(() => {
+      expect(getKeyInfoMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "user:renamed",
+      });
+    });
+    expect(await screen.findByText("64 B")).toBeInTheDocument();
+  });
+
+  it("BrowserPage 重命名后同步列表和当前选中键身份", async () => {
+    const renamedDetail = { ...stringDetail, key: "user:renamed" };
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+    getKeyMock.mockResolvedValue(stringDetail);
+    renameKeyMock.mockResolvedValue(renamedDetail);
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "user:1" }));
+    await screen.findByDisplayValue("Alice");
+    fireEvent.change(screen.getByLabelText("新键名"), {
+      target: { value: "user:renamed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "重命名" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "user:renamed" })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
   });
 });

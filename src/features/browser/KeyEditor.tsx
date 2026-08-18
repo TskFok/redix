@@ -17,6 +17,10 @@ interface KeyEditorProps {
   onSetTtl: (ttlMs: number) => Promise<void>;
 }
 
+function formatJson(value: unknown): string {
+  return JSON.stringify(value, null, 2) ?? "null";
+}
+
 function editorTitle(kind: RedisValueKind): string {
   switch (kind) {
     case "string":
@@ -46,6 +50,9 @@ export function KeyEditor({
   onSetTtl,
 }: KeyEditorProps) {
   const [draft, setDraft] = useState<RedisValue>(() => cloneRedisValue(value));
+  const [jsonDraft, setJsonDraft] = useState(() =>
+    "Json" in value ? formatJson(value.Json.value) : "",
+  );
   const [ttlDraft, setTtlDraft] = useState(() => (ttlMs >= 0 ? String(ttlMs) : ""));
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -110,6 +117,44 @@ export function KeyEditor({
     setValidationError(null);
   };
 
+  const updateStreamEntry = (
+    entryIndex: number,
+    fieldIndex: number,
+    field: "field" | "value",
+    next: string,
+  ) => {
+    if (!("Stream" in draft)) {
+      return;
+    }
+    const entries = draft.Stream.entries.map((entry, currentEntryIndex) => {
+      if (currentEntryIndex !== entryIndex) {
+        return entry;
+      }
+      return {
+        ...entry,
+        fields: entry.fields.map((item, currentFieldIndex) =>
+          currentFieldIndex === fieldIndex ? { ...item, [field]: next } : item,
+        ),
+      };
+    });
+    setDraft({ Stream: { entries } });
+    setValidationError(null);
+  };
+
+  const updateStreamEntryId = (entryIndex: number, next: string) => {
+    if (!("Stream" in draft)) {
+      return;
+    }
+    setDraft({
+      Stream: {
+        entries: draft.Stream.entries.map((entry, currentEntryIndex) =>
+          currentEntryIndex === entryIndex ? { ...entry, id: next } : entry,
+        ),
+      },
+    });
+    setValidationError(null);
+  };
+
   const addRow = () => {
     if ("Hash" in draft) {
       setDraft({
@@ -123,6 +168,15 @@ export function KeyEditor({
       setDraft({
         SortedSet: {
           members: [...draft.SortedSet.members, { member: "", score: 0 }],
+        },
+      });
+    } else if ("Stream" in draft) {
+      setDraft({
+        Stream: {
+          entries: [
+            ...draft.Stream.entries,
+            { id: "*", fields: [{ field: "", value: "" }] },
+          ],
         },
       });
     }
@@ -142,12 +196,26 @@ export function KeyEditor({
           members: draft.SortedSet.members.filter((_, row) => row !== index),
         },
       });
+    } else if ("Stream" in draft) {
+      setDraft({
+        Stream: {
+          entries: draft.Stream.entries.filter((_, row) => row !== index),
+        },
+      });
     }
     setValidationError(null);
   };
 
   const handleSave = async () => {
     let nextValue = cloneRedisValue(draft);
+    if ("Json" in nextValue) {
+      try {
+        nextValue = { Json: { value: JSON.parse(jsonDraft) } };
+      } catch {
+        setValidationError("JSON 格式无效。");
+        return;
+      }
+    }
     if ("Set" in nextValue) {
       nextValue = {
         Set: { members: [...new Set(nextValue.Set.members)] },
@@ -157,7 +225,8 @@ export function KeyEditor({
       ("Hash" in nextValue && nextValue.Hash.fields.length === 0) ||
       ("List" in nextValue && nextValue.List.items.length === 0) ||
       ("Set" in nextValue && nextValue.Set.members.length === 0) ||
-      ("SortedSet" in nextValue && nextValue.SortedSet.members.length === 0)
+      ("SortedSet" in nextValue && nextValue.SortedSet.members.length === 0) ||
+      ("Stream" in nextValue && nextValue.Stream.entries.length === 0)
     ) {
       setValidationError("至少保留一项，或使用“删除”操作删除键。");
       return;
@@ -168,6 +237,21 @@ export function KeyEditor({
     ) {
       setValidationError("分数必须是有限数字。");
       return;
+    }
+    if ("Stream" in nextValue) {
+      const invalidStream = nextValue.Stream.entries.some((entry) => {
+        const names = new Set(entry.fields.map((field) => field.field.trim()));
+        return (
+          entry.id.trim() === "" ||
+          entry.fields.length === 0 ||
+          entry.fields.some((field) => field.field.trim() === "") ||
+          names.size !== entry.fields.length
+        );
+      });
+      if (invalidStream) {
+        setValidationError("Stream 字段名不能为空且不能重复。");
+        return;
+      }
     }
 
     setValidationError(null);
@@ -376,6 +460,122 @@ export function KeyEditor({
             disabled={busy}
           >
             添加成员
+          </button>
+        </fieldset>
+      ) : null}
+
+      {"Json" in draft ? (
+        <label className="field">
+          <span>JSON 文档</span>
+          <textarea
+            aria-label="JSON 文档"
+            value={jsonDraft}
+            onChange={(event) => {
+              setJsonDraft(event.target.value);
+              setValidationError(null);
+            }}
+            disabled={busy}
+            spellCheck={false}
+          />
+        </label>
+      ) : null}
+
+      {"Stream" in draft ? (
+        <fieldset className="editor-fieldset">
+          <legend>Stream 条目</legend>
+          <div className="editor-rows">
+            {draft.Stream.entries.map((entry, entryIndex) => (
+              <fieldset className="stream-entry" key={`stream-${entryIndex}`}>
+                <legend>条目 {entryIndex + 1}</legend>
+                <label className="field">
+                  <span>ID</span>
+                  <input
+                    aria-label={`Stream 条目 ${entryIndex + 1} ID`}
+                    value={entry.id}
+                    onChange={(event) => updateStreamEntryId(entryIndex, event.target.value)}
+                    disabled={busy}
+                  />
+                </label>
+                {entry.fields.map((field, fieldIndex) => (
+                  <div className="editor-row editor-row-hash" key={`stream-${entryIndex}-${fieldIndex}`}>
+                    <label className="field">
+                      <span>字段 {fieldIndex + 1} 名称</span>
+                      <input
+                        aria-label={`Stream 字段 ${fieldIndex + 1} 名称`}
+                        value={field.field}
+                        onChange={(event) => updateStreamEntry(entryIndex, fieldIndex, "field", event.target.value)}
+                        disabled={busy}
+                      />
+                    </label>
+                    <label className="field">
+                      <span>字段 {fieldIndex + 1} 值</span>
+                      <input
+                        aria-label={`Stream 字段 ${fieldIndex + 1} 值`}
+                        value={field.value}
+                        onChange={(event) => updateStreamEntry(entryIndex, fieldIndex, "value", event.target.value)}
+                        disabled={busy}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className="button button-quiet row-remove"
+                      onClick={() => {
+                        if (!("Stream" in draft)) return;
+                        setDraft({
+                          Stream: {
+                            entries: draft.Stream.entries.map((currentEntry, currentEntryIndex) =>
+                              currentEntryIndex === entryIndex
+                                ? {
+                                    ...currentEntry,
+                                    fields: currentEntry.fields.filter((_, currentFieldIndex) => currentFieldIndex !== fieldIndex),
+                                  }
+                                : currentEntry,
+                            ),
+                          },
+                        });
+                        setValidationError(null);
+                      }}
+                      disabled={busy}
+                      aria-label={`移除 Stream 字段 ${fieldIndex + 1}`}
+                    >
+                      移除
+                    </button>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => {
+                    if (!("Stream" in draft)) return;
+                    setDraft({
+                      Stream: {
+                        entries: draft.Stream.entries.map((currentEntry, currentEntryIndex) =>
+                          currentEntryIndex === entryIndex
+                            ? { ...currentEntry, fields: [...currentEntry.fields, { field: "", value: "" }] }
+                            : currentEntry,
+                        ),
+                      },
+                    });
+                    setValidationError(null);
+                  }}
+                  disabled={busy}
+                >
+                  添加字段
+                </button>
+                <button
+                  type="button"
+                  className="button button-quiet"
+                  onClick={() => removeRow(entryIndex)}
+                  disabled={busy}
+                  aria-label={`移除 Stream 条目 ${entryIndex + 1}`}
+                >
+                  移除条目
+                </button>
+              </fieldset>
+            ))}
+          </div>
+          <button type="button" className="button button-secondary" onClick={addRow} disabled={busy}>
+            添加 Stream 条目
           </button>
         </fieldset>
       ) : null}

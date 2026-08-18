@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   deleteKey,
+  getKeyInfo,
   getKey,
+  renameKey,
   setKey,
   setKeyTtl,
 } from "../../lib/tauri";
-import type { KeyValue, RedisValue } from "../../lib/types";
+import type { KeyInfo, KeyValue, RedisValue } from "../../lib/types";
 import { browserErrorMessage, keyTypeLabel } from "./browserState";
 import KeyEditor from "./KeyEditor";
 
@@ -15,6 +17,7 @@ interface KeyDetailsProps {
   detail: KeyValue | null;
   loading: boolean;
   onDetailChange: (detail: KeyValue) => void;
+  onRenamed?: (previousKey: string, detail: KeyValue) => void;
   onDeleted: (key: string) => void;
   onBusyChange?: (busy: boolean) => void;
 }
@@ -30,11 +33,14 @@ export function KeyDetails({
   detail,
   loading,
   onDetailChange,
+  onRenamed,
   onDeleted,
   onBusyChange,
 }: KeyDetailsProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState(detail?.key ?? "");
+  const [info, setInfo] = useState<KeyInfo | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(0);
   const currentConnectionRef = useRef(connectionId);
@@ -54,6 +60,8 @@ export function KeyDetails({
     operationRef.current += 1;
     setBusy(false);
     setError(null);
+    setRenameDraft(detail?.key ?? "");
+    setInfo(null);
     onBusyChange?.(false);
   }, [connectionId, detail?.key, onBusyChange]);
 
@@ -175,6 +183,65 @@ export function KeyDetails({
     }
   };
 
+  const handleRename = async () => {
+    const nextKey = renameDraft.trim();
+    if (nextKey === "") {
+      setError("新键名不能为空。");
+      return;
+    }
+    if (nextKey === detail.key) {
+      setError("新键名必须与当前键名不同。");
+      return;
+    }
+    const operation = beginOperation(detail.key);
+    operationRef.current = operation.token;
+    setOperationBusy(operation, true);
+    setError(null);
+    try {
+      const renamed = await renameKey({
+        connection_id: operation.connectionId,
+        key: operation.key,
+        new_key: nextKey,
+      });
+      if (isCurrent(operation)) {
+        setRenameDraft(renamed.key);
+        if (onRenamed) {
+          onRenamed(operation.key, renamed);
+        } else {
+          onDetailChange(renamed);
+        }
+      }
+    } catch (caught) {
+      if (isCurrent(operation)) {
+        setError(browserErrorMessage(caught, "重命名键失败，请稍后重试。"));
+      }
+    } finally {
+      setOperationBusy(operation, false);
+    }
+  };
+
+  const handleInfo = async () => {
+    const operation = beginOperation(detail.key);
+    operationRef.current = operation.token;
+    setOperationBusy(operation, true);
+    setError(null);
+    try {
+      const nextInfo = await getKeyInfo({
+        connection_id: operation.connectionId,
+        key: operation.key,
+      });
+      if (isCurrent(operation)) {
+        setInfo(nextInfo);
+      }
+    } catch (caught) {
+      if (isCurrent(operation)) {
+        setError(browserErrorMessage(caught, "读取元数据失败，请稍后重试。"));
+      }
+    } finally {
+      setOperationBusy(operation, false);
+    }
+  };
+
   return (
     <section
       className="browser-detail-panel"
@@ -193,6 +260,24 @@ export function KeyDetails({
         <span>键名</span>
         <code title={detail.key}>{detail.key}</code>
       </div>
+      <div className="detail-rename-row">
+        <label className="field">
+          <span>重命名</span>
+          <input
+            aria-label="新键名"
+            value={renameDraft}
+            onChange={(event) => {
+              setRenameDraft(event.target.value);
+              setError(null);
+            }}
+            disabled={busy}
+            spellCheck={false}
+          />
+        </label>
+        <button type="button" className="button button-secondary" onClick={() => void handleRename()} disabled={busy}>
+          重命名
+        </button>
+      </div>
       <div className="detail-metadata" aria-label="键元数据">
         <div>
           <span>类型</span>
@@ -203,6 +288,31 @@ export function KeyDetails({
           <strong>{detail.ttl_ms < 0 ? "永久" : `${detail.ttl_ms} ms`}</strong>
         </div>
       </div>
+      <div className="detail-info-actions">
+        <button type="button" className="button button-quiet" onClick={() => void handleInfo()} disabled={busy}>
+          刷新元数据
+        </button>
+      </div>
+      {info ? (
+        <dl className="detail-info-grid" aria-label="详细键元数据">
+          <div>
+            <dt>逻辑大小</dt>
+            <dd>{info.size === null ? "—" : info.size}</dd>
+          </div>
+          <div>
+            <dt>内存占用</dt>
+            <dd>{info.memory_bytes === null ? "—" : `${info.memory_bytes} B`}</dd>
+          </div>
+          <div>
+            <dt>编码</dt>
+            <dd>{info.encoding ?? "—"}</dd>
+          </div>
+          <div>
+            <dt>空闲时间</dt>
+            <dd>{info.idle_seconds === null ? "—" : `${info.idle_seconds} s`}</dd>
+          </div>
+        </dl>
+      ) : null}
 
       <KeyEditor
         key={JSON.stringify([detail.key, detail.ttl_ms, detail.value])}

@@ -253,6 +253,28 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
     }));
   };
 
+  const handleRenamed = (previousKey: string, detail: KeyValue) => {
+    if (connectionIdRef.current !== connectionId) {
+      return;
+    }
+    setState((current) => ({
+      ...current,
+      selectedKey: current.selectedKey === previousKey ? detail.key : current.selectedKey,
+      detail: current.detail?.key === previousKey ? detail : current.detail,
+      keys: current.keys.map((summary) =>
+        summary.key === previousKey
+          ? {
+              ...summary,
+              key: detail.key,
+              key_type: detail.key_type,
+              ttl_ms: detail.ttl_ms,
+            }
+          : summary,
+      ),
+      error: null,
+    }));
+  };
+
   const handleDeleted = (key: string) => {
     if (connectionIdRef.current !== connectionId) {
       return;
@@ -344,6 +366,7 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
           detail={state.detail}
           loading={detailLoading}
           onDetailChange={handleDetailChange}
+          onRenamed={handleRenamed}
           onDeleted={handleDeleted}
           onBusyChange={setDetailActionLoading}
         />
