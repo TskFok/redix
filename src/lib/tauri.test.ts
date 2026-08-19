@@ -8,8 +8,10 @@ import {
   deleteConnection,
   deleteKey,
   executeCommand,
+  exportKeys,
   getKey,
   getKeyInfo,
+  importKeys,
   listConnections,
   openConnection,
   renameKey,
@@ -23,6 +25,7 @@ import type {
   CommandResult,
   ConnectionInfo,
   ConnectionProfile,
+  ExportedKey,
   KeyValue,
   RedisValue,
   SaveConnectionInput,
@@ -62,11 +65,23 @@ describe("Tauri IPC bridge", () => {
     invokeMock.mockResolvedValue(result);
 
     await expect(
-      scanKeys({ connection_id: "local", cursor: 0, pattern: "*", count: 100 }),
+      scanKeys({
+        connection_id: "local",
+        cursor: 0,
+        pattern: "*",
+        count: 100,
+        key_type: null,
+      }),
     ).resolves.toEqual(result);
 
     expect(invokeMock).toHaveBeenCalledWith("scan_keys", {
-      input: { connection_id: "local", cursor: 0, pattern: "*", count: 100 },
+      input: {
+        connection_id: "local",
+        cursor: 0,
+        pattern: "*",
+        count: 100,
+        key_type: null,
+      },
     });
   });
 
@@ -153,7 +168,11 @@ describe("Tauri IPC bridge", () => {
       .mockResolvedValueOnce(keyValue)
       .mockResolvedValueOnce(keyValue)
       .mockResolvedValueOnce(2)
-      .mockResolvedValueOnce(keyInfo);
+      .mockResolvedValueOnce(keyInfo)
+      .mockResolvedValueOnce([
+        { key: "demo:renamed", ttl_ms: -1, value: stringValue },
+      ])
+      .mockResolvedValueOnce(2);
 
     const createInput = {
       connection_id: "local",
@@ -182,6 +201,17 @@ describe("Tauri IPC bridge", () => {
     const infoInput = { connection_id: "local", key: "demo:renamed" };
     await expect(getKeyInfo(infoInput)).resolves.toEqual(keyInfo);
     expect(invokeMock).toHaveBeenLastCalledWith("get_key_info", { input: infoInput });
+
+    const exportInput = { connection_id: "local", keys: ["demo:renamed"] };
+    const exported: ExportedKey[] = [
+      { key: "demo:renamed", ttl_ms: -1, value: stringValue },
+    ];
+    await expect(exportKeys(exportInput)).resolves.toEqual(exported);
+    expect(invokeMock).toHaveBeenLastCalledWith("export_keys", { input: exportInput });
+
+    const importInput = { connection_id: "local", entries: exported };
+    await expect(importKeys(importInput)).resolves.toBe(2);
+    expect(invokeMock).toHaveBeenLastCalledWith("import_keys", { input: importInput });
   });
 
   it("list_connections 使用无参数调用并返回 profile 列表", async () => {

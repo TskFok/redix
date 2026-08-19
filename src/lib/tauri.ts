@@ -8,8 +8,11 @@ import type {
   DeleteKeysInput,
   DeleteKeyInput,
   ExecuteCommandInput,
+  ExportedKey,
+  ExportKeysInput,
   GetKeyInput,
   IpcError,
+  ImportKeysInput,
   KeyInfo,
   KeyInfoInput,
   KeyValue,
@@ -81,6 +84,14 @@ export function closeConnection(connectionId: string): Promise<void> {
 
 export function scanKeys(input: ScanKeysInput): Promise<ScanPage> {
   return call<ScanPage>("scan_keys", { input });
+}
+
+export function exportKeys(input: ExportKeysInput): Promise<ExportedKey[]> {
+  return call<ExportedKey[]>("export_keys", { input });
+}
+
+export function importKeys(input: ImportKeysInput): Promise<number> {
+  return call<number>("import_keys", { input });
 }
 
 export function getKey(input: GetKeyInput): Promise<KeyValue> {

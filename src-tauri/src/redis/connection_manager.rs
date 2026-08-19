@@ -181,6 +181,9 @@ impl RedisOperations for RedisService {
                 key_type,
                 ttl_ms,
                 size,
+                memory_bytes: None,
+                encoding: None,
+                idle_seconds: None,
             });
         }
 

@@ -256,6 +256,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
                 cursor,
                 pattern: format!("{}:*", keys.prefix),
                 count: 1,
+                key_type: None,
             })
             .await
             .map_err(|error| error.code().to_owned())?;

@@ -2,8 +2,8 @@ mod support;
 
 use redix_lib::{
     domain::{
-        ConnectionProfile, CreateKeyInput, DeleteKeysInput, KeyInfoInput, RedisValue,
-        RenameKeyInput, ScanKeysInput, StreamEntry, StreamField,
+        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey, ImportKeysInput,
+        KeyInfoInput, RedisValue, RenameKeyInput, ScanKeysInput, StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -59,11 +59,52 @@ fn rejects_scan_counts_outside_one_through_five_hundred() {
             cursor: 0,
             pattern: "*".into(),
             count,
+            key_type: None,
         };
 
         let error = input.validate().expect_err("invalid scan count must fail");
         assert_eq!(error.code(), "INVALID_CONNECTION");
     }
+}
+
+#[test]
+fn scan_filter_rejects_unknown_key_type_and_accepts_supported_type() {
+    let mut input = ScanKeysInput {
+        connection_id: "local".into(),
+        cursor: 0,
+        pattern: "*".into(),
+        count: 100,
+        key_type: Some("hash".into()),
+    };
+    assert_eq!(input.validate(), Ok(()));
+
+    input.key_type = Some("vector".into());
+    assert_eq!(input.validate().unwrap_err(), AppError::InvalidConnection);
+}
+
+#[test]
+fn import_rejects_empty_entries_and_exported_key_rejects_empty_name() {
+    assert_eq!(
+        ImportKeysInput {
+            connection_id: "local".into(),
+            entries: vec![],
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidConnection
+    );
+
+    let empty_name = ExportedKey {
+        key: String::new(),
+        ttl_ms: -1,
+        value: RedisValue::String {
+            value: "value".into(),
+        },
+    };
+    assert_eq!(
+        empty_name.validate().unwrap_err(),
+        AppError::InvalidConnection
+    );
 }
 
 #[test]

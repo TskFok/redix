@@ -24,6 +24,7 @@ export interface ScanKeysInput {
   cursor: number;
   pattern: string;
   count: number;
+  key_type: string | null;
 }
 
 export interface ScanPage {
@@ -37,6 +38,25 @@ export interface KeySummary {
   key_type: string;
   ttl_ms: number;
   size: number | null;
+  memory_bytes?: number | null;
+  encoding?: string | null;
+  idle_seconds?: number | null;
+}
+
+export interface ExportKeysInput {
+  connection_id: string;
+  keys: string[];
+}
+
+export interface ExportedKey {
+  key: string;
+  ttl_ms: number;
+  value: RedisValue;
+}
+
+export interface ImportKeysInput {
+  connection_id: string;
+  entries: ExportedKey[];
 }
 
 export type JsonValue =

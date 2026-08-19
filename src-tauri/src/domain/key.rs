@@ -7,15 +7,36 @@ pub struct ScanKeysInput {
     pub cursor: u64,
     pub pattern: String,
     pub count: usize,
+    pub key_type: Option<String>,
 }
 
 impl ScanKeysInput {
     pub fn validate(&self) -> Result<(), AppError> {
-        if !(1..=500).contains(&self.count) {
+        if self.connection_id.trim().is_empty()
+            || self.pattern.trim().is_empty()
+            || !(1..=500).contains(&self.count)
+            || self
+                .key_type
+                .as_deref()
+                .is_some_and(|key_type| normalize_key_type(key_type).is_none())
+        {
             return Err(AppError::InvalidConnection);
         }
 
         Ok(())
+    }
+}
+
+pub fn normalize_key_type(value: &str) -> Option<&'static str> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "string" => Some("string"),
+        "hash" => Some("hash"),
+        "list" => Some("list"),
+        "set" => Some("set"),
+        "zset" | "sortedset" | "sorted-set" => Some("zset"),
+        "stream" => Some("stream"),
+        "json" | "rejson-rl" | "rejson-rs" => Some("json"),
+        _ => None,
     }
 }
 
@@ -25,6 +46,9 @@ pub struct KeySummary {
     pub key_type: String,
     pub ttl_ms: i64,
     pub size: Option<u64>,
+    pub memory_bytes: Option<u64>,
+    pub encoding: Option<String>,
+    pub idle_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -32,6 +56,62 @@ pub struct ScanPage {
     pub cursor: u64,
     pub keys: Vec<KeySummary>,
     pub has_more: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ExportKeysInput {
+    pub connection_id: String,
+    pub keys: Vec<String>,
+}
+
+impl ExportKeysInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.connection_id.trim().is_empty()
+            || self.keys.is_empty()
+            || self.keys.len() > 1_000
+            || self.keys.iter().any(|key| key.trim().is_empty())
+        {
+            return Err(AppError::InvalidConnection);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ExportedKey {
+    pub key: String,
+    pub ttl_ms: i64,
+    pub value: RedisValue,
+}
+
+impl ExportedKey {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.key.trim().is_empty() || self.ttl_ms < -2 {
+            return Err(AppError::InvalidConnection);
+        }
+        self.value.validate()
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ImportKeysInput {
+    pub connection_id: String,
+    pub entries: Vec<ExportedKey>,
+}
+
+impl ImportKeysInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.connection_id.trim().is_empty()
+            || self.entries.is_empty()
+            || self.entries.len() > 1_000
+        {
+            return Err(AppError::InvalidConnection);
+        }
+        for entry in &self.entries {
+            entry.validate()?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
