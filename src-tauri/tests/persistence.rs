@@ -11,7 +11,10 @@ use std::{
 
 use redix_lib::{
     error::AppError,
-    persistence::{JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring},
+    persistence::{
+        JsonDocumentStore, JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring,
+        VersionedJsonDocument,
+    },
 };
 use support::valid_profile;
 
@@ -78,6 +81,66 @@ fn in_current_directory<T>(directory: &Path, operation: impl FnOnce() -> T) -> T
         Ok(value) => value,
         Err(payload) => resume_unwind(payload),
     }
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize, PartialEq)]
+struct TestDocument {
+    version: u32,
+    value: String,
+}
+
+impl VersionedJsonDocument for TestDocument {
+    fn version(&self) -> u32 {
+        self.version
+    }
+
+    fn migrate(value: serde_json::Value) -> Result<Self, AppError> {
+        serde_json::from_value(value).map_err(|_| AppError::PersistenceFailed)
+    }
+}
+
+#[test]
+fn versioned_document_round_trips_and_replaces_atomically() {
+    let directory = temporary_directory("document-round-trip");
+    let path = directory.join("settings.json");
+    let store = JsonDocumentStore::new(path.clone());
+    let document = TestDocument {
+        version: 1,
+        value: "ready".into(),
+    };
+
+    store.save(&document).unwrap();
+    assert_eq!(store.load::<TestDocument>().unwrap(), document);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    remove_temporary_directory(&directory);
+}
+
+#[test]
+fn malformed_versioned_document_returns_safe_persistence_error() {
+    let directory = temporary_directory("document-malformed");
+    let path = directory.join("settings.json");
+    fs::write(&path, "{ invalid json").unwrap();
+
+    let error = JsonDocumentStore::new(path)
+        .load::<TestDocument>()
+        .unwrap_err();
+    assert_eq!(error, AppError::PersistenceFailed);
+    remove_temporary_directory(&directory);
+}
+
+#[test]
+fn malformed_versioned_document_can_restore_default_without_overwriting_source() {
+    let directory = temporary_directory("document-default");
+    let path = directory.join("settings.json");
+    let original = "{ invalid json";
+    fs::write(&path, original).unwrap();
+
+    let loaded = JsonDocumentStore::new(path.clone())
+        .load_or_default::<TestDocument>()
+        .unwrap();
+    assert_eq!(loaded, TestDocument::default());
+    assert_eq!(fs::read_to_string(path).unwrap(), original);
+    remove_temporary_directory(&directory);
 }
 
 #[test]
