@@ -3,6 +3,7 @@ import { formatSize, formatTtl, keyTypeLabel } from "./browserState";
 
 interface KeyListProps {
   pattern: string;
+  keyType: string;
   keys: KeySummary[];
   selectedKey: string | null;
   selectedKeys: string[];
@@ -10,6 +11,7 @@ interface KeyListProps {
   loading: boolean;
   onPatternChange: (pattern: string) => void;
   onPatternKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
+  onKeyTypeChange: (keyType: string) => void;
   onSelect: (key: string) => void;
   onToggleSelect: (key: string) => void;
   onLoadMore: () => void;
@@ -17,6 +19,7 @@ interface KeyListProps {
 
 export function KeyList({
   pattern,
+  keyType,
   keys,
   selectedKey,
   selectedKeys,
@@ -24,6 +27,7 @@ export function KeyList({
   loading,
   onPatternChange,
   onPatternKeyDown,
+  onKeyTypeChange,
   onSelect,
   onToggleSelect,
   onLoadMore,
@@ -54,6 +58,25 @@ export function KeyList({
       <p id="key-filter-hint" className="browser-helper">
         支持 Redis glob 模式，输入后自动刷新，也可按 Enter 立即扫描。
       </p>
+
+      <label className="browser-filter browser-filter-type field">
+        <span>类型过滤</span>
+        <select
+          aria-label="类型过滤"
+          value={keyType}
+          onChange={(event) => onKeyTypeChange(event.target.value)}
+          disabled={loading}
+        >
+          <option value="">全部类型</option>
+          <option value="string">String</option>
+          <option value="hash">Hash</option>
+          <option value="list">List</option>
+          <option value="set">Set</option>
+          <option value="zset">Sorted Set</option>
+          <option value="stream">Stream</option>
+          <option value="json">JSON</option>
+        </select>
+      </label>
 
       {loading ? (
         <p className="loading-state browser-loading" role="status" aria-live="polite">

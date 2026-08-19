@@ -1004,6 +1004,31 @@ code {
   margin-bottom: 12px;
 }
 
+.browser-file-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.browser-file-input-label {
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.browser-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.browser-file-feedback {
+  margin: 0;
+}
+
 .browser-add-key {
   display: grid;
   gap: 14px;

@@ -1,14 +1,59 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyScanPage,
   browserErrorMessage,
   cloneRedisValue,
+  initialBrowserPageState,
   keyTypeLabel,
   redisValueKind,
 } from "./browserState";
 import type { RedisValue } from "../../lib/types";
 
 describe("Browser 状态 helper", () => {
+  it("按类型过滤扫描摘要并在刷新时清空选择", () => {
+    const state = {
+      ...initialBrowserPageState,
+      selectedKeys: ["user:1"],
+    };
+    const next = applyScanPage(
+      state,
+      {
+        cursor: 0,
+        has_more: false,
+        keys: [
+          { key: "user:1", key_type: "string", ttl_ms: -1, size: 1 },
+          { key: "user:2", key_type: "hash", ttl_ms: -1, size: 2 },
+        ],
+      },
+      true,
+      "hash",
+    );
+
+    expect(next.keys.map((key) => key.key)).toEqual(["user:2"]);
+    expect(next.selectedKeys).toEqual([]);
+  });
+
+  it("追加扫描时只保留当前列表中的选择", () => {
+    const state = {
+      ...initialBrowserPageState,
+      keys: [{ key: "user:1", key_type: "string", ttl_ms: -1, size: 1 }],
+      selectedKeys: ["user:1", "stale:1"],
+    };
+
+    const next = applyScanPage(
+      state,
+      {
+        cursor: 0,
+        has_more: false,
+        keys: [{ key: "user:2", key_type: "hash", ttl_ms: -1, size: 2 }],
+      },
+      false,
+    );
+
+    expect(next.selectedKeys).toEqual(["user:1"]);
+  });
+
   it("识别 JSON 和 Stream 类型并深拷贝其嵌套数据", () => {
     const json: RedisValue = {
       Json: {

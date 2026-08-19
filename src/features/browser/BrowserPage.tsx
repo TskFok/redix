@@ -6,6 +6,7 @@ import KeyDetails from "./KeyDetails";
 import KeyList from "./KeyList";
 import AddKey from "./AddKey";
 import BulkKeyActions from "./BulkKeyActions";
+import BrowserImportExport from "./BrowserImportExport";
 import {
   applyScanPage,
   browserErrorMessage,
@@ -26,7 +27,6 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
   }));
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [showAddKey, setShowAddKey] = useState(false);
   const connectionIdRef = useRef(connectionId);
   connectionIdRef.current = connectionId;
@@ -38,7 +38,12 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
   const skipDebounceForPatternRef = useRef<string | null>(null);
 
   const scanPage = useCallback(
-    async (cursor: number, requestedPattern: string, replace: boolean) => {
+    async (
+      cursor: number,
+      requestedPattern: string,
+      replace: boolean,
+      requestedKeyType: string,
+    ) => {
       if (scanLoadingRef.current) {
         return;
       }
@@ -53,16 +58,16 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
       setState((current) => ({
         ...current,
         pattern: requestedPattern,
+        keyType: requestedKeyType,
         cursor: replace ? 0 : current.cursor,
         keys: replace ? [] : current.keys,
         selectedKey: replace ? null : current.selectedKey,
+        selectedKeys: replace ? [] : current.selectedKeys,
         detail: replace ? null : current.detail,
+        metadata: replace ? null : current.metadata,
         loading: true,
         error: null,
       }));
-      if (replace) {
-        setSelectedKeys([]);
-      }
 
       try {
         const page = await scanKeys({
@@ -70,9 +75,10 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
           cursor,
           pattern: requestedPattern,
           count: SCAN_COUNT,
+          key_type: requestedKeyType || null,
         });
         if (mountedRef.current && scanRequestRef.current === requestId) {
-          setState((current) => applyScanPage(current, page, replace));
+          setState((current) => applyScanPage(current, page, replace, requestedKeyType));
         }
       } catch (caught) {
         if (mountedRef.current && scanRequestRef.current === requestId) {
@@ -96,14 +102,13 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
     scanLoadingRef.current = false;
     skipDebounceForPatternRef.current = "*";
     setDetailActionLoading(false);
-    setSelectedKeys([]);
     setShowAddKey(false);
     setState({
       ...initialBrowserPageState,
       pattern: "*",
       loading: true,
     });
-    void scanPage(0, "*", true);
+    void scanPage(0, "*", true, "");
 
     return () => {
       mountedRef.current = false;
@@ -130,7 +135,7 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
     const requestedPattern = state.pattern.trim() || "*";
     debounceRef.current = window.setTimeout(() => {
       debounceRef.current = null;
-      void scanPage(0, requestedPattern, true);
+      void scanPage(0, requestedPattern, true, state.keyType);
     }, FILTER_DEBOUNCE_MS);
 
     return () => {
@@ -161,42 +166,53 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
       window.clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    void scanPage(0, requestedPattern, true);
+    void scanPage(0, requestedPattern, true, state.keyType);
+  };
+
+  const handleKeyTypeChange = (keyType: string) => {
+    if (state.loading) {
+      return;
+    }
+    void scanPage(0, state.pattern.trim() || "*", true, keyType);
   };
 
   const handleLoadMore = () => {
     if (state.loading || !state.hasMore) {
       return;
     }
-    void scanPage(state.cursor, state.pattern.trim() || "*", false);
+    void scanPage(state.cursor, state.pattern.trim() || "*", false, state.keyType);
   };
 
   const handleRefresh = () => {
     if (state.loading) {
       return;
     }
-    setSelectedKeys([]);
-    void scanPage(0, state.pattern.trim() || "*", true);
+    void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
   };
 
   const handleToggleSelect = (key: string) => {
     if (state.loading || detailActionLoading) {
       return;
     }
-    setSelectedKeys((current) =>
-      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
-    );
+    setState((current) => ({
+      ...current,
+      selectedKeys: current.selectedKeys.includes(key)
+        ? current.selectedKeys.filter((item) => item !== key)
+        : [...current.selectedKeys, key],
+    }));
   };
 
   const handleCreated = () => {
     setShowAddKey(false);
-    setSelectedKeys([]);
-    void scanPage(0, state.pattern.trim() || "*", true);
+    void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
   };
 
   const handleBulkDeleted = () => {
-    setSelectedKeys([]);
-    void scanPage(0, state.pattern.trim() || "*", true);
+    void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
+  };
+
+  const handleImported = async () => {
+    await scanPage(0, state.pattern.trim() || "*", true, state.keyType);
   };
 
   const handleBulkError = (message: string) => {
@@ -214,6 +230,7 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
       ...current,
       selectedKey: key,
       detail: null,
+      metadata: null,
       error: null,
     }));
 
@@ -244,6 +261,7 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
     setState((current) => ({
       ...current,
       detail,
+      metadata: null,
       error: null,
       keys: current.keys.map((summary) =>
         summary.key === detail.key
@@ -261,6 +279,7 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
       ...current,
       selectedKey: current.selectedKey === previousKey ? detail.key : current.selectedKey,
       detail: current.detail?.key === previousKey ? detail : current.detail,
+      metadata: null,
       keys: current.keys.map((summary) =>
         summary.key === previousKey
           ? {
@@ -286,7 +305,9 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
       ...current,
       keys: current.keys.filter((summary) => summary.key !== key),
       selectedKey: current.selectedKey === key ? null : current.selectedKey,
+      selectedKeys: current.selectedKeys.filter((item) => item !== key),
       detail: current.detail?.key === key ? null : current.detail,
+      metadata: current.detail?.key === key ? null : current.metadata,
       error: null,
     }));
   };
@@ -331,10 +352,16 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
         </button>
         <BulkKeyActions
           connectionId={connectionId}
-          selectedKeys={selectedKeys}
+          selectedKeys={state.selectedKeys}
           busy={listBusy}
           onDeleted={handleBulkDeleted}
           onError={handleBulkError}
+        />
+        <BrowserImportExport
+          connectionId={connectionId}
+          selectedKeys={state.selectedKeys}
+          onImported={handleImported}
+          disabled={listBusy}
         />
       </div>
 
@@ -350,13 +377,15 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
       <div className="browser-layout">
         <KeyList
           pattern={state.pattern}
+          keyType={state.keyType}
           keys={state.keys}
           selectedKey={state.selectedKey}
-          selectedKeys={selectedKeys}
+          selectedKeys={state.selectedKeys}
           hasMore={state.hasMore}
           loading={listBusy}
           onPatternChange={handlePatternChange}
           onPatternKeyDown={handlePatternKeyDown}
+          onKeyTypeChange={handleKeyTypeChange}
           onSelect={(key) => void handleSelect(key)}
           onToggleSelect={handleToggleSelect}
           onLoadMore={handleLoadMore}
@@ -364,8 +393,12 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
         <KeyDetails
           connectionId={connectionId}
           detail={state.detail}
+          metadata={state.metadata}
           loading={detailLoading}
           onDetailChange={handleDetailChange}
+          onMetadataChange={(metadata) =>
+            setState((current) => ({ ...current, metadata }))
+          }
           onRenamed={handleRenamed}
           onDeleted={handleDeleted}
           onBusyChange={setDetailActionLoading}

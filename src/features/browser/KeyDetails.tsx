@@ -15,8 +15,10 @@ import KeyEditor from "./KeyEditor";
 interface KeyDetailsProps {
   connectionId: string;
   detail: KeyValue | null;
+  metadata?: KeyInfo | null;
   loading: boolean;
   onDetailChange: (detail: KeyValue) => void;
+  onMetadataChange?: (metadata: KeyInfo | null) => void;
   onRenamed?: (previousKey: string, detail: KeyValue) => void;
   onDeleted: (key: string) => void;
   onBusyChange?: (busy: boolean) => void;
@@ -31,8 +33,10 @@ interface OperationContext {
 export function KeyDetails({
   connectionId,
   detail,
+  metadata,
   loading,
   onDetailChange,
+  onMetadataChange,
   onRenamed,
   onDeleted,
   onBusyChange,
@@ -40,7 +44,7 @@ export function KeyDetails({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState(detail?.key ?? "");
-  const [info, setInfo] = useState<KeyInfo | null>(null);
+  const [localInfo, setLocalInfo] = useState<KeyInfo | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(0);
   const currentConnectionRef = useRef(connectionId);
@@ -61,9 +65,12 @@ export function KeyDetails({
     setBusy(false);
     setError(null);
     setRenameDraft(detail?.key ?? "");
-    setInfo(null);
+    setLocalInfo(null);
+    onMetadataChange?.(null);
     onBusyChange?.(false);
   }, [connectionId, detail?.key, onBusyChange]);
+
+  const info = metadata === undefined ? localInfo : metadata;
 
   const isCurrent = (operation: OperationContext) =>
     mountedRef.current &&
@@ -231,7 +238,8 @@ export function KeyDetails({
         key: operation.key,
       });
       if (isCurrent(operation)) {
-        setInfo(nextInfo);
+        setLocalInfo(nextInfo);
+        onMetadataChange?.(nextInfo);
       }
     } catch (caught) {
       if (isCurrent(operation)) {

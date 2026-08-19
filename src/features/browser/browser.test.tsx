@@ -17,8 +17,10 @@ const {
   deleteKeyMock,
   createKeyMock,
   deleteKeysMock,
+  exportKeysMock,
   renameKeyMock,
   getKeyInfoMock,
+  importKeysMock,
   setKeyTtlMock,
 } = vi.hoisted(() => ({
   scanKeysMock: vi.fn(),
@@ -27,8 +29,10 @@ const {
   deleteKeyMock: vi.fn(),
   createKeyMock: vi.fn(),
   deleteKeysMock: vi.fn(),
+  exportKeysMock: vi.fn(),
   renameKeyMock: vi.fn(),
   getKeyInfoMock: vi.fn(),
+  importKeysMock: vi.fn(),
   setKeyTtlMock: vi.fn(),
 }));
 
@@ -39,8 +43,10 @@ vi.mock("../../lib/tauri", () => ({
   deleteKey: deleteKeyMock,
   createKey: createKeyMock,
   deleteKeys: deleteKeysMock,
+  exportKeys: exportKeysMock,
   renameKey: renameKeyMock,
   getKeyInfo: getKeyInfoMock,
+  importKeys: importKeysMock,
   setKeyTtl: setKeyTtlMock,
 }));
 
@@ -79,6 +85,14 @@ describe("Redis Browser", () => {
     createKeyMock.mockResolvedValue(stringDetail);
     deleteKeysMock.mockResolvedValue(0);
     renameKeyMock.mockResolvedValue({ ...stringDetail, key: "user:renamed" });
+    exportKeysMock.mockResolvedValue([
+      {
+        key: "user:1",
+        ttl_ms: -1,
+        value: { String: { value: "Alice" } },
+      },
+    ]);
+    importKeysMock.mockResolvedValue(1);
     getKeyInfoMock.mockResolvedValue({
       key: "user:1",
       key_type: "string",
@@ -112,6 +126,7 @@ describe("Redis Browser", () => {
       cursor: 0,
       pattern: "*",
       count: 100,
+      key_type: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
@@ -185,6 +200,7 @@ describe("Redis Browser", () => {
         cursor: 42,
         pattern: "*",
         count: 100,
+        key_type: null,
       });
     });
     expect(await screen.findByText("admin:1")).toBeInTheDocument();
@@ -200,10 +216,111 @@ describe("Redis Browser", () => {
         cursor: 0,
         pattern: "user:*",
         count: 100,
+        key_type: null,
       });
     });
     expect(await screen.findByText("user:2")).toBeInTheDocument();
     expect(screen.queryByText("admin:1")).not.toBeInTheDocument();
+  });
+
+  it("类型选择传入后端并在刷新时重置游标", async () => {
+    scanKeysMock
+      .mockResolvedValueOnce({
+        cursor: 42,
+        keys: [stringSummary, { ...stringSummary, key: "hash:1", key_type: "hash" }],
+        has_more: true,
+      })
+      .mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+
+    render(<BrowserPage connectionId="local" />);
+    expect(await screen.findByText("user:1")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("类型过滤"), {
+      target: { value: "hash" },
+    });
+    await waitFor(() => {
+      expect(scanKeysMock).toHaveBeenLastCalledWith({
+        connection_id: "local",
+        cursor: 0,
+        pattern: "*",
+        count: 100,
+        key_type: "hash",
+      });
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
+    await waitFor(() => {
+      expect(scanKeysMock).toHaveBeenLastCalledWith({
+        connection_id: "local",
+        cursor: 0,
+        pattern: "*",
+        count: 100,
+        key_type: "hash",
+      });
+    });
+  });
+
+  it("勾选键后只导出一次，并通过 Blob 下载且不包含连接密码", async () => {
+    const createObjectURLMock = vi.fn(() => "blob:browser-export");
+    const revokeObjectURLMock = vi.fn();
+    vi.stubGlobal("URL", {
+      createObjectURL: createObjectURLMock,
+      revokeObjectURL: revokeObjectURLMock,
+    });
+    exportKeysMock.mockResolvedValue([
+      {
+        key: "user:1",
+        ttl_ms: -1,
+        value: { String: { value: "Alice" } },
+      },
+    ]);
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("user:1");
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 user:1" }));
+    fireEvent.click(screen.getByRole("button", { name: "导出选中键" }));
+
+    await waitFor(() => {
+      expect(exportKeysMock).toHaveBeenCalledTimes(1);
+      expect(exportKeysMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        keys: ["user:1"],
+      });
+    });
+    const blob = (createObjectURLMock.mock.calls[0] as unknown[])[0] as Blob;
+    expect(await blob.text()).not.toContain("password");
+    expect(revokeObjectURLMock).toHaveBeenCalledWith("blob:browser-export");
+  });
+
+  it("导入 JSON 文件后调用一次 typed importKeys 并刷新列表", async () => {
+    const entry = {
+      key: "imported:1",
+      ttl_ms: 10_000,
+      value: { String: { value: "imported" } },
+    };
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    const file = new File([JSON.stringify([entry])], "keys.json", {
+      type: "application/json",
+    });
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.change(screen.getByLabelText("导入 JSON 文件"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => {
+      expect(importKeysMock).toHaveBeenCalledTimes(1);
+      expect(importKeysMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        entries: [entry],
+      });
+    });
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
   });
 
   it("删除成功后清理选择并从列表移除键", async () => {
@@ -349,6 +466,7 @@ describe("Redis Browser", () => {
         cursor: 0,
         pattern: "*",
         count: 100,
+        key_type: null,
       });
     });
     save.resolve(stringDetail);
@@ -809,6 +927,7 @@ describe("Redis Browser", () => {
         cursor: 0,
         pattern: "*",
         count: 100,
+        key_type: null,
       });
     });
     expect(screen.getByLabelText("选择键 user:1")).not.toBeChecked();
@@ -832,6 +951,7 @@ describe("Redis Browser", () => {
         cursor: 0,
         pattern: "*",
         count: 100,
+        key_type: null,
       });
     });
     creation.resolve(stringDetail);

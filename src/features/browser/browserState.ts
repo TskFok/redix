@@ -1,4 +1,5 @@
 import type {
+  KeyInfo,
   KeySummary,
   KeyValue,
   RedisValue,
@@ -7,10 +8,13 @@ import type {
 
 export interface BrowserPageState {
   pattern: string;
+  keyType: string;
   cursor: number;
   keys: KeySummary[];
   selectedKey: string | null;
+  selectedKeys: string[];
   detail: KeyValue | null;
+  metadata: KeyInfo | null;
   loading: boolean;
   error: string | null;
   hasMore: boolean;
@@ -18,32 +22,59 @@ export interface BrowserPageState {
 
 export const initialBrowserPageState: BrowserPageState = {
   pattern: "*",
+  keyType: "",
   cursor: 0,
   keys: [],
   selectedKey: null,
+  selectedKeys: [],
   detail: null,
+  metadata: null,
   loading: false,
   error: null,
   hasMore: false,
 };
 
+function matchesKeyType(summary: KeySummary, keyType: string): boolean {
+  const requested = keyType.trim().toLowerCase();
+  if (requested === "") {
+    return true;
+  }
+
+  const actual = summary.key_type.trim().toLowerCase();
+  if (requested === "json") {
+    return actual === "json" || actual === "rejson-rl" || actual === "rejson-rs";
+  }
+  if (requested === "zset" || requested === "sortedset" || requested === "sorted-set") {
+    return actual === "zset" || actual === "sortedset" || actual === "sorted-set";
+  }
+  return actual === requested;
+}
+
 export function applyScanPage(
   current: BrowserPageState,
   page: ScanPage,
   replace: boolean,
+  keyType = current.keyType,
 ): BrowserPageState {
-  const mergedKeys = replace ? page.keys : [...current.keys, ...page.keys];
+  const filteredPageKeys = page.keys.filter((summary) => matchesKeyType(summary, keyType));
+  const mergedKeys = replace ? filteredPageKeys : [...current.keys, ...filteredPageKeys];
   const keysByName = new Map<string, KeySummary>();
   for (const key of mergedKeys) {
     keysByName.set(key.key, key);
   }
+  const selectedKeys = replace
+    ? []
+    : current.selectedKeys.filter((key) => keysByName.has(key));
 
   return {
     ...current,
+    keyType,
     cursor: page.cursor,
     keys: [...keysByName.values()],
     selectedKey: replace ? null : current.selectedKey,
+    selectedKeys,
     detail: replace ? null : current.detail,
+    metadata: replace ? null : current.metadata,
     hasMore: page.has_more || page.cursor !== 0,
     loading: false,
     error: null,
