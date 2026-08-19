@@ -19,6 +19,37 @@ export interface ConnectionInfo {
   server_version: string;
 }
 
+export interface ModuleSummary {
+  name: string;
+  version: string | null;
+}
+
+export interface InstanceOverview {
+  server_version: string | null;
+  redis_mode: string | null;
+  uptime_seconds: number | null;
+  connected_clients: number | null;
+  used_memory_bytes: number | null;
+  max_memory_bytes: number | null;
+  total_commands_processed: number | null;
+  keyspace_hits: number | null;
+  keyspace_misses: number | null;
+  role: string | null;
+  modules: ModuleSummary[];
+}
+
+export interface DatabaseOverview {
+  database: number;
+  key_count: number | null;
+  expires: number | null;
+  avg_ttl_ms: number | null;
+}
+
+export interface SelectDatabaseInput {
+  connection_id: string;
+  database: number;
+}
+
 export interface ScanKeysInput {
   connection_id: string;
   cursor: number;

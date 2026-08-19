@@ -8,6 +8,7 @@ import type {
   ConnectionInfo,
   ConnectionProfile,
   CreateKeyInput,
+  DatabaseOverview,
   DeleteKeysInput,
   DeleteKeyInput,
   ExecuteCommandsInput,
@@ -17,6 +18,7 @@ import type {
   GetKeyInput,
   IpcError,
   ImportKeysInput,
+  InstanceOverview,
   KeyInfo,
   KeyInfoInput,
   KeyValue,
@@ -25,6 +27,7 @@ import type {
   SaveCommandHistoryInput,
   ScanKeysInput,
   ScanPage,
+  SelectDatabaseInput,
   SetKeyInput,
   SetKeyTtlInput,
 } from "./types";
@@ -97,6 +100,22 @@ export function exportKeys(input: ExportKeysInput): Promise<ExportedKey[]> {
 
 export function importKeys(input: ImportKeysInput): Promise<number> {
   return call<number>("import_keys", { input });
+}
+
+export function getInstanceOverview(connectionId: string): Promise<InstanceOverview> {
+  return call<InstanceOverview>("get_instance_overview", {
+    connection_id: connectionId,
+  });
+}
+
+export function getDatabaseOverview(connectionId: string): Promise<DatabaseOverview[]> {
+  return call<DatabaseOverview[]>("get_database_overview", {
+    connection_id: connectionId,
+  });
+}
+
+export function selectDatabase(input: SelectDatabaseInput): Promise<ConnectionProfile> {
+  return call<ConnectionProfile>("select_database", { input });
 }
 
 export function getKey(input: GetKeyInput): Promise<KeyValue> {

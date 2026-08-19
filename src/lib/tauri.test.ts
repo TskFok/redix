@@ -10,9 +10,11 @@ import {
   executeCommands,
   executeCommand,
   exportKeys,
+  getDatabaseOverview,
   getCommandCatalog,
   getKey,
   getKeyInfo,
+  getInstanceOverview,
   importKeys,
   listCommandHistory,
   listConnections,
@@ -21,6 +23,7 @@ import {
   saveConnection,
   scanKeys,
   saveCommandHistory,
+  selectDatabase,
   setKey,
   setKeyTtl,
   testConnection,
@@ -30,6 +33,8 @@ import type {
   CommandExecutionItem,
   CommandHistoryEntry,
   CommandResult,
+  DatabaseOverview,
+  InstanceOverview,
   ConnectionInfo,
   ConnectionProfile,
   ExportedKey,
@@ -193,6 +198,44 @@ describe("Tauri IPC bridge", () => {
     await expect(saveCommandHistory(historyInput)).resolves.toBeUndefined();
     expect(invokeMock).toHaveBeenLastCalledWith("save_command_history", {
       input: historyInput,
+    });
+  });
+
+  it("为 Database 概览和数据库切换使用稳定 IPC 合同", async () => {
+    const instance: InstanceOverview = {
+      server_version: "7.2.5",
+      redis_mode: "standalone",
+      uptime_seconds: 42,
+      connected_clients: 3,
+      used_memory_bytes: 1024,
+      max_memory_bytes: null,
+      total_commands_processed: 9,
+      keyspace_hits: 4,
+      keyspace_misses: 1,
+      role: "master",
+      modules: [],
+    };
+    const databases: DatabaseOverview[] = [
+      { database: 0, key_count: 8, expires: 2, avg_ttl_ms: 1200 },
+    ];
+    invokeMock
+      .mockResolvedValueOnce(instance)
+      .mockResolvedValueOnce(databases)
+      .mockResolvedValueOnce(profile);
+
+    await expect(getInstanceOverview("local")).resolves.toEqual(instance);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_instance_overview", {
+      connection_id: "local",
+    });
+    await expect(getDatabaseOverview("local")).resolves.toEqual(databases);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_database_overview", {
+      connection_id: "local",
+    });
+    await expect(
+      selectDatabase({ connection_id: "local", database: 0 }),
+    ).resolves.toEqual(profile);
+    expect(invokeMock).toHaveBeenLastCalledWith("select_database", {
+      input: { connection_id: "local", database: 0 },
     });
   });
 
