@@ -6,7 +6,11 @@ import type { CommandResult, ConnectionProfile } from "../../lib/types";
 import WorkbenchPage from "./WorkbenchPage";
 
 const {
+  executeCommandsMock,
   executeCommandMock,
+  getCommandCatalogMock,
+  listCommandHistoryMock,
+  saveCommandHistoryMock,
   listConnectionsMock,
   openConnectionMock,
   closeConnectionMock,
@@ -19,7 +23,11 @@ const {
   deleteKeyMock,
   setKeyTtlMock,
 } = vi.hoisted(() => ({
+  executeCommandsMock: vi.fn(),
   executeCommandMock: vi.fn(),
+  getCommandCatalogMock: vi.fn(),
+  listCommandHistoryMock: vi.fn(),
+  saveCommandHistoryMock: vi.fn(),
   listConnectionsMock: vi.fn(),
   openConnectionMock: vi.fn(),
   closeConnectionMock: vi.fn(),
@@ -34,7 +42,11 @@ const {
 }));
 
 vi.mock("../../lib/tauri", () => ({
+  executeCommands: executeCommandsMock,
   executeCommand: executeCommandMock,
+  getCommandCatalog: getCommandCatalogMock,
+  listCommandHistory: listCommandHistoryMock,
+  saveCommandHistory: saveCommandHistoryMock,
   listConnections: listConnectionsMock,
   openConnection: openConnectionMock,
   closeConnection: closeConnectionMock,
@@ -78,12 +90,20 @@ describe("Redis Workbench 工作区", () => {
     setKeyMock.mockResolvedValue(undefined);
     deleteKeyMock.mockResolvedValue(undefined);
     setKeyTtlMock.mockResolvedValue(-1);
+    getCommandCatalogMock.mockResolvedValue([
+      { name: "PING", summary: "检查 Redis 连接", arguments: [] },
+      { name: "GET", summary: "读取字符串键", arguments: [{ name: "key", required: true, hint: "键名" }] },
+      { name: "SET", summary: "写入字符串键", arguments: [{ name: "key", required: true, hint: "键名" }] },
+    ]);
+    listCommandHistoryMock.mockResolvedValue([]);
+    saveCommandHistoryMock.mockResolvedValue(undefined);
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => undefined);
   });
 
   afterEach(() => {
     cleanup();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("没有连接时禁用执行并显示明确提示", () => {
@@ -140,6 +160,80 @@ describe("Redis Workbench 工作区", () => {
     });
     expect(await screen.findByText("PONG")).toBeInTheDocument();
     expect(Storage.prototype.setItem).not.toHaveBeenCalled();
+  });
+
+  it("一次 IPC 执行多条命令并按顺序展示结果", async () => {
+    executeCommandsMock.mockResolvedValue([
+      { command: "PING", result: { kind: "string", value: "PONG" }, error_code: null },
+      { command: "DBSIZE", result: { kind: "number", value: 2 }, error_code: null },
+    ]);
+    render(<WorkbenchPage connectionId="local" />);
+    typeCommand("PING\nDBSIZE");
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+
+    expect(await screen.findByText("PONG")).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
+    expect(executeCommandsMock).toHaveBeenCalledTimes(1);
+    expect(executeCommandsMock).toHaveBeenCalledWith({
+      connection_id: "local",
+      commands: ["PING", "DBSIZE"],
+      continue_on_error: false,
+    });
+  });
+
+  it("可切换结果格式并复制当前返回值", async () => {
+    executeCommandMock.mockResolvedValue({
+      kind: "array",
+      value: { key: "value", nested: [1, 2] },
+    });
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    render(<WorkbenchPage connectionId="local" />);
+    typeCommand("INFO");
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+    await screen.findByText(/key/);
+
+    fireEvent.change(screen.getByLabelText("结果格式"), { target: { value: "json" } });
+    expect(screen.getByText(/"nested"/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "复制结果" }));
+    await waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText.mock.calls[0][0]).toContain('"key"');
+  });
+
+  it("根据本地命令目录显示提示并回填而不自动执行", async () => {
+    render(<WorkbenchPage connectionId="local" />);
+    typeCommand("PI");
+    expect(await screen.findByRole("option", { name: /PING/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /PING/ }));
+    expect(screen.getByRole("textbox", { name: "Redis 命令" })).toHaveValue("PING");
+    expect(executeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("加载并保存当前连接历史，敏感命令不进入保存批次", async () => {
+    listCommandHistoryMock.mockResolvedValue([
+      {
+        connection_id: "local",
+        command: "DBSIZE",
+        result: { kind: "number", value: 2 },
+        error_code: null,
+        created_at: "2026-08-19T00:00:00Z",
+      },
+    ]);
+    executeCommandMock.mockResolvedValue({ kind: "string", value: "PONG" });
+    render(<WorkbenchPage connectionId="local" />);
+    expect(await screen.findByRole("button", { name: /回填命令 DBSIZE/ })).toBeInTheDocument();
+
+    typeCommand("AUTH secret");
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+    await screen.findByText("PONG");
+    expect(saveCommandHistoryMock).toHaveBeenCalledTimes(1);
+    const savedEntries = saveCommandHistoryMock.mock.calls[0][0].entries;
+    expect(savedEntries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ command: "DBSIZE" })]),
+    );
+    expect(savedEntries).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ command: "AUTH secret" })]),
+    );
   });
 
   it("执行前只去除命令首尾空白并保留引号和内部空白", async () => {

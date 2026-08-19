@@ -1,12 +1,16 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  CommandDefinition,
+  CommandExecutionItem,
+  CommandHistoryEntry,
   CommandResult,
   ConnectionInfo,
   ConnectionProfile,
   CreateKeyInput,
   DeleteKeysInput,
   DeleteKeyInput,
+  ExecuteCommandsInput,
   ExecuteCommandInput,
   ExportedKey,
   ExportKeysInput,
@@ -18,6 +22,7 @@ import type {
   KeyValue,
   RenameKeyInput,
   SaveConnectionInput,
+  SaveCommandHistoryInput,
   ScanKeysInput,
   ScanPage,
   SetKeyInput,
@@ -128,4 +133,24 @@ export function getKeyInfo(input: KeyInfoInput): Promise<KeyInfo> {
 
 export function executeCommand(input: ExecuteCommandInput): Promise<CommandResult> {
   return call<CommandResult>("execute_command", { input });
+}
+
+export function executeCommands(
+  input: ExecuteCommandsInput,
+): Promise<CommandExecutionItem[]> {
+  return call<CommandExecutionItem[]>("execute_commands", { input });
+}
+
+export function getCommandCatalog(): Promise<CommandDefinition[]> {
+  return call<CommandDefinition[]>("get_command_catalog");
+}
+
+export function listCommandHistory(connectionId: string): Promise<CommandHistoryEntry[]> {
+  return call<CommandHistoryEntry[]>("list_command_history", {
+    connection_id: connectionId,
+  });
+}
+
+export function saveCommandHistory(input: SaveCommandHistoryInput): Promise<void> {
+  return call<void>("save_command_history", { input });
 }

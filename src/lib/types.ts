@@ -153,10 +153,49 @@ export interface ExecuteCommandInput {
   command: string;
 }
 
+export interface CommandArgument {
+  name: string;
+  required: boolean;
+  hint: string;
+}
+
+export interface CommandDefinition {
+  name: string;
+  summary: string;
+  arguments: CommandArgument[];
+}
+
+export interface ExecuteCommandsInput {
+  connection_id: string;
+  commands: string[];
+  continue_on_error: boolean;
+}
+
 export interface CommandResult {
   kind: string;
   value: unknown;
 }
+
+export interface CommandExecutionItem {
+  command: string;
+  result: CommandResult | null;
+  error_code: string | null;
+}
+
+export interface CommandHistoryEntry {
+  connection_id: string;
+  command: string;
+  result: CommandResult | null;
+  error_code: string | null;
+  created_at: string;
+}
+
+export interface SaveCommandHistoryInput {
+  connection_id: string;
+  entries: CommandHistoryEntry[];
+}
+
+export type CommandDisplayFormat = "raw" | "text" | "json";
 
 export interface IpcError {
   code: string;

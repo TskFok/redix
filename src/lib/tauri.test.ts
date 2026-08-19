@@ -7,21 +7,28 @@ import {
   deleteKeys,
   deleteConnection,
   deleteKey,
+  executeCommands,
   executeCommand,
   exportKeys,
+  getCommandCatalog,
   getKey,
   getKeyInfo,
   importKeys,
+  listCommandHistory,
   listConnections,
   openConnection,
   renameKey,
   saveConnection,
   scanKeys,
+  saveCommandHistory,
   setKey,
   setKeyTtl,
   testConnection,
 } from "./tauri";
 import type {
+  CommandDefinition,
+  CommandExecutionItem,
+  CommandHistoryEntry,
   CommandResult,
   ConnectionInfo,
   ConnectionProfile,
@@ -29,6 +36,7 @@ import type {
   KeyValue,
   RedisValue,
   SaveConnectionInput,
+  SaveCommandHistoryInput,
   ScanPage,
 } from "./types";
 
@@ -145,6 +153,46 @@ describe("Tauri IPC bridge", () => {
     await expect(executeCommand(commandInput)).resolves.toEqual(commandResult);
     expect(invokeMock).toHaveBeenLastCalledWith("execute_command", {
       input: commandInput,
+    });
+  });
+
+  it("为 Workbench 批量执行、目录和历史使用稳定 IPC 合同", async () => {
+    const batchInput = {
+      connection_id: "local",
+      commands: ["PING", "DBSIZE"],
+      continue_on_error: false,
+    };
+    const batchResults: CommandExecutionItem[] = [
+      { command: "PING", result: { kind: "string", value: "PONG" }, error_code: null },
+    ];
+    const catalog: CommandDefinition[] = [
+      { name: "PING", summary: "检查 Redis 连接", arguments: [] },
+    ];
+    const history: CommandHistoryEntry[] = [];
+    const historyInput: SaveCommandHistoryInput = {
+      connection_id: "local",
+      entries: history,
+    };
+    invokeMock
+      .mockResolvedValueOnce(batchResults)
+      .mockResolvedValueOnce(catalog)
+      .mockResolvedValueOnce(history)
+      .mockResolvedValueOnce(undefined);
+
+    await expect(executeCommands(batchInput)).resolves.toEqual(batchResults);
+    expect(invokeMock).toHaveBeenLastCalledWith("execute_commands", { input: batchInput });
+
+    await expect(getCommandCatalog()).resolves.toEqual(catalog);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_command_catalog");
+
+    await expect(listCommandHistory("local")).resolves.toEqual(history);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_command_history", {
+      connection_id: "local",
+    });
+
+    await expect(saveCommandHistory(historyInput)).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith("save_command_history", {
+      input: historyInput,
     });
   });
 

@@ -1,16 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 
-import { executeCommand } from "../../lib/tauri";
+import {
+  executeCommand,
+  executeCommands,
+  getCommandCatalog,
+  listCommandHistory,
+  saveCommandHistory,
+} from "../../lib/tauri";
+import type { CommandDefinition, CommandExecutionItem } from "../../lib/types";
 import CommandInput from "./CommandInput";
 import CommandResult from "./CommandResult";
+import CommandSuggestions, { filterCommandCatalog } from "./CommandSuggestions";
 import {
   initialWorkbenchPageState,
   isCommandReady,
   normalizeCommand,
+  normalizeCommandList,
   normalizeWorkbenchError,
-  prependCommandHistory,
   type WorkbenchPageState,
 } from "./workbenchState";
+import {
+  filterHistoryEntry,
+  historyEntriesFromExecution,
+  prependHistoryEntries,
+} from "./workbenchHistory";
 
 interface WorkbenchPageProps {
   connectionId: string | null;
@@ -20,8 +33,13 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
   const [state, setState] = useState<WorkbenchPageState>(() => ({
     ...initialWorkbenchPageState,
   }));
+  const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const mountedRef = useRef(false);
   const requestRef = useRef(0);
+
+  const normalizedConnectionId = connectionId?.trim() ?? "";
+  const hasConnection = normalizedConnectionId.length > 0;
+  const suggestions = filterCommandCatalog(state.command, state.catalog);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -32,9 +50,101 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
   }, []);
 
   useEffect(() => {
-    requestRef.current += 1;
-    setState({ ...initialWorkbenchPageState });
-  }, [connectionId]);
+    const requestId = requestRef.current + 1;
+    requestRef.current = requestId;
+    setSuggestionIndex(-1);
+    setState({
+      ...initialWorkbenchPageState,
+      catalogLoading: true,
+    });
+
+    void getCommandCatalog()
+      .then((catalog) => {
+        if (mountedRef.current && requestRef.current === requestId) {
+          setState((current) => ({ ...current, catalog, catalogLoading: false }));
+        }
+      })
+      .catch((caught) => {
+        if (mountedRef.current && requestRef.current === requestId) {
+          setState((current) => ({
+            ...current,
+            catalogLoading: false,
+            error: normalizeWorkbenchError(caught),
+          }));
+        }
+      });
+
+    if (normalizedConnectionId.length === 0) {
+      return;
+    }
+
+    void listCommandHistory(normalizedConnectionId)
+      .then((history) => {
+        if (mountedRef.current && requestRef.current === requestId) {
+          setState((current) => ({ ...current, history }));
+        }
+      })
+      .catch((caught) => {
+        if (mountedRef.current && requestRef.current === requestId) {
+          setState((current) => ({
+            ...current,
+            error: normalizeWorkbenchError(caught),
+          }));
+        }
+      });
+  }, [normalizedConnectionId]);
+
+  const handleSuggestionSelect = (suggestion: CommandDefinition) => {
+    const lines = state.command.split(/\r?\n/);
+    const lastIndex = lines.length - 1;
+    lines[lastIndex] = suggestion.name;
+    const command = lines.join("\n");
+    setSuggestionIndex(-1);
+    setState((current) => ({
+      ...current,
+      command,
+      commands: normalizeCommandList(command),
+      error: null,
+    }));
+  };
+
+  const handleCommandKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (suggestions.length === 0) {
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSuggestionIndex((current) => (current + 1) % suggestions.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSuggestionIndex((current) =>
+        current <= 0 ? suggestions.length - 1 : current - 1,
+      );
+    } else if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && suggestionIndex >= 0) {
+      event.preventDefault();
+      handleSuggestionSelect(suggestions[suggestionIndex]);
+    }
+  };
+
+  const persistHistory = async (
+    activeConnectionId: string,
+    history: WorkbenchPageState["history"],
+    requestId: number,
+  ) => {
+    try {
+      await saveCommandHistory({
+        connection_id: activeConnectionId,
+        entries: history.filter((entry) => filterHistoryEntry(entry.command)),
+      });
+    } catch (caught) {
+      if (mountedRef.current && requestRef.current === requestId) {
+        setState((current) => ({
+          ...current,
+          error: normalizeWorkbenchError(caught),
+        }));
+      }
+    }
+  };
 
   const handleExecute = async () => {
     if (
@@ -47,34 +157,53 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
 
     const activeConnectionId = normalizedConnectionId;
     const command = normalizeCommand(state.command);
+    const commands = normalizeCommandList(command);
+    if (commands.length === 0) {
+      return;
+    }
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
     setState((current) => ({
       ...current,
       command,
+      commands,
       loading: true,
+      result: null,
+      batchResults: [],
       error: null,
     }));
 
     try {
-      const result = await executeCommand({
-        connection_id: activeConnectionId,
-        command,
-      });
+      let items: CommandExecutionItem[];
+      let singleResult = null;
+      if (commands.length === 1) {
+        singleResult = await executeCommand({
+          connection_id: activeConnectionId,
+          command: commands[0],
+        });
+        items = [{ command: commands[0], result: singleResult, error_code: null }];
+      } else {
+        items = await executeCommands({
+          connection_id: activeConnectionId,
+          commands,
+          continue_on_error: state.continueOnError,
+        });
+      }
+
       if (!mountedRef.current || requestRef.current !== requestId) {
         return;
       }
+      const newHistory = historyEntriesFromExecution(activeConnectionId, items);
+      const nextHistory = prependHistoryEntries(state.history, newHistory);
       setState((current) => ({
         ...current,
-        result,
+        result: singleResult,
+        batchResults: singleResult ? [] : items,
+        history: nextHistory,
         error: null,
         loading: false,
-        history: prependCommandHistory(current.history, {
-          command,
-          result,
-          created_at: new Date().toISOString(),
-        }),
       }));
+      void persistHistory(activeConnectionId, nextHistory, requestId);
     } catch (caught) {
       if (!mountedRef.current || requestRef.current !== requestId) {
         return;
@@ -82,6 +211,7 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
       setState((current) => ({
         ...current,
         result: null,
+        batchResults: [],
         error: normalizeWorkbenchError(caught),
         loading: false,
       }));
@@ -92,12 +222,21 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
     setState((current) => ({
       ...current,
       command,
+      commands: normalizeCommandList(command),
       error: null,
     }));
   };
 
-  const normalizedConnectionId = connectionId?.trim() ?? "";
-  const hasConnection = normalizedConnectionId.length > 0;
+  const handleCommandChange = (command: string) => {
+    setSuggestionIndex(-1);
+    setState((current) => ({
+      ...current,
+      command,
+      commands: normalizeCommandList(command),
+      error: null,
+    }));
+  };
+
   const canExecute = isCommandReady(connectionId, state.command);
 
   return (
@@ -111,7 +250,7 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
           <p className="eyebrow">COMMAND WORKSPACE</p>
           <h2 id="workbench-page-title">Workbench</h2>
           <p className="page-description">
-            直接执行 Redis 命令并查看结构化返回值，命令会通过安全的桌面端 IPC 执行。
+            执行单条或多条 Redis 命令，查看结构化结果；命令目录和历史只使用本地资源。
           </p>
         </div>
         <span className="workbench-connection-id">
@@ -138,17 +277,39 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
                 <p className="eyebrow">COMMAND</p>
                 <h2 id="command-input-title">输入命令</h2>
               </div>
-              <span className="panel-hint">仅发送当前输入</span>
+              <span className="panel-hint">
+                {state.catalogLoading ? "加载本地目录…" : "支持多行批量执行"}
+              </span>
             </div>
             <CommandInput
               value={state.command}
               canExecute={canExecute}
               loading={state.loading}
-              onChange={(command) =>
-                setState((current) => ({ ...current, command, error: null }))
-              }
+              onChange={handleCommandChange}
+              onKeyDown={handleCommandKeyDown}
               onSubmit={() => void handleExecute()}
             />
+            <CommandSuggestions
+              suggestions={suggestions}
+              activeIndex={suggestionIndex}
+              onSelect={handleSuggestionSelect}
+            />
+            <label className="command-continue field">
+              <span>
+                <input
+                  type="checkbox"
+                  checked={state.continueOnError}
+                  onChange={(event) =>
+                    setState((current) => ({
+                      ...current,
+                      continueOnError: event.target.checked,
+                    }))
+                  }
+                  disabled={state.loading}
+                />
+                批量命令遇错后继续
+              </span>
+            </label>
           </section>
 
           <section className="workbench-history-panel" aria-labelledby="command-history-title">
@@ -157,7 +318,7 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
                 <p className="eyebrow">HISTORY</p>
                 <h2 id="command-history-title">命令历史</h2>
               </div>
-              <span className="panel-hint">仅保存在当前会话</span>
+              <span className="panel-hint">按连接保存，不保存敏感命令</span>
             </div>
             {state.history.length > 0 ? (
               <ol className="workbench-history-list" aria-label="命令历史">
@@ -187,7 +348,13 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
           </section>
         </div>
 
-        <CommandResult result={state.result} error={state.error} />
+        <CommandResult
+          result={state.result}
+          batchResults={state.batchResults}
+          format={state.format}
+          onFormatChange={(format) => setState((current) => ({ ...current, format }))}
+          error={state.error}
+        />
       </div>
     </section>
   );

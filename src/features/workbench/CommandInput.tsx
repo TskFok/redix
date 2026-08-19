@@ -4,6 +4,7 @@ interface CommandInputProps {
   loading: boolean;
   onChange: (value: string) => void;
   onSubmit: () => void;
+  onKeyDown?: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
 }
 
 export function CommandInput({
@@ -12,6 +13,7 @@ export function CommandInput({
   loading,
   onChange,
   onSubmit,
+  onKeyDown,
 }: CommandInputProps) {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -19,6 +21,10 @@ export function CommandInput({
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    onKeyDown?.(event);
+    if (event.defaultPrevented) {
+      return;
+    }
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       onSubmit();

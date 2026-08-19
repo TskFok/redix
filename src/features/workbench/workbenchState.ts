@@ -1,23 +1,36 @@
-import type { CommandResult, IpcError } from "../../lib/types";
-
-export interface CommandHistoryEntry {
-  command: string;
-  result: CommandResult;
-  created_at: string;
-}
+import type {
+  CommandDisplayFormat,
+  CommandDefinition,
+  CommandExecutionItem,
+  CommandHistoryEntry,
+  CommandResult,
+  IpcError,
+} from "../../lib/types";
 
 export interface WorkbenchPageState {
   command: string;
+  commands: string[];
+  continueOnError: boolean;
+  format: CommandDisplayFormat;
   history: CommandHistoryEntry[];
   result: CommandResult | null;
+  batchResults: CommandExecutionItem[];
+  catalog: CommandDefinition[];
+  catalogLoading: boolean;
   error: IpcError | null;
   loading: boolean;
 }
 
 export const initialWorkbenchPageState: WorkbenchPageState = {
   command: "",
+  commands: [],
+  continueOnError: false,
+  format: "text",
   history: [],
   result: null,
+  batchResults: [],
+  catalog: [],
+  catalogLoading: false,
   error: null,
   loading: false,
 };
@@ -53,11 +66,18 @@ export function normalizeCommand(command: string): string {
   return command.trim();
 }
 
+export function normalizeCommandList(command: string): string[] {
+  return command
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
 export function prependCommandHistory(
   history: CommandHistoryEntry[],
   entry: CommandHistoryEntry,
 ): CommandHistoryEntry[] {
-  return [entry, ...history];
+  return [entry, ...history].slice(0, 100);
 }
 
 export function normalizeWorkbenchError(error: unknown): IpcError {
