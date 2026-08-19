@@ -57,6 +57,8 @@ pub fn run() {
             commands::browser::delete_keys,
             commands::browser::set_key_ttl,
             commands::browser::get_key_info,
+            commands::browser::export_keys,
+            commands::browser::import_keys,
             commands::workbench::execute_command,
         ])
         .run(tauri::generate_context!())

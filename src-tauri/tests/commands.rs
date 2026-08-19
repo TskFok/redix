@@ -46,6 +46,8 @@ fn exposes_all_tauri_command_adapters() {
     let _ = browser::rename_key;
     let _ = browser::delete_keys;
     let _ = browser::get_key_info;
+    let _ = browser::export_keys;
+    let _ = browser::import_keys;
     let _ = connections::list_connections;
     let _ = connections::save_connection;
     let _ = connections::delete_connection;

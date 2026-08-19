@@ -5,9 +5,10 @@ use tokio::sync::RwLock;
 
 use crate::{
     domain::{
-        CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput, DeleteKeysInput,
-        HashEntry, KeyInfo, KeyInfoInput, KeySummary, KeyValue, RedisValue, RenameKeyInput,
-        ScanKeysInput, ScanPage, SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry,
+        normalize_key_type, CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
+        DeleteKeysInput, ExportKeysInput, ExportedKey, HashEntry, ImportKeysInput, KeyInfo,
+        KeyInfoInput, KeySummary, KeyValue, RedisValue, RenameKeyInput, ScanKeysInput, ScanPage,
+        SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -36,6 +37,8 @@ pub trait RedisOperations: Send + Sync {
     async fn delete_keys(&self, input: DeleteKeysInput) -> Result<u64, AppError>;
     async fn set_key_ttl(&self, input: SetKeyTtlInput) -> Result<i64, AppError>;
     async fn get_key_info(&self, input: KeyInfoInput) -> Result<KeyInfo, AppError>;
+    async fn export_keys(&self, input: ExportKeysInput) -> Result<Vec<ExportedKey>, AppError>;
+    async fn import_keys(&self, input: ImportKeysInput) -> Result<u64, AppError>;
     async fn execute_command(
         &self,
         connection_id: &str,
@@ -152,6 +155,7 @@ impl RedisOperations for RedisService {
 
     async fn scan_keys(&self, input: ScanKeysInput) -> Result<ScanPage, AppError> {
         input.validate()?;
+        let requested_type = input.key_type.as_deref().and_then(normalize_key_type);
         let mut connection = self.connection(&input.connection_id).await?;
         let (cursor, keys): (u64, Vec<String>) = ::redis::cmd("SCAN")
             .arg(input.cursor)
@@ -170,20 +174,47 @@ impl RedisOperations for RedisService {
                 .query_async::<String>(&mut connection)
                 .await
                 .map_err(map_command_error)?;
+            if requested_type.is_some() && normalize_key_type(&key_type) != requested_type {
+                continue;
+            }
             let ttl_ms: i64 = ::redis::cmd("PTTL")
                 .arg(&key)
                 .query_async::<i64>(&mut connection)
                 .await
                 .map_err(map_command_error)?;
-            let size = key_size(&mut connection, &key, &key_type).await?;
+            let size = key_size(&mut connection, &key, &key_type)
+                .await
+                .ok()
+                .flatten();
+            let memory_bytes = ::redis::cmd("MEMORY")
+                .arg("USAGE")
+                .arg(&key)
+                .query_async::<Option<u64>>(&mut connection)
+                .await
+                .ok()
+                .flatten();
+            let encoding = ::redis::cmd("OBJECT")
+                .arg("ENCODING")
+                .arg(&key)
+                .query_async::<Option<String>>(&mut connection)
+                .await
+                .ok()
+                .flatten();
+            let idle_seconds = ::redis::cmd("OBJECT")
+                .arg("IDLETIME")
+                .arg(&key)
+                .query_async::<Option<u64>>(&mut connection)
+                .await
+                .ok()
+                .flatten();
             summaries.push(KeySummary {
                 key,
                 key_type,
                 ttl_ms,
                 size,
-                memory_bytes: None,
-                encoding: None,
-                idle_seconds: None,
+                memory_bytes,
+                encoding,
+                idle_seconds,
             });
         }
 
@@ -283,6 +314,44 @@ impl RedisOperations for RedisService {
         input.validate()?;
         let mut connection = self.connection(&input.connection_id).await?;
         read_key_info(&mut connection, &input.key).await
+    }
+
+    async fn export_keys(&self, input: ExportKeysInput) -> Result<Vec<ExportedKey>, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let mut exported = Vec::with_capacity(input.keys.len());
+        for key in input.keys {
+            let value = read_key(&mut connection, &key).await?;
+            exported.push(ExportedKey {
+                key,
+                ttl_ms: value.ttl_ms,
+                value: value.value,
+            });
+        }
+        Ok(exported)
+    }
+
+    async fn import_keys(&self, input: ImportKeysInput) -> Result<u64, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let mut imported = 0_u64;
+        for entry in input.entries {
+            let exists: i64 = ::redis::cmd("EXISTS")
+                .arg(&entry.key)
+                .query_async::<i64>(&mut connection)
+                .await
+                .map_err(map_command_error)?;
+            if exists > 0 {
+                continue;
+            }
+
+            write_key(&mut connection, &entry.key, &entry.value).await?;
+            if entry.ttl_ms >= 0 {
+                apply_ttl(&mut connection, &entry.key, entry.ttl_ms).await?;
+            }
+            imported += 1;
+        }
+        Ok(imported)
     }
 
     async fn execute_command(

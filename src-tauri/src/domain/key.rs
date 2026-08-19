@@ -86,7 +86,7 @@ pub struct ExportedKey {
 
 impl ExportedKey {
     pub fn validate(&self) -> Result<(), AppError> {
-        if self.key.trim().is_empty() || self.ttl_ms < -2 {
+        if self.key.trim().is_empty() || self.ttl_ms < -1 {
             return Err(AppError::InvalidConnection);
         }
         self.value.validate()

@@ -1,7 +1,8 @@
 use crate::{
     domain::{
-        CreateKeyInput, DeleteKeyInput, DeleteKeysInput, GetKeyInput, KeyInfo, KeyInfoInput,
-        KeyValue, RenameKeyInput, ScanKeysInput, ScanPage, SetKeyInput, SetKeyTtlInput,
+        CreateKeyInput, DeleteKeyInput, DeleteKeysInput, ExportKeysInput, ExportedKey, GetKeyInput,
+        ImportKeysInput, KeyInfo, KeyInfoInput, KeyValue, RenameKeyInput, ScanKeysInput, ScanPage,
+        SetKeyInput, SetKeyTtlInput,
     },
     error::AppError,
     redis::RedisOperations,
@@ -81,4 +82,20 @@ pub async fn get_key_info(
     input: KeyInfoInput,
 ) -> Result<KeyInfo, AppError> {
     state.redis.get_key_info(input).await
+}
+
+#[tauri::command]
+pub async fn export_keys(
+    state: tauri::State<'_, AppState>,
+    input: ExportKeysInput,
+) -> Result<Vec<ExportedKey>, AppError> {
+    state.redis.export_keys(input).await
+}
+
+#[tauri::command]
+pub async fn import_keys(
+    state: tauri::State<'_, AppState>,
+    input: ImportKeysInput,
+) -> Result<u64, AppError> {
+    state.redis.import_keys(input).await
 }

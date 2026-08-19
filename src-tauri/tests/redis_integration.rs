@@ -6,9 +6,9 @@ use std::{
 
 use redix_lib::{
     domain::{
-        ConnectionProfile, CreateKeyInput, DeleteKeysInput, HashEntry, KeyInfoInput, KeyValue,
-        RedisValue, RenameKeyInput, ScanKeysInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry,
-        StreamEntry, StreamField,
+        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportKeysInput, ExportedKey,
+        HashEntry, ImportKeysInput, KeyInfoInput, KeyValue, RedisValue, RenameKeyInput,
+        ScanKeysInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry, StreamField,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -94,6 +94,8 @@ struct TestKeys {
     rename_target: String,
     batch_a: String,
     batch_b: String,
+    import_string: String,
+    import_hash: String,
 }
 
 impl TestKeys {
@@ -117,10 +119,12 @@ impl TestKeys {
             rename_target: format!("{prefix}:rename-target"),
             batch_a: format!("{prefix}:batch-a"),
             batch_b: format!("{prefix}:batch-b"),
+            import_string: format!("{prefix}:import-string"),
+            import_hash: format!("{prefix}:import-hash"),
         }
     }
 
-    fn all(&self) -> [&str; 11] {
+    fn all(&self) -> [&str; 13] {
         [
             &self.string,
             &self.hash,
@@ -133,6 +137,8 @@ impl TestKeys {
             &self.rename_target,
             &self.batch_a,
             &self.batch_b,
+            &self.import_string,
+            &self.import_hash,
         ]
     }
 }
@@ -277,6 +283,75 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         if summary.key_type != *key_type || summary.size != Some(*size) {
             return Err(format!("SCAN metadata does not match {key_type} test key"));
         }
+    }
+
+    let filtered = service
+        .scan_keys(ScanKeysInput {
+            connection_id: "integration".into(),
+            cursor: 0,
+            pattern: format!("{}:*", keys.prefix),
+            count: 100,
+            key_type: Some("hash".into()),
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if filtered
+        .keys
+        .iter()
+        .any(|summary| summary.key_type != "hash")
+    {
+        return Err("SCAN type filtering returned a non-hash key".into());
+    }
+
+    let exported = service
+        .export_keys(ExportKeysInput {
+            connection_id: "integration".into(),
+            keys: vec![keys.string.clone(), keys.hash.clone()],
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if exported.len() != 2 {
+        return Err("Browser export did not return both source keys".into());
+    }
+    let imported_entries = exported
+        .into_iter()
+        .map(|entry| ExportedKey {
+            key: if entry.key == keys.string {
+                keys.import_string.clone()
+            } else {
+                keys.import_hash.clone()
+            },
+            ..entry
+        })
+        .collect::<Vec<_>>();
+    let imported = service
+        .import_keys(ImportKeysInput {
+            connection_id: "integration".into(),
+            entries: imported_entries.clone(),
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if imported != 2 {
+        return Err("Browser import did not write both new keys".into());
+    }
+    let repeated = service
+        .import_keys(ImportKeysInput {
+            connection_id: "integration".into(),
+            entries: imported_entries,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if repeated != 0 {
+        return Err("Browser import overwrote an existing key".into());
+    }
+    if service
+        .get_key("integration", &keys.string)
+        .await
+        .map_err(|error| error.code().to_owned())?
+        .key
+        != keys.string
+    {
+        return Err("Browser import changed an original source key".into());
     }
 
     let command = service
