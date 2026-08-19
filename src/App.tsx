@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
+import DatabasePage from "./features/database/DatabasePage";
 import WorkbenchPage from "./features/workbench/WorkbenchPage";
 import type { ConnectionProfile, Workspace } from "./lib/types";
 
@@ -11,7 +12,7 @@ interface NavigationItem {
   id: AppSection;
   label: string;
   description: string;
-  icon: "connections" | "browser" | "workbench";
+  icon: "connections" | "browser" | "workbench" | "database";
 }
 
 const navigationItems: NavigationItem[] = [
@@ -28,12 +29,19 @@ const navigationItems: NavigationItem[] = [
     description: "命令工作台",
     icon: "workbench",
   },
+  {
+    id: "database",
+    label: "Database",
+    description: "实例概览",
+    icon: "database",
+  },
 ];
 
 const sectionDescriptions: Record<AppSection, string> = {
   connections: "保存并管理本地 Redis 实例",
   browser: "使用 SCAN 浏览键和值",
   workbench: "直接执行 Redis 命令并查看返回值",
+  database: "查看实例指标和数据库键空间",
 };
 
 function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
@@ -55,6 +63,15 @@ function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
     );
   }
 
+  if (type === "database") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <ellipse cx="12" cy="6" rx="7" ry="3" />
+        <path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" />
+      </svg>
+    );
+  }
+
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14" />
@@ -69,6 +86,12 @@ export default function App() {
   const handleOpenConnection = (profile: ConnectionProfile | null) => {
     setActiveProfile(profile);
     setActiveSection(profile ? "browser" : "connections");
+  };
+
+  const handleProfileChanged = (profile: ConnectionProfile) => {
+    setActiveProfile((current) =>
+      current?.id === profile.id ? profile : current,
+    );
   };
 
   const activeNavigation = navigationItems.find((item) => item.id === activeSection);
@@ -163,6 +186,13 @@ export default function App() {
           ) : null}
           {activeProfile && activeSection === "workbench" ? (
             <WorkbenchPage connectionId={activeProfile.id} />
+          ) : null}
+          {activeProfile && activeSection === "database" ? (
+            <DatabasePage
+              connectionId={activeProfile.id}
+              activeDatabase={activeProfile.database}
+              onProfileChanged={handleProfileChanged}
+            />
           ) : null}
         </section>
       </section>

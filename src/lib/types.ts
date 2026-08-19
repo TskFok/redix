@@ -1,4 +1,4 @@
-export type Workspace = "browser" | "workbench";
+export type Workspace = "browser" | "workbench" | "database";
 
 export interface ConnectionProfile {
   id: string;

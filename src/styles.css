@@ -1653,6 +1653,185 @@ code {
   line-height: 1.55;
 }
 
+/* Database overview */
+
+.database-page {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.database-page-heading {
+  align-items: flex-start;
+}
+
+.database-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.database-metric-card {
+  display: grid;
+  min-width: 0;
+  min-height: 84px;
+  gap: 9px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-panel);
+}
+
+.database-metric-card span {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.database-metric-card strong {
+  overflow: hidden;
+  color: var(--color-text-strong);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.database-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-panel);
+}
+
+.database-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.database-panel-heading h3 {
+  margin: 4px 0 0;
+  color: var(--color-text-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.database-current {
+  flex: 0 0 auto;
+  padding-top: 4px;
+  color: var(--color-primary);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+
+.database-table-wrap {
+  margin: 16px -4px -4px;
+  overflow-x: auto;
+  padding: 0 4px 4px;
+}
+
+.database-table {
+  width: 100%;
+  min-width: 620px;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.database-table th,
+.database-table td {
+  padding: 11px 9px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.database-table thead th {
+  color: var(--color-muted);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.database-table tbody th {
+  color: var(--color-text-strong);
+  font-weight: 500;
+}
+
+.database-table tbody td {
+  color: var(--color-text);
+  font-family: "JetBrains Mono", monospace;
+}
+
+.database-table tbody tr:last-child th,
+.database-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.database-current-badge {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px solid var(--color-success-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-success-text);
+  background: var(--color-success-surface);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.database-module-list {
+  display: grid;
+  gap: 8px;
+  margin: 16px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.database-module-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+  font-size: 11px;
+}
+
+.database-module-list strong {
+  color: var(--color-text-strong);
+  font-family: "JetBrains Mono", monospace;
+}
+
+.database-module-list span,
+.empty-state-compact,
+.inline-error {
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.empty-state-compact {
+  margin: 16px 0 0;
+}
+
+.inline-error {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-danger-text);
+  background: var(--color-danger-surface);
+}
+
 /* Utility and responsive behavior */
 
 .sr-only {
@@ -1711,6 +1890,10 @@ code {
   .browser-layout,
   .workbench-layout {
     grid-template-columns: minmax(250px, 0.85fr) minmax(0, 1.15fr);
+  }
+
+  .database-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -1791,14 +1974,16 @@ code {
   .page-heading,
   .panel-heading,
   .browser-panel-heading,
-  .workbench-panel-heading {
+  .workbench-panel-heading,
+  .database-panel-heading {
     flex-direction: column;
     gap: 8px;
   }
 
   .panel-hint,
   .browser-connection-id,
-  .workbench-connection-id {
+  .workbench-connection-id,
+  .database-current {
     padding-top: 0;
     text-align: left;
   }
@@ -1811,6 +1996,10 @@ code {
   .browser-add-key-grid,
   .browser-layout,
   .workbench-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .database-metric-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -1850,7 +2039,8 @@ code {
   .browser-detail-panel,
   .workbench-command-panel,
   .workbench-history-panel,
-  .workbench-result-panel {
+  .workbench-result-panel,
+  .database-panel {
     padding: 16px;
   }
 

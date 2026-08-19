@@ -10,8 +10,11 @@ const {
   executeCommandMock,
   executeCommandsMock,
   getCommandCatalogMock,
+  getDatabaseOverviewMock,
+  getInstanceOverviewMock,
   listCommandHistoryMock,
   saveCommandHistoryMock,
+  selectDatabaseMock,
 } = vi.hoisted(() => ({
   listConnectionsMock: vi.fn(),
   openConnectionMock: vi.fn(),
@@ -20,8 +23,11 @@ const {
   executeCommandMock: vi.fn(),
   executeCommandsMock: vi.fn(),
   getCommandCatalogMock: vi.fn(),
+  getDatabaseOverviewMock: vi.fn(),
+  getInstanceOverviewMock: vi.fn(),
   listCommandHistoryMock: vi.fn(),
   saveCommandHistoryMock: vi.fn(),
+  selectDatabaseMock: vi.fn(),
 }));
 
 vi.mock("./lib/tauri", () => ({
@@ -32,8 +38,11 @@ vi.mock("./lib/tauri", () => ({
   executeCommand: executeCommandMock,
   executeCommands: executeCommandsMock,
   getCommandCatalog: getCommandCatalogMock,
+  getDatabaseOverview: getDatabaseOverviewMock,
+  getInstanceOverview: getInstanceOverviewMock,
   listCommandHistory: listCommandHistoryMock,
   saveCommandHistory: saveCommandHistoryMock,
+  selectDatabase: selectDatabaseMock,
   deleteConnection: vi.fn(),
   saveConnection: vi.fn(),
   testConnection: vi.fn(),
@@ -72,6 +81,23 @@ beforeEach(() => {
   ]);
   listCommandHistoryMock.mockResolvedValue([]);
   saveCommandHistoryMock.mockResolvedValue(undefined);
+  getInstanceOverviewMock.mockResolvedValue({
+    server_version: "8.4.0",
+    redis_mode: "standalone",
+    uptime_seconds: 42,
+    connected_clients: 1,
+    used_memory_bytes: 1024,
+    max_memory_bytes: null,
+    total_commands_processed: 1,
+    keyspace_hits: 1,
+    keyspace_misses: 0,
+    role: "master",
+    modules: [],
+  });
+  getDatabaseOverviewMock.mockResolvedValue([
+    { database: 0, key_count: 1, expires: 0, avg_ttl_ms: 0 },
+  ]);
+  selectDatabaseMock.mockResolvedValue(localProfile);
 });
 
 afterEach(() => {
@@ -99,6 +125,20 @@ describe("Redix 应用壳", () => {
     );
     expect(screen.getByRole("button", { name: "Browser" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Workbench" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Database" })).toBeDisabled();
+  });
+
+  it("连接后显示 Database 工作区并可加载概览", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await waitFor(() => expect(openConnectionMock).toHaveBeenCalledWith("local"));
+    const databaseButton = screen.getByRole("button", { name: "Database" });
+    expect(databaseButton).toBeEnabled();
+    fireEvent.click(databaseButton);
+
+    expect(await screen.findByRole("heading", { name: "数据库概览" })).toBeInTheDocument();
   });
 
   it("已连接时 Workbench 显示命令目录、批量策略和结果格式控件", async () => {
