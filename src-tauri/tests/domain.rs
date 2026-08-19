@@ -2,9 +2,10 @@ mod support;
 
 use redix_lib::{
     domain::{
-        command_catalog, is_sensitive_command, ConnectionProfile, CreateKeyInput, DeleteKeysInput,
-        ExportedKey, ImportKeysInput, KeyInfoInput, RedisValue, RenameKeyInput, ScanKeysInput,
-        StreamEntry, StreamField,
+        command_catalog, is_sensitive_command, parse_info_sections, parse_keyspace_line,
+        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey, ImportKeysInput,
+        KeyInfoInput, RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput, StreamEntry,
+        StreamField,
     },
     error::AppError,
 };
@@ -223,4 +224,35 @@ fn accepts_json_root_documents_as_browser_values() {
     };
 
     assert_eq!(input.validate(), Ok(()));
+}
+
+#[test]
+fn parses_info_sections_and_optional_metrics() {
+    let sections = parse_info_sections(
+        "# Server\nredis_version:7.2.5\nuptime_in_seconds:42\n\n# Clients\nconnected_clients:3\n# Keyspace\ndb0:keys=8,expires=2,avg_ttl=1200\n",
+    );
+    assert_eq!(sections["Server"]["redis_version"], "7.2.5");
+    assert_eq!(sections["Clients"]["connected_clients"], "3");
+    let db = parse_keyspace_line("db0", "keys=8,expires=2,avg_ttl=1200").unwrap();
+    assert_eq!(db.database, 0);
+    assert_eq!(db.key_count, Some(8));
+    assert_eq!(db.expires, Some(2));
+    assert_eq!(db.avg_ttl_ms, Some(1200));
+}
+
+#[test]
+fn rejects_invalid_database_selection_and_keyspace_lines() {
+    assert_eq!(
+        SelectDatabaseInput {
+            connection_id: "local".into(),
+            database: 16,
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidConnection
+    );
+    assert_eq!(
+        parse_keyspace_line("dbx", "keys=1,expires=0").unwrap_err(),
+        AppError::PersistenceFailed
+    );
 }
