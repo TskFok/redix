@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use tauri::Manager;
 
@@ -14,14 +14,24 @@ pub struct AppState {
     pub(crate) profiles: Arc<dyn ProfileRepository>,
     pub(crate) secrets: Arc<dyn SecretStore>,
     pub(crate) redis: redis::RedisService,
+    pub(crate) data_dir: PathBuf,
 }
 
 impl AppState {
     pub fn new(profiles: Arc<dyn ProfileRepository>, secrets: Arc<dyn SecretStore>) -> Self {
+        Self::with_data_dir(profiles, secrets, PathBuf::from("."))
+    }
+
+    pub fn with_data_dir(
+        profiles: Arc<dyn ProfileRepository>,
+        secrets: Arc<dyn SecretStore>,
+        data_dir: PathBuf,
+    ) -> Self {
         Self {
             redis: redis::RedisService::new(profiles.clone(), secrets.clone()),
             profiles,
             secrets,
+            data_dir,
         }
     }
 }
@@ -38,7 +48,7 @@ pub fn run() {
                 data_dir.join("connections.json"),
             ));
             let secrets: Arc<dyn SecretStore> = Arc::new(SystemKeyring::new());
-            app.manage(AppState::new(profiles, secrets));
+            app.manage(AppState::with_data_dir(profiles, secrets, data_dir));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -60,6 +70,10 @@ pub fn run() {
             commands::browser::export_keys,
             commands::browser::import_keys,
             commands::workbench::execute_command,
+            commands::workbench::execute_commands,
+            commands::workbench::get_command_catalog,
+            commands::workbench::list_command_history,
+            commands::workbench::save_command_history,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Redix Tauri 应用失败");

@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
+use tauri::Manager;
+
 use redix_lib::{
     commands::{browser, connections, workbench},
+    domain::{CommandHistoryEntry, CommandResult, SaveCommandHistoryInput},
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
     AppState,
@@ -55,6 +58,10 @@ fn exposes_all_tauri_command_adapters() {
     let _ = connections::open_connection;
     let _ = connections::close_connection;
     let _ = workbench::execute_command;
+    let _ = workbench::execute_commands;
+    let _ = workbench::get_command_catalog;
+    let _ = workbench::list_command_history;
+    let _ = workbench::save_command_history;
 }
 
 #[test]
@@ -91,5 +98,75 @@ fn open_connection_accepts_snake_case_connection_id_from_frontend() {
             "code": "INVALID_CONNECTION",
             "message": "连接配置无效"
         })
+    );
+}
+
+#[test]
+fn command_history_commands_isolate_connections_and_filter_sensitive_entries() {
+    let directory = tempfile::tempdir().expect("history directory must be created");
+    let app = tauri::test::mock_builder()
+        .manage(AppState::with_data_dir(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+            directory.path().to_path_buf(),
+        ))
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("test app must build");
+
+    workbench::save_command_history(
+        app.state(),
+        SaveCommandHistoryInput {
+            connection_id: "local".into(),
+            entries: vec![
+                CommandHistoryEntry {
+                    connection_id: "local".into(),
+                    command: "PING".into(),
+                    result: Some(CommandResult {
+                        kind: "string".into(),
+                        value: serde_json::json!("PONG"),
+                    }),
+                    error_code: None,
+                    created_at: "2026-08-19T00:00:00Z".into(),
+                },
+                CommandHistoryEntry {
+                    connection_id: "local".into(),
+                    command: "AUTH secret".into(),
+                    result: None,
+                    error_code: Some("COMMAND_FAILED".into()),
+                    created_at: "2026-08-19T00:00:01Z".into(),
+                },
+            ],
+        },
+    )
+    .expect("local history must save");
+
+    workbench::save_command_history(
+        app.state(),
+        SaveCommandHistoryInput {
+            connection_id: "remote".into(),
+            entries: vec![CommandHistoryEntry {
+                connection_id: "remote".into(),
+                command: "DBSIZE".into(),
+                result: Some(CommandResult {
+                    kind: "number".into(),
+                    value: serde_json::json!(2),
+                }),
+                error_code: None,
+                created_at: "2026-08-19T00:00:02Z".into(),
+            }],
+        },
+    )
+    .expect("remote history must save");
+
+    let local = workbench::list_command_history(app.state(), "local".into()).unwrap();
+    assert_eq!(local.len(), 1);
+    assert_eq!(local[0].command, "PING");
+    assert_eq!(
+        workbench::list_command_history(app.state(), "remote".into())
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.command)
+            .collect::<Vec<_>>(),
+        vec!["DBSIZE"]
     );
 }

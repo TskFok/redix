@@ -10,4 +10,7 @@ pub use connections::{
     close_connection, delete_connection, list_connections, open_connection, save_connection,
     test_connection,
 };
-pub use workbench::execute_command;
+pub use workbench::{
+    execute_command, execute_commands, get_command_catalog, list_command_history,
+    save_command_history,
+};

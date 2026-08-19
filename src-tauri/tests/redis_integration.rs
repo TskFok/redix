@@ -6,9 +6,10 @@ use std::{
 
 use redix_lib::{
     domain::{
-        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportKeysInput, ExportedKey,
-        HashEntry, ImportKeysInput, KeyInfoInput, KeyValue, RedisValue, RenameKeyInput,
-        ScanKeysInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry, StreamField,
+        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput,
+        ExportedKey, HashEntry, ImportKeysInput, KeyInfoInput, KeyValue, RedisValue,
+        RenameKeyInput, ScanKeysInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry,
+        StreamField,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -360,6 +361,54 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         .map_err(|error| error.code().to_owned())?;
     if command.kind != "string" || command.value != serde_json::json!("PONG") {
         return Err("Workbench PING did not return the expected result".into());
+    }
+
+    let stopped_batch = service
+        .execute_commands(ExecuteCommandsInput {
+            connection_id: "integration".into(),
+            commands: vec![
+                "PING".into(),
+                "DBSIZE".into(),
+                "NO_SUCH_COMMAND".into(),
+                "PING".into(),
+            ],
+            continue_on_error: false,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if stopped_batch.len() != 3
+        || stopped_batch[0]
+            .result
+            .as_ref()
+            .map(|item| item.value.clone())
+            != Some(serde_json::json!("PONG"))
+        || stopped_batch[1]
+            .result
+            .as_ref()
+            .map(|item| item.kind.as_str())
+            != Some("number")
+        || stopped_batch[2].error_code.as_deref() != Some("COMMAND_FAILED")
+    {
+        return Err("Workbench batch did not stop on the first command error".into());
+    }
+
+    let continued_batch = service
+        .execute_commands(ExecuteCommandsInput {
+            connection_id: "integration".into(),
+            commands: vec!["PING".into(), "NO_SUCH_COMMAND".into(), "DBSIZE".into()],
+            continue_on_error: true,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if continued_batch.len() != 3
+        || continued_batch[1].error_code.as_deref() != Some("COMMAND_FAILED")
+        || continued_batch[2]
+            .result
+            .as_ref()
+            .map(|item| item.kind.as_str())
+            != Some("number")
+    {
+        return Err("Workbench batch did not continue after a command error".into());
     }
 
     let stream_value = RedisValue::Stream {

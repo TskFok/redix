@@ -21,6 +21,56 @@ pub struct CommandDefinition {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct ExecuteCommandsInput {
+    pub connection_id: String,
+    pub commands: Vec<String>,
+    pub continue_on_error: bool,
+}
+
+impl ExecuteCommandsInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.connection_id.trim().is_empty()
+            || self.commands.is_empty()
+            || self.commands.len() > 100
+            || self
+                .commands
+                .iter()
+                .any(|command| command.trim().is_empty())
+        {
+            return Err(AppError::InvalidConnection);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct CommandExecutionItem {
+    pub command: String,
+    pub result: Option<CommandResult>,
+    pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct SaveCommandHistoryInput {
+    pub connection_id: String,
+    pub entries: Vec<CommandHistoryEntry>,
+}
+
+impl SaveCommandHistoryInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.connection_id.trim().is_empty()
+            || self.entries.len() > 100
+            || self.entries.iter().any(|entry| {
+                entry.connection_id != self.connection_id || entry.command.trim().is_empty()
+            })
+        {
+            return Err(AppError::InvalidConnection);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct CommandHistoryEntry {
     pub connection_id: String,
     pub command: String,

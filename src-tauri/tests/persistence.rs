@@ -10,6 +10,7 @@ use std::{
 };
 
 use redix_lib::{
+    domain::{CommandHistoryDocument, CommandHistoryEntry, CommandResult},
     error::AppError,
     persistence::{
         JsonDocumentStore, JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring,
@@ -140,6 +141,30 @@ fn malformed_versioned_document_can_restore_default_without_overwriting_source()
         .unwrap();
     assert_eq!(loaded, TestDocument::default());
     assert_eq!(fs::read_to_string(path).unwrap(), original);
+    remove_temporary_directory(&directory);
+}
+
+#[test]
+fn command_history_document_round_trips_through_versioned_store() {
+    let directory = temporary_directory("workbench-history");
+    let path = directory.join("workbench-history.json");
+    let store = JsonDocumentStore::new(path);
+    let document = CommandHistoryDocument {
+        version: 1,
+        entries: vec![CommandHistoryEntry {
+            connection_id: "local".into(),
+            command: "PING".into(),
+            result: Some(CommandResult {
+                kind: "string".into(),
+                value: serde_json::json!("PONG"),
+            }),
+            error_code: None,
+            created_at: "2026-08-19T00:00:00Z".into(),
+        }],
+    };
+
+    store.save(&document).unwrap();
+    assert_eq!(store.load::<CommandHistoryDocument>().unwrap(), document);
     remove_temporary_directory(&directory);
 }
 

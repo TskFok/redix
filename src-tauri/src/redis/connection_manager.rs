@@ -5,10 +5,11 @@ use tokio::sync::RwLock;
 
 use crate::{
     domain::{
-        normalize_key_type, CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
-        DeleteKeysInput, ExportKeysInput, ExportedKey, HashEntry, ImportKeysInput, KeyInfo,
-        KeyInfoInput, KeySummary, KeyValue, RedisValue, RenameKeyInput, ScanKeysInput, ScanPage,
-        SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry,
+        normalize_key_type, CommandDefinition, CommandExecutionItem, CommandResult, ConnectionInfo,
+        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput,
+        ExportedKey, HashEntry, ImportKeysInput, KeyInfo, KeyInfoInput, KeySummary, KeyValue,
+        RedisValue, RenameKeyInput, ScanKeysInput, ScanPage, SetKeyInput, SetKeyTtlInput,
+        SortedSetEntry, StreamEntry,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -44,6 +45,11 @@ pub trait RedisOperations: Send + Sync {
         connection_id: &str,
         input: &str,
     ) -> Result<CommandResult, AppError>;
+    async fn execute_commands(
+        &self,
+        input: ExecuteCommandsInput,
+    ) -> Result<Vec<CommandExecutionItem>, AppError>;
+    fn command_catalog(&self) -> Vec<CommandDefinition>;
 }
 
 pub struct RedisService {
@@ -359,16 +365,57 @@ impl RedisOperations for RedisService {
         connection_id: &str,
         input: &str,
     ) -> Result<CommandResult, AppError> {
-        let arguments = tokenize_command(input)?;
-        let mut command = ::redis::cmd(&arguments[0]);
-        command.arg(&arguments[1..]);
         let mut connection = self.connection(connection_id).await?;
-        let value: Value = command
-            .query_async::<Value>(&mut connection)
-            .await
-            .map_err(map_command_error)?;
-        command_result(value)
+        execute_tokenized_command(&mut connection, input).await
     }
+
+    async fn execute_commands(
+        &self,
+        input: ExecuteCommandsInput,
+    ) -> Result<Vec<CommandExecutionItem>, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let mut items = Vec::with_capacity(input.commands.len());
+        for raw_command in input.commands {
+            let command = raw_command.trim().to_owned();
+            match execute_tokenized_command(&mut connection, &command).await {
+                Ok(result) => items.push(CommandExecutionItem {
+                    command,
+                    result: Some(result),
+                    error_code: None,
+                }),
+                Err(error) => {
+                    items.push(CommandExecutionItem {
+                        command,
+                        result: None,
+                        error_code: Some(error.code().to_owned()),
+                    });
+                    if !input.continue_on_error {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(items)
+    }
+
+    fn command_catalog(&self) -> Vec<CommandDefinition> {
+        crate::domain::command_catalog()
+    }
+}
+
+async fn execute_tokenized_command(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    input: &str,
+) -> Result<CommandResult, AppError> {
+    let arguments = tokenize_command(input)?;
+    let mut command = ::redis::cmd(&arguments[0]);
+    command.arg(&arguments[1..]);
+    let value: Value = command
+        .query_async::<Value>(connection)
+        .await
+        .map_err(map_command_error)?;
+    command_result(value)
 }
 
 async fn key_size(
