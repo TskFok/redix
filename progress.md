@@ -160,6 +160,15 @@
 - 已写入并自审正式设计文档 `docs/superpowers/specs/2026-08-18-redisinsight-non-cloud-parity-design.md`；确认无占位符，补充了原生 file input/Blob 导入导出和类型过滤的 SCAN 游标语义。
 - 当前尚未修改业务代码；等待用户选择执行方式后按计划进入 TDD 实现。
 
+## Session: 2026-08-19 — Task 13 Browser 与 Workbench 批次实现
+
+- **Status:** in_progress
+- Browser 生产力批次已完成：版本化 JSON 仓储、SCAN 类型过滤、可选内存/编码/空闲元数据、原生 JSON 导入导出和选择状态管理；提交 `969f997`、`6a4d08b`、`671f54e`、`311931c`。
+- Workbench Rust 批次已完成：内置命令目录、批量执行、遇错停止/继续、按连接隔离的版本化 JSON 历史和敏感命令过滤；提交 `c2f444b`、`be42fa0`。
+- Workbench 前端批次已完成：多行单次 IPC、命令提示、批量策略、Raw/Text/JSON 结果、复制和安全历史；提交 `f8f209d`。
+- 当前验证：Browser 聚焦测试 34/34、Workbench/bridge 聚焦测试 27/27、应用 smoke 3/3、生产构建通过，非 Cloud 范围检查通过。
+- 当前环境限制：`REDIX_TEST_REDIS_URL=redis://127.0.0.1:6379 cargo test --test redis_integration -- --ignored` 因本机未启动 Redis 返回 `CONNECTION_FAILED`，尚未声称真实 Redis 批量流程通过。
+
 ## Session: 2026-08-19 — Task 13 详细实现计划
 
 - **Status:** plan_ready

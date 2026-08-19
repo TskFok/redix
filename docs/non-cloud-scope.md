@@ -7,10 +7,11 @@
 - 本地 Redis Standalone TCP 连接和连接配置管理。
 - 使用系统钥匙串保存本地连接密码；前端 DTO 和连接列表不暴露密码。
 - Browser 使用 `SCAN`、`MATCH`、`COUNT` 分页列出键，并读取键类型、TTL 和值。
-- Browser 支持新增键、重命名、批量删除、元数据刷新和显式刷新。
+- Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新和校验后的本地 JSON 导入导出。
 - String、Hash、List、Set、Sorted Set、Stream 的基础读取、编辑、删除和 TTL 操作；Stream 单次读取最多 500 条记录。
 - RedisJSON 根文档的读取和编辑；未安装 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE` 错误。
-- Workbench 在已打开的本地连接上执行 Redis 命令，并展示结构化结果。
+- Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
+- Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
 - React/Tauri 本地 UI、前端测试、Rust 单元测试和本地构建工具链。
 
 ## 明确排除项
@@ -20,6 +21,7 @@
 - Cluster、Sentinel、TLS、SSH、远程托管实例和云资源管理。
 - Redis 模块专用数据类型、模块查询和模块可视化（RedisJSON 根文档和 Stream 基础能力除外）。
 - Stream Consumer Group、实时订阅和超过 500 条记录的分页编辑。
+- Monaco、远程插件运行时和云端命令目录。
 - Profiler、Slow Log、Pub/Sub 等非 MVP 运营功能。
 
 ## 人工审查清单
@@ -29,6 +31,7 @@
 - [x] Browser 代码路径使用 `SCAN` 分页，没有加入 `KEYS` 命令。
 - [x] 未加入云 SDK、云端点、云登录、云账户模型或云凭据存储。
 - [x] 未引入 SQL，也没有在循环中查询 SQL。
+- [x] Workbench 历史使用共享版本化 JSON 仓储，不保存密码、URI 或底层错误文本。
 - [x] 现有前端和 Rust 测试仍需通过；真实 Redis、Tauri bundle 结果按实际环境记录。
 
 ## 测试命令

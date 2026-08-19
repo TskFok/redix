@@ -218,7 +218,7 @@ Phase 8：RedisInsight 非 Cloud 差异补全（设计确认）
 
 ### Status
 
-implementation_plan_ready：差异盘点、范围分解、设计确认和详细实现计划均已完成；等待选择执行方式后进入 TDD 实现。
+in_progress：Browser 生产力和 Workbench 增强已完成并分别提交；数据库/实例概览和 Query Library/Settings 仍按顺序实现。
 
 ### 已确认设计决策
 
@@ -239,7 +239,10 @@ implementation_plan_ready：差异盘点、范围分解、设计确认和详细�
 - [x] 编写并自审正式设计文档
 - [x] 等待用户审阅正式设计文档
 - [x] 编写四个按依赖顺序执行的详细实现计划并完成自审
-- [ ] 依照计划按 TDD 实现并验证各批次
+- [x] 依照计划按 TDD 实现并验证 Browser 生产力批次
+- [x] 依照计划按 TDD 实现并验证 Workbench 增强批次
+- [ ] 依照计划按 TDD 实现并验证数据库/实例概览批次
+- [ ] 依照计划按 TDD 实现并验证 Query Library/Settings 批次
 
 ### Phase 8 计划产物
 
