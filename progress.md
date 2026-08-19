@@ -158,4 +158,13 @@
 - 用户已确认错误、安全和兼容策略：固定错误码、能力探测与局部降级、钥匙串密码边界、敏感命令历史过滤、本地 JSON 原子写入和旧请求取消。
 - 已完成第四部分测试与交付标准确认。
 - 已写入并自审正式设计文档 `docs/superpowers/specs/2026-08-18-redisinsight-non-cloud-parity-design.md`；确认无占位符，补充了原生 file input/Blob 导入导出和类型过滤的 SCAN 游标语义。
-- 当前尚未修改业务代码；等待用户审阅 spec 后再生成详细实现计划。
+- 当前尚未修改业务代码；等待用户选择执行方式后按计划进入 TDD 实现。
+
+## Session: 2026-08-19 — Task 13 详细实现计划
+
+- **Status:** plan_ready
+- 用户已通过 `ok` 审阅并确认 `docs/superpowers/specs/2026-08-18-redisinsight-non-cloud-parity-design.md`；本轮没有修改业务源码。
+- 已生成总计划和四个有依赖顺序的子计划：Browser 生产力、Workbench 增强、数据库/实例概览、Query Library/设置。
+- 已将 Workbench 历史统一设计为共享的 Rust `JsonDocumentStore` 和 `workbench-history.json`，移除原先可能落到 `localStorage` 的计划矛盾；Query Library/Settings 复用同一仓储并保留损坏文件。
+- 计划覆盖 typed DTO/IPC、固定错误码、SCAN 游标语义、原生 file input/Blob 导入导出、数据库切换回滚、敏感命令过滤、设置迁移、导航和回归测试。
+- 已完成跨计划自审：四个子计划的文件地图、任务依赖、RED/GREEN/验证命令、中文提交信息和 Cloud 排除边界已对齐；待提交计划文档后交接执行。

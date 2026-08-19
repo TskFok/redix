@@ -225,3 +225,18 @@
 - Browser 首批增强保持 SCAN 分页；Workbench 增加内置命令目录、多命令执行、raw/text/JSON 展示、复制和按连接持久化历史；数据库概览集中返回只读聚合 DTO；Query Library/设置使用版本化 JSON 与原子替换。
 - 错误策略已确认：固定错误码 `CONNECTION_NOT_OPEN`、`INVALID_INPUT`、`KEY_NOT_FOUND`、`UNSUPPORTED_DATA_TYPE`、`COMMAND_FAILED`、`PERSISTENCE_FAILED`、`OPERATION_CANCELLED`，不向前端暴露 Redis 底层错误文本。
 - 兼容与安全策略已确认：使用 `COMMAND INFO`/`MODULE LIST` 探测能力；模块不可用时局部降级；密码只存钥匙串；敏感命令不写历史；本地 JSON 版本化并原子替换；连接切换和卸载取消旧请求。
+
+### 实现计划文件地图
+
+- Rust 应用入口和 Tauri 注册集中在 `src-tauri/src/lib.rs`；领域模型通过 `src-tauri/src/domain/mod.rs` 统一 re-export，命令通过 `src-tauri/src/commands/mod.rs` 注册。
+- Browser 现有 Rust 边界是 `src-tauri/src/domain/key.rs`、`src-tauri/src/redis/connection_manager.rs`、`src-tauri/src/commands/browser.rs`；前端边界是 `src/features/browser/browserState.ts`、`BrowserPage.tsx`、`KeyList.tsx`、`KeyDetails.tsx`、`src/lib/types.ts` 和 `src/lib/tauri.ts`。
+- Workbench 现有 Rust 边界是 `src-tauri/src/domain/workbench.rs`、`src-tauri/src/redis/workbench.rs`、`src-tauri/src/commands/workbench.rs`；前端边界是 `src/features/workbench/workbenchState.ts`、`WorkbenchPage.tsx`、`CommandInput.tsx`、`CommandResult.tsx`。
+- 本地 JSON 原子写入模式已在 `src-tauri/src/persistence/profile_store.rs` 实现，可抽象为 Query Library/Settings 共用的版本化文档仓储；`src-tauri/tests/persistence.rs` 已有临时目录和原子写入测试工具。
+- 应用导航位于 `src/App.tsx`，应用级回归位于 `src/app.smoke.test.tsx`；新增 Database/Settings/Query Library 页面必须在这里接入并覆盖未连接禁用状态。
+- 现有 Tauri 注册列表在 `src-tauri/src/lib.rs:44-61`，新增 command 计划必须同步更新 Rust `commands` 模块、`generate_handler!`、前端 bridge 测试和 integration command adapter test。
+
+### 计划自审结论（2026-08-19）
+
+- 四个子计划已按 Browser → Workbench → Database → Query Library/Settings 拆分，依赖关系和总体验收矩阵一致。
+- Workbench 历史、Query Library 和 Settings 均指向共享 `JsonDocumentStore`；未保留 `localStorage` 方案，损坏 JSON 恢复默认值时不覆盖原文件。
+- 每个任务均包含明确文件、RED/GREEN 命令、实现边界和简体中文提交信息；第一批不引入 Redis Cloud、Azure、AI、Telemetry、远程插件或 SQL。

@@ -218,7 +218,7 @@ Phase 8：RedisInsight 非 Cloud 差异补全（设计确认）
 
 ### Status
 
-in_progress：先完成差异盘点、范围分解和设计确认，再进入后续实现批次。
+implementation_plan_ready：差异盘点、范围分解、设计确认和详细实现计划均已完成；等待选择执行方式后进入 TDD 实现。
 
 ### 已确认设计决策
 
@@ -231,11 +231,23 @@ in_progress：先完成差异盘点、范围分解和设计确认，再进入后
 
 ### Checklist
 
-- [ ] 盘点目标项目当前版本的非 Cloud 页面、API、数据类型和本地设置能力
-- [ ] 盘点当前项目已有入口、IPC、Redis service、持久化和测试缺口
-- [ ] 将缺失能力拆为可独立验收的批次，明确排除项和依赖关系
+- [x] 盘点目标项目当前版本的非 Cloud 页面、API、数据类型和本地设置能力
+- [x] 盘点当前项目已有入口、IPC、Redis service、持久化和测试缺口
+- [x] 将缺失能力拆为可独立验收的批次，明确排除项和依赖关系
 - [x] 与用户确认推荐实施范围
 - [x] 与用户确认详细架构设计
 - [x] 编写并自审正式设计文档
-- [ ] 等待用户审阅正式设计文档
-- [ ] 依照设计按 TDD 实现并验证各批次
+- [x] 等待用户审阅正式设计文档
+- [x] 编写四个按依赖顺序执行的详细实现计划并完成自审
+- [ ] 依照计划按 TDD 实现并验证各批次
+
+### Phase 8 计划产物
+
+- 设计：`docs/superpowers/specs/2026-08-18-redisinsight-non-cloud-parity-design.md`
+- 总计划：`docs/superpowers/plans/2026-08-18-redisinsight-non-cloud-parity.md`
+- 子计划 1：`docs/superpowers/plans/2026-08-18-browser-productivity.md`
+- 子计划 2：`docs/superpowers/plans/2026-08-18-workbench-enhancement.md`
+- 子计划 3：`docs/superpowers/plans/2026-08-18-database-overview.md`
+- 子计划 4：`docs/superpowers/plans/2026-08-18-query-library-settings.md`
+
+执行顺序固定为 Browser → Workbench → Database → Query Library/Settings；每个子计划结束后单独验证并提交，最终再执行总体验收矩阵。
