@@ -2,12 +2,33 @@ mod support;
 
 use redix_lib::{
     domain::{
-        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey, ImportKeysInput,
-        KeyInfoInput, RedisValue, RenameKeyInput, ScanKeysInput, StreamEntry, StreamField,
+        command_catalog, is_sensitive_command, ConnectionProfile, CreateKeyInput, DeleteKeysInput,
+        ExportedKey, ImportKeysInput, KeyInfoInput, RedisValue, RenameKeyInput, ScanKeysInput,
+        StreamEntry, StreamField,
     },
     error::AppError,
 };
 use support::{invalid_profile, valid_profile};
+
+#[test]
+fn command_catalog_contains_safe_high_frequency_commands() {
+    let names = command_catalog()
+        .into_iter()
+        .map(|item| item.name)
+        .collect::<Vec<_>>();
+
+    assert!(names.contains(&"PING".into()));
+    assert!(names.contains(&"GET".into()));
+    assert!(names.contains(&"SET".into()));
+}
+
+#[test]
+fn sensitive_commands_are_not_saved_to_history() {
+    assert!(is_sensitive_command("AUTH secret"));
+    assert!(is_sensitive_command("CONFIG SET requirepass secret"));
+    assert!(is_sensitive_command("ACL SETUSER alice on >secret"));
+    assert!(!is_sensitive_command("GET user:1"));
+}
 
 #[test]
 fn rejects_empty_host_zero_port_and_database_above_fifteen() {
