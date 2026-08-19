@@ -8,8 +8,8 @@ use redix_lib::{
     domain::{
         ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput,
         ExportedKey, HashEntry, ImportKeysInput, KeyInfoInput, KeyValue, RedisValue,
-        RenameKeyInput, ScanKeysInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry,
-        StreamField,
+        RenameKeyInput, ScanKeysInput, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput,
+        SortedSetEntry, StreamEntry, StreamField,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -27,6 +27,20 @@ impl ProfileRepository for TestProfiles {
 
     fn save(&self, _profiles: &[ConnectionProfile]) -> Result<(), AppError> {
         Ok(())
+    }
+}
+
+struct FailingSaveProfiles {
+    profile: ConnectionProfile,
+}
+
+impl ProfileRepository for FailingSaveProfiles {
+    fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
+        Ok(vec![self.profile.clone()])
+    }
+
+    fn save(&self, _profiles: &[ConnectionProfile]) -> Result<(), AppError> {
+        Err(AppError::PersistenceFailed)
     }
 }
 
@@ -168,6 +182,21 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         return Err("PING succeeded but returned an empty connection version".into());
     }
 
+    let instance = service
+        .get_instance_overview("integration")
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if instance.server_version.is_none() && instance.connected_clients.is_none() {
+        return Err("instance overview did not return any server metric".into());
+    }
+    service
+        .select_database(SelectDatabaseInput {
+            connection_id: "integration".into(),
+            database: 0,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+
     let expected = vec![
         (
             keys.string.as_str(),
@@ -253,6 +282,68 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     if !(1..=5_000).contains(&ttl_value.ttl_ms) {
         return Err("get_key did not return the configured string TTL".into());
     }
+
+    let databases = service
+        .get_database_overview("integration")
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if !databases
+        .iter()
+        .any(|database| database.key_count.is_some())
+    {
+        return Err("database overview did not return a key count".into());
+    }
+
+    let database_one_key = format!("{}:database-one", keys.prefix);
+    service
+        .select_database(SelectDatabaseInput {
+            connection_id: "integration".into(),
+            database: 1,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    service
+        .set_key(SetKeyInput {
+            connection_id: "integration".into(),
+            key: database_one_key.clone(),
+            value: RedisValue::String {
+                value: "database-one".into(),
+            },
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    service
+        .select_database(SelectDatabaseInput {
+            connection_id: "integration".into(),
+            database: 0,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if service
+        .get_key("integration", &database_one_key)
+        .await
+        .is_ok()
+    {
+        return Err("database selection did not isolate database one".into());
+    }
+    service
+        .select_database(SelectDatabaseInput {
+            connection_id: "integration".into(),
+            database: 1,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    service
+        .delete_key("integration", &database_one_key)
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    service
+        .select_database(SelectDatabaseInput {
+            connection_id: "integration".into(),
+            database: 0,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
 
     let mut cursor = 0;
     let mut summaries = BTreeMap::new();
@@ -623,4 +714,41 @@ async fn exercises_standalone_redis_operations() {
             panic!("Redis integration flow failed: {flow}; cleanup also failed: {cleanup}")
         }
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "设置 REDIX_TEST_REDIS_URL 后用 cargo test -- --ignored --nocapture 运行"]
+async fn preserves_active_client_when_database_profile_save_fails() {
+    let url = std::env::var("REDIX_TEST_REDIS_URL")
+        .expect("请设置 REDIX_TEST_REDIS_URL 后运行 Redis 集成测试");
+    let (profile, password) = integration_profile(&url);
+    let profiles = std::sync::Arc::new(FailingSaveProfiles {
+        profile: profile.clone(),
+    });
+    let secrets = TestSecrets::default();
+    if let Some(password) = password.as_deref() {
+        secrets.write("integration", password).unwrap();
+    }
+    let service = RedisService::new(profiles.clone(), std::sync::Arc::new(secrets));
+
+    service.open_connection("integration").await.unwrap();
+    let target_database = if profile.database == 0 { 1 } else { 0 };
+    assert_eq!(
+        service
+            .select_database(SelectDatabaseInput {
+                connection_id: "integration".into(),
+                database: target_database,
+            })
+            .await
+            .unwrap_err(),
+        AppError::PersistenceFailed
+    );
+    assert_eq!(profiles.load().unwrap()[0].database, profile.database);
+
+    let ping = service
+        .execute_command("integration", "PING")
+        .await
+        .expect("the old active client must remain usable");
+    assert_eq!(ping.value, serde_json::json!("PONG"));
+    service.close_connection("integration").await.unwrap();
 }

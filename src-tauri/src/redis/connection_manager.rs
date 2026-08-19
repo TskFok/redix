@@ -5,11 +5,12 @@ use tokio::sync::RwLock;
 
 use crate::{
     domain::{
-        normalize_key_type, CommandDefinition, CommandExecutionItem, CommandResult, ConnectionInfo,
-        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput,
-        ExportedKey, HashEntry, ImportKeysInput, KeyInfo, KeyInfoInput, KeySummary, KeyValue,
-        RedisValue, RenameKeyInput, ScanKeysInput, ScanPage, SetKeyInput, SetKeyTtlInput,
-        SortedSetEntry, StreamEntry,
+        normalize_key_type, parse_info_sections, parse_keyspace_line, CommandDefinition,
+        CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
+        DatabaseOverview, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
+        HashEntry, ImportKeysInput, InstanceOverview, KeyInfo, KeyInfoInput, KeySummary, KeyValue,
+        ModuleSummary, RedisValue, RenameKeyInput, ScanKeysInput, ScanPage, SelectDatabaseInput,
+        SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -40,6 +41,18 @@ pub trait RedisOperations: Send + Sync {
     async fn get_key_info(&self, input: KeyInfoInput) -> Result<KeyInfo, AppError>;
     async fn export_keys(&self, input: ExportKeysInput) -> Result<Vec<ExportedKey>, AppError>;
     async fn import_keys(&self, input: ImportKeysInput) -> Result<u64, AppError>;
+    async fn get_instance_overview(
+        &self,
+        connection_id: &str,
+    ) -> Result<InstanceOverview, AppError>;
+    async fn get_database_overview(
+        &self,
+        connection_id: &str,
+    ) -> Result<Vec<DatabaseOverview>, AppError>;
+    async fn select_database(
+        &self,
+        input: SelectDatabaseInput,
+    ) -> Result<ConnectionProfile, AppError>;
     async fn execute_command(
         &self,
         connection_id: &str,
@@ -116,6 +129,14 @@ impl RedisService {
             .unwrap_or_else(|| "unknown".into());
 
         Ok(ConnectionInfo { server_version })
+    }
+
+    fn profile(&self, connection_id: &str) -> Result<ConnectionProfile, AppError> {
+        self.profiles
+            .load()?
+            .into_iter()
+            .find(|profile| profile.id == connection_id)
+            .ok_or(AppError::InvalidConnection)
     }
 }
 
@@ -358,6 +379,113 @@ impl RedisOperations for RedisService {
             imported += 1;
         }
         Ok(imported)
+    }
+
+    async fn get_instance_overview(
+        &self,
+        connection_id: &str,
+    ) -> Result<InstanceOverview, AppError> {
+        let mut connection = self.connection(connection_id).await?;
+        let info = ::redis::cmd("INFO")
+            .query_async::<String>(&mut connection)
+            .await
+            .unwrap_or_default();
+        let sections = parse_info_sections(&info);
+
+        let modules = ::redis::cmd("MODULE")
+            .arg("LIST")
+            .query_async::<Value>(&mut connection)
+            .await
+            .map(parse_module_list)
+            .unwrap_or_default();
+
+        InstanceOverview::from_info_and_modules(&sections, modules)
+    }
+
+    async fn get_database_overview(
+        &self,
+        connection_id: &str,
+    ) -> Result<Vec<DatabaseOverview>, AppError> {
+        let profile = self.profile(connection_id)?;
+        profile.validate()?;
+        let mut connection = self.connection(connection_id).await?;
+        let info = ::redis::cmd("INFO")
+            .arg("keyspace")
+            .query_async::<String>(&mut connection)
+            .await;
+
+        if let Ok(info) = info {
+            let sections = parse_info_sections(&info);
+            let mut databases = sections
+                .get("Keyspace")
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter(|(database, _)| database.starts_with("db"))
+                        .map(|(database, line)| parse_keyspace_line(database, line))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()?
+                .unwrap_or_default();
+            databases.sort_by_key(|database| database.database);
+            return Ok(databases);
+        }
+
+        let key_count: u64 = ::redis::cmd("DBSIZE")
+            .query_async::<u64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(vec![DatabaseOverview {
+            database: profile.database,
+            key_count: Some(key_count),
+            expires: None,
+            avg_ttl_ms: None,
+        }])
+    }
+
+    async fn select_database(
+        &self,
+        input: SelectDatabaseInput,
+    ) -> Result<ConnectionProfile, AppError> {
+        input.validate()?;
+        let old_profiles = self.profiles.load()?;
+        let old_profile = old_profiles
+            .iter()
+            .find(|profile| profile.id == input.connection_id)
+            .cloned()
+            .ok_or(AppError::InvalidConnection)?;
+        old_profile.validate()?;
+        let password = if old_profile.has_password {
+            self.secrets.read(&input.connection_id)?
+        } else {
+            None
+        };
+        let mut new_profile = old_profile.clone();
+        new_profile.database = input.database;
+        let client = Client::open(connection_url_with_database(
+            &old_profile,
+            password.as_deref(),
+            input.database,
+        )?)
+        .map_err(|_| AppError::InvalidConnection)?;
+        Self::inspect_client(&client).await?;
+
+        let mut profiles = old_profiles.clone();
+        let profile = profiles
+            .iter_mut()
+            .find(|profile| profile.id == input.connection_id)
+            .ok_or(AppError::InvalidConnection)?;
+        *profile = new_profile.clone();
+        if self.profiles.save(&profiles).is_err() {
+            let _ = self.profiles.save(&old_profiles);
+            return Err(AppError::PersistenceFailed);
+        }
+
+        self.active
+            .write()
+            .await
+            .insert(input.connection_id, client);
+        Ok(new_profile)
     }
 
     async fn execute_command(
@@ -811,7 +939,18 @@ pub fn connection_url(
     profile: &ConnectionProfile,
     password: Option<&str>,
 ) -> Result<String, AppError> {
+    connection_url_with_database(profile, password, profile.database)
+}
+
+pub fn connection_url_with_database(
+    profile: &ConnectionProfile,
+    password: Option<&str>,
+    database: u8,
+) -> Result<String, AppError> {
     profile.validate()?;
+    if database > 15 {
+        return Err(AppError::InvalidConnection);
+    }
     let host = standalone_host(&profile.host)?;
     let credentials = match (profile.username.as_deref(), password) {
         (Some(username), Some(password)) => {
@@ -823,8 +962,59 @@ pub fn connection_url(
     };
     Ok(format!(
         "redis://{credentials}{host}:{}/{}",
-        profile.port, profile.database
+        profile.port, database
     ))
+}
+
+fn parse_module_list(value: Value) -> Vec<ModuleSummary> {
+    let entries = match value {
+        Value::Array(entries) | Value::Set(entries) => entries,
+        Value::Attribute { data, .. } => return parse_module_list(*data),
+        _ => return Vec::new(),
+    };
+
+    entries.into_iter().filter_map(parse_module_entry).collect()
+}
+
+fn parse_module_entry(value: Value) -> Option<ModuleSummary> {
+    let mut name = None;
+    let mut version = None;
+    match value {
+        Value::Map(entries) => {
+            for (key, value) in entries {
+                update_module_field(&key, &value, &mut name, &mut version);
+            }
+        }
+        Value::Array(entries) => {
+            let mut pairs = entries.chunks_exact(2);
+            for pair in &mut pairs {
+                update_module_field(&pair[0], &pair[1], &mut name, &mut version);
+            }
+        }
+        _ => return None,
+    }
+
+    name.filter(|name| !name.trim().is_empty())
+        .map(|name| ModuleSummary {
+            name,
+            version: version.filter(|version| !version.trim().is_empty()),
+        })
+}
+
+fn update_module_field(
+    key: &Value,
+    value: &Value,
+    name: &mut Option<String>,
+    version: &mut Option<String>,
+) {
+    let Some(key) = ::redis::from_redis_value_ref::<String>(key).ok() else {
+        return;
+    };
+    match key.as_str() {
+        "name" => *name = ::redis::from_redis_value_ref::<String>(value).ok(),
+        "ver" | "version" => *version = ::redis::from_redis_value_ref::<String>(value).ok(),
+        _ => {}
+    }
 }
 
 pub fn validate_ttl(ttl_ms: i64) -> Result<(), AppError> {

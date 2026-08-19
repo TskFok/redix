@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tauri::Manager;
 
 use redix_lib::{
-    commands::{browser, connections, workbench},
+    commands::{browser, connections, database, workbench},
     domain::{CommandHistoryEntry, CommandResult, SaveCommandHistoryInput},
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -57,6 +57,9 @@ fn exposes_all_tauri_command_adapters() {
     let _ = connections::test_connection;
     let _ = connections::open_connection;
     let _ = connections::close_connection;
+    let _ = database::get_instance_overview;
+    let _ = database::get_database_overview;
+    let _ = database::select_database;
     let _ = workbench::execute_command;
     let _ = workbench::execute_commands;
     let _ = workbench::get_command_catalog;

@@ -1,0 +1,30 @@
+use crate::{
+    domain::{DatabaseOverview, InstanceOverview, SelectDatabaseInput},
+    error::AppError,
+    redis::RedisOperations,
+    AppState,
+};
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_instance_overview(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> Result<InstanceOverview, AppError> {
+    state.redis.get_instance_overview(&connection_id).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn get_database_overview(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+) -> Result<Vec<DatabaseOverview>, AppError> {
+    state.redis.get_database_overview(&connection_id).await
+}
+
+#[tauri::command]
+pub async fn select_database(
+    state: tauri::State<'_, AppState>,
+    input: SelectDatabaseInput,
+) -> Result<crate::domain::ConnectionProfile, AppError> {
+    state.redis.select_database(input).await
+}
