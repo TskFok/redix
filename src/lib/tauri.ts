@@ -6,12 +6,14 @@ import type {
   CommandHistoryEntry,
   CommandResult,
   AcknowledgeStreamPendingEntriesInput,
+  AnalyzeDatabaseInput,
   AppSettings,
   ConnectionInfo,
   ConnectionProfile,
   CreateKeyInput,
   CreateStreamConsumerGroupInput,
   DatabaseOverview,
+  DatabaseAnalysisReport,
   DeleteKeysInput,
   DeleteKeyInput,
   DeleteStreamConsumerGroupInput,
@@ -28,6 +30,7 @@ import type {
   IpcError,
   ImportKeysInput,
   InstanceOverview,
+  InstanceDetails,
   KeyInfo,
   KeyInfoInput,
   KeyValue,
@@ -130,6 +133,18 @@ export function getInstanceOverview(connectionId: string): Promise<InstanceOverv
   return call<InstanceOverview>("get_instance_overview", {
     connection_id: connectionId,
   });
+}
+
+export function getInstanceDetails(connectionId: string): Promise<InstanceDetails> {
+  return call<InstanceDetails>("get_instance_details", {
+    connection_id: connectionId,
+  });
+}
+
+export function analyzeDatabase(
+  input: AnalyzeDatabaseInput,
+): Promise<DatabaseAnalysisReport> {
+  return call<DatabaseAnalysisReport>("analyze_database", { input });
 }
 
 export function getDatabaseOverview(connectionId: string): Promise<DatabaseOverview[]> {

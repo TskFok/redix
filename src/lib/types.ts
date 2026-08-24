@@ -2,6 +2,7 @@ export type Workspace =
   | "browser"
   | "workbench"
   | "database"
+  | "database-analysis"
   | "observability"
   | "query-library"
   | "settings";
@@ -42,6 +43,123 @@ export interface InstanceOverview {
   keyspace_misses: number | null;
   role: string | null;
   modules: ModuleSummary[];
+}
+
+export interface ClientDetails {
+  connected_clients: number | null;
+  blocked_clients: number | null;
+  tracking_clients: number | null;
+  max_clients: number | null;
+}
+
+export interface MemoryDetails {
+  used_memory_bytes: number | null;
+  used_memory_peak_bytes: number | null;
+  used_memory_rss_bytes: number | null;
+  mem_fragmentation_ratio: number | null;
+  allocator_active_bytes: number | null;
+  allocator_resident_bytes: number | null;
+}
+
+export interface StatsDetails {
+  instantaneous_ops_per_sec: number | null;
+  expired_keys: number | null;
+  evicted_keys: number | null;
+  hit_rate: number | null;
+}
+
+export interface PersistenceDetails {
+  loading: boolean | null;
+  rdb_last_save_time: number | null;
+  rdb_changes_since_last_save: number | null;
+  aof_enabled: boolean | null;
+  aof_rewrite_in_progress: boolean | null;
+}
+
+export interface ReplicationDetails {
+  role: string | null;
+  connected_replicas: number | null;
+  master_link_status: string | null;
+  master_repl_offset: number | null;
+}
+
+export interface CommandStat {
+  command: string;
+  calls: number | null;
+  usec: number | null;
+  usec_per_call: number | null;
+  rejected_calls: number | null;
+  failed_calls: number | null;
+}
+
+export interface InstanceDetails {
+  overview: InstanceOverview;
+  clients: ClientDetails;
+  memory: MemoryDetails;
+  stats: StatsDetails;
+  persistence: PersistenceDetails;
+  replication: ReplicationDetails;
+  command_stats: CommandStat[];
+}
+
+export interface AnalyzeDatabaseInput {
+  connection_id: string;
+  pattern: string;
+  delimiter: string;
+  max_keys: number;
+}
+
+export interface AnalysisProgress {
+  scanned: number;
+  processed: number;
+  max_keys: number;
+  truncated: boolean;
+}
+
+export interface TypeSummary {
+  type: string;
+  total: number;
+}
+
+export interface AnalysisSummary {
+  total: number;
+  observed: number;
+  types: TypeSummary[];
+}
+
+export interface AnalysisKey {
+  key: string;
+  key_type: string;
+  length: number | null;
+  memory_bytes: number | null;
+  ttl_seconds: number | null;
+}
+
+export interface NamespaceSummary {
+  namespace: string;
+  keys: number;
+  memory_bytes: number;
+  types: TypeSummary[];
+}
+
+export interface ExpirationGroup {
+  label: string;
+  keys: number;
+  memory_bytes: number;
+}
+
+export interface DatabaseAnalysisReport {
+  database: number;
+  pattern: string;
+  delimiter: string;
+  progress: AnalysisProgress;
+  total_keys: AnalysisSummary;
+  total_memory: AnalysisSummary;
+  top_keys_by_length: AnalysisKey[];
+  top_keys_by_memory: AnalysisKey[];
+  top_namespaces_by_keys: NamespaceSummary[];
+  top_namespaces_by_memory: NamespaceSummary[];
+  expiration_groups: ExpirationGroup[];
 }
 
 export interface DatabaseOverview {

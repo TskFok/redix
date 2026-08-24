@@ -14,7 +14,10 @@ pub use connections::{
     close_connection, delete_connection, list_connections, open_connection, save_connection,
     test_connection,
 };
-pub use database::{get_database_overview, get_instance_overview, select_database};
+pub use database::{
+    analyze_database, get_database_overview, get_instance_details, get_instance_overview,
+    select_database,
+};
 pub use query_library::{delete_query_library_item, list_query_library, save_query_library_item};
 pub use settings::{get_app_settings, save_app_settings};
 pub use workbench::{

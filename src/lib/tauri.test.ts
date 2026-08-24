@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import * as core from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -18,6 +18,7 @@ import {
   getSlowLogConfig,
   getSlowLogs,
   getDatabaseOverview,
+  getInstanceDetails,
   getCommandCatalog,
   getKey,
   getKeyInfo,
@@ -25,6 +26,7 @@ import {
   getStreamConsumers,
   getStreamPendingEntries,
   getInstanceOverview,
+  analyzeDatabase,
   getAppSettings,
   importKeys,
   listQueryLibrary,
@@ -80,7 +82,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
 }));
 
-const invokeMock = vi.mocked(invoke);
+const invokeMock = vi.mocked(core.invoke);
 
 const profile: ConnectionProfile = {
   id: "local",
@@ -267,6 +269,31 @@ describe("Tauri IPC bridge", () => {
     ).resolves.toEqual(profile);
     expect(invokeMock).toHaveBeenLastCalledWith("select_database", {
       input: { connection_id: "local", database: 0 },
+    });
+  });
+
+  it("使用 snake_case 参数调用实例详情和数据库分析 command", async () => {
+    const invoke = vi.mocked(core.invoke);
+    invoke.mockResolvedValueOnce({ overview: null }).mockResolvedValueOnce({ progress: {} });
+
+    await getInstanceDetails("local");
+    await analyzeDatabase({
+      connection_id: "local",
+      pattern: "user:*",
+      delimiter: ":",
+      max_keys: 1000,
+    });
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "get_instance_details", {
+      connection_id: "local",
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, "analyze_database", {
+      input: {
+        connection_id: "local",
+        pattern: "user:*",
+        delimiter: ":",
+        max_keys: 1000,
+      },
     });
   });
 

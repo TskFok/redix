@@ -68,7 +68,9 @@ fn exposes_all_tauri_command_adapters() {
     let _ = connections::open_connection;
     let _ = connections::close_connection;
     let _ = database::get_instance_overview;
+    let _ = database::get_instance_details;
     let _ = database::get_database_overview;
+    let _ = database::analyze_database;
     let _ = database::select_database;
     let _ = observability::get_slow_logs;
     let _ = observability::clear_slow_logs;
