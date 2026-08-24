@@ -87,6 +87,12 @@ const localProfile = {
   username: null,
   database: 0,
   has_password: false,
+  tls: false,
+  verify_server_cert: true,
+  ca_certificate_name: null,
+  client_certificate_name: null,
+  has_ca_certificate: false,
+  has_client_certificate: false,
 };
 
 beforeEach(() => {

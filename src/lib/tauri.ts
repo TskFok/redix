@@ -10,6 +10,7 @@ import type {
   AppSettings,
   ConnectionInfo,
   ConnectionProfile,
+  ConnectionExportDocument,
   CreateKeyInput,
   CreateStreamConsumerGroupInput,
   DatabaseOverview,
@@ -29,6 +30,8 @@ import type {
   GetStreamPendingEntriesInput,
   IpcError,
   ImportKeysInput,
+  ImportConnectionsInput,
+  ImportConnectionsResult,
   InstanceOverview,
   InstanceDetails,
   KeyInfo,
@@ -103,6 +106,16 @@ export function saveConnection(
 
 export function deleteConnection(connectionId: string): Promise<void> {
   return call<void>("delete_connection", { connection_id: connectionId });
+}
+
+export function exportConnections(): Promise<ConnectionExportDocument> {
+  return call<ConnectionExportDocument>("export_connections");
+}
+
+export function importConnections(
+  input: ImportConnectionsInput,
+): Promise<ImportConnectionsResult> {
+  return call<ImportConnectionsResult>("import_connections", { input });
 }
 
 export function testConnection(input: SaveConnectionInput): Promise<ConnectionInfo> {

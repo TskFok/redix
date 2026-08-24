@@ -11,6 +11,8 @@ const {
   closeConnectionMock,
   deleteConnectionMock,
   testConnectionMock,
+  exportConnectionsMock,
+  importConnectionsMock,
   onOpenConnectionMock,
 } = vi.hoisted(() => ({
   listConnectionsMock: vi.fn(),
@@ -19,6 +21,8 @@ const {
   closeConnectionMock: vi.fn(),
   deleteConnectionMock: vi.fn(),
   testConnectionMock: vi.fn(),
+  exportConnectionsMock: vi.fn(),
+  importConnectionsMock: vi.fn(),
   onOpenConnectionMock: vi.fn(),
 }));
 
@@ -29,6 +33,8 @@ vi.mock("../../lib/tauri", () => ({
   closeConnection: closeConnectionMock,
   deleteConnection: deleteConnectionMock,
   testConnection: testConnectionMock,
+  exportConnections: exportConnectionsMock,
+  importConnections: importConnectionsMock,
 }));
 
 const localProfile: ConnectionProfile = {
@@ -39,7 +45,16 @@ const localProfile: ConnectionProfile = {
   username: null,
   database: 0,
   has_password: false,
+  tls: false,
+  verify_server_cert: true,
+  ca_certificate_name: null,
+  client_certificate_name: null,
+  has_ca_certificate: false,
+  has_client_certificate: false,
 };
+
+const testCertificatePem =
+  "-----BEGIN CERTIFICATE-----\ncertificate\n-----END CERTIFICATE-----";
 
 function fillStandaloneForm() {
   fireEvent.change(screen.getByLabelText("连接名称"), {
@@ -94,6 +109,11 @@ describe("Redis 连接管理页面", () => {
     const saveInput: SaveConnectionInput = {
       profile: localProfile,
       password: null,
+      ca_certificate: null,
+      client_certificate: null,
+      client_key: null,
+      clear_ca_certificate: false,
+      clear_client_certificate: false,
     };
     saveConnectionMock.mockImplementation(async (input: SaveConnectionInput) => {
       calls.push("save");
@@ -163,6 +183,36 @@ describe("Redis 连接管理页面", () => {
     expect(saveConnectionMock).toHaveBeenCalledWith({
       profile: securedProfile,
       password: null,
+      ca_certificate: null,
+      client_certificate: null,
+      client_key: null,
+      clear_ca_certificate: false,
+      clear_client_certificate: false,
+    });
+  });
+
+  it("保存 TLS 表单时发送校验开关和 CA 证书材料", async () => {
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm();
+    fillStandaloneForm();
+    fireEvent.click(screen.getByLabelText("启用 TLS"));
+    fireEvent.change(screen.getByLabelText("CA 证书"), {
+      target: { value: testCertificatePem },
+    });
+    fireEvent.change(screen.getByLabelText("CA 名称"), {
+      target: { value: "Root CA" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(saveConnectionMock).toHaveBeenCalled());
+    expect(saveConnectionMock.mock.calls[0][0]).toMatchObject({
+      profile: expect.objectContaining({
+        tls: true,
+        verify_server_cert: true,
+        ca_certificate_name: "Root CA",
+      }),
+      ca_certificate: testCertificatePem,
+      clear_ca_certificate: false,
     });
   });
 

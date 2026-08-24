@@ -15,11 +15,56 @@ export interface ConnectionProfile {
   username: string | null;
   database: number;
   has_password: boolean;
+  tls: boolean;
+  verify_server_cert: boolean;
+  ca_certificate_name: string | null;
+  client_certificate_name: string | null;
+  has_ca_certificate: boolean;
+  has_client_certificate: boolean;
 }
 
 export interface SaveConnectionInput {
   profile: ConnectionProfile;
   password: string | null;
+  ca_certificate: string | null;
+  client_certificate: string | null;
+  client_key: string | null;
+  clear_ca_certificate: boolean;
+  clear_client_certificate: boolean;
+}
+
+export interface ConnectionExportProfile {
+  name: string;
+  host: string;
+  port: number;
+  username: string | null;
+  database: number;
+  tls: boolean;
+  verify_server_cert: boolean;
+  ca_certificate_name: string | null;
+  client_certificate_name: string | null;
+}
+
+export interface ConnectionExportDocument {
+  version: number;
+  connections: ConnectionExportProfile[];
+}
+
+export interface ImportConnectionsInput {
+  content: string;
+}
+
+export interface ConnectionImportFailure {
+  index: number;
+  name: string | null;
+  code: string;
+  message: string;
+}
+
+export interface ImportConnectionsResult {
+  imported: ConnectionProfile[];
+  failed: ConnectionImportFailure[];
+  ignored_secret_fields: number;
 }
 
 export interface ConnectionInfo {

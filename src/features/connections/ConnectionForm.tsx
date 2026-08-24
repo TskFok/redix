@@ -51,6 +51,53 @@ function buildConnectionInput(
   }
 
   const password = values.password.length > 0 ? values.password : null;
+  const caCertificate = values.ca_certificate.trim() || null;
+  const clientCertificate = values.client_certificate.trim() || null;
+  const clientKey = values.client_key.trim() || null;
+  const caName = values.ca_certificate_name.trim() || null;
+  const clientCertificateName = values.client_certificate_name.trim() || null;
+
+  if (values.clear_ca_certificate && caCertificate) {
+    return { error: "请先清空 CA 证书内容，或取消清除操作。" };
+  }
+  if (caCertificate && !caName) {
+    return { error: "请输入 CA 证书名称。" };
+  }
+  if (
+    caCertificate &&
+    (!caCertificate.includes("-----BEGIN CERTIFICATE-----") ||
+      !caCertificate.includes("-----END CERTIFICATE-----"))
+  ) {
+    return { error: "CA 证书必须是 PEM 格式。" };
+  }
+
+  if (values.clear_client_certificate && (clientCertificate || clientKey)) {
+    return { error: "请先清空客户端证书和私钥内容，或取消清除操作。" };
+  }
+  if (Boolean(clientCertificate) !== Boolean(clientKey)) {
+    return { error: "客户端证书和私钥必须同时填写。" };
+  }
+  if (clientCertificate && !clientCertificateName) {
+    return { error: "请输入客户端证书名称。" };
+  }
+  if (
+    clientCertificate &&
+    (!clientCertificate.includes("-----BEGIN CERTIFICATE-----") ||
+      !clientCertificate.includes("-----END CERTIFICATE-----"))
+  ) {
+    return { error: "客户端证书必须是 PEM 格式。" };
+  }
+  if (
+    clientKey &&
+    ![
+      "-----BEGIN PRIVATE KEY-----",
+      "-----BEGIN RSA PRIVATE KEY-----",
+      "-----BEGIN EC PRIVATE KEY-----",
+    ].some((marker) => clientKey.includes(marker))
+  ) {
+    return { error: "客户端私钥必须是 PEM 格式。" };
+  }
+
   return {
     input: {
       profile: {
@@ -61,8 +108,25 @@ function buildConnectionInput(
         username: values.username.trim() || null,
         database,
         has_password: Boolean(password) || Boolean(initial?.has_password),
+        tls: values.tls,
+        verify_server_cert: values.verify_server_cert,
+        ca_certificate_name: values.clear_ca_certificate ? null : caName,
+        client_certificate_name: values.clear_client_certificate
+          ? null
+          : clientCertificateName,
+        has_ca_certificate:
+          Boolean(caCertificate) ||
+          Boolean(initial?.has_ca_certificate && !values.clear_ca_certificate),
+        has_client_certificate:
+          Boolean(clientCertificate && clientKey) ||
+          Boolean(initial?.has_client_certificate && !values.clear_client_certificate),
       },
       password,
+      ca_certificate: caCertificate,
+      client_certificate: clientCertificate,
+      client_key: clientKey,
+      clear_ca_certificate: values.clear_ca_certificate,
+      clear_client_certificate: values.clear_client_certificate,
     },
   };
 }
@@ -85,6 +149,12 @@ export function ConnectionForm({
   const [saving, setSaving] = useState(false);
 
   const updateValue = (field: keyof ConnectionFormValues, value: string) => {
+    setValues((current) => ({ ...current, [field]: value }));
+    setError(null);
+    setTestStatus(null);
+  };
+
+  const updateBoolean = (field: keyof ConnectionFormValues, value: boolean) => {
     setValues((current) => ({ ...current, [field]: value }));
     setError(null);
     setTestStatus(null);
@@ -258,6 +328,166 @@ export function ConnectionForm({
             />
           </label>
         </div>
+
+        <section className="connection-tls-panel" aria-labelledby="tls-panel-title">
+          <div className="connection-tls-heading">
+            <div>
+              <p className="eyebrow">传输安全</p>
+              <h3 id="tls-panel-title">TLS / 证书</h3>
+            </div>
+            <span className="panel-hint">host 同时作为 TLS SNI</span>
+          </div>
+
+          <label className="checkbox-field">
+            <input
+              type="checkbox"
+              aria-label="启用 TLS"
+              checked={values.tls}
+              onChange={(event) => updateBoolean("tls", event.target.checked)}
+              disabled={busy}
+            />
+            <span>启用 TLS（rediss）</span>
+          </label>
+
+          {values.tls || initial?.has_ca_certificate || initial?.has_client_certificate ? (
+            <div className="connection-tls-fields">
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  aria-label="验证服务端证书"
+                  checked={values.verify_server_cert}
+                  onChange={(event) =>
+                    updateBoolean("verify_server_cert", event.target.checked)
+                  }
+                  disabled={busy}
+                />
+                <span>验证服务端证书</span>
+              </label>
+              {!values.verify_server_cert ? (
+                <p className="form-help form-help-warning">
+                  已关闭证书校验，仅建议用于明确受控的开发环境。
+                </p>
+              ) : null}
+
+              <div className="form-grid">
+                <label className="field">
+                  <span>CA 名称</span>
+                  <input
+                    autoComplete="off"
+                    aria-label="CA 名称"
+                    value={values.ca_certificate_name}
+                    onChange={(event) =>
+                      updateValue("ca_certificate_name", event.target.value)
+                    }
+                    placeholder="例如：Redis Root CA"
+                    disabled={busy}
+                  />
+                </label>
+
+                <label className="field field-wide">
+                  <span>CA 证书</span>
+                  <textarea
+                    aria-label="CA 证书"
+                    value={values.ca_certificate}
+                    onChange={(event) =>
+                      updateValue("ca_certificate", event.target.value)
+                    }
+                    placeholder={
+                      initial?.has_ca_certificate
+                        ? "留空以保留现有 CA；正文不会回填"
+                        : "粘贴 -----BEGIN CERTIFICATE----- PEM"
+                    }
+                    rows={5}
+                    disabled={busy}
+                  />
+                </label>
+              </div>
+
+              {initial?.has_ca_certificate ? (
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    aria-label="清除已有 CA 证书"
+                    checked={values.clear_ca_certificate}
+                    onChange={(event) =>
+                      updateBoolean("clear_ca_certificate", event.target.checked)
+                    }
+                    disabled={busy}
+                  />
+                  <span>清除已有 CA 证书</span>
+                </label>
+              ) : null}
+
+              <div className="form-grid">
+                <label className="field">
+                  <span>客户端证书名称</span>
+                  <input
+                    autoComplete="off"
+                    aria-label="客户端证书名称"
+                    value={values.client_certificate_name}
+                    onChange={(event) =>
+                      updateValue("client_certificate_name", event.target.value)
+                    }
+                    placeholder="启用 mTLS 时填写"
+                    disabled={busy}
+                  />
+                </label>
+
+                <label className="field field-wide">
+                  <span>客户端证书</span>
+                  <textarea
+                    aria-label="客户端证书"
+                    value={values.client_certificate}
+                    onChange={(event) =>
+                      updateValue("client_certificate", event.target.value)
+                    }
+                    placeholder={
+                      initial?.has_client_certificate
+                        ? "留空以保留现有证书；正文不会回填"
+                        : "粘贴客户端证书 PEM"
+                    }
+                    rows={5}
+                    disabled={busy}
+                  />
+                </label>
+
+                <label className="field field-wide">
+                  <span>客户端私钥</span>
+                  <textarea
+                    aria-label="客户端私钥"
+                    value={values.client_key}
+                    onChange={(event) => updateValue("client_key", event.target.value)}
+                    placeholder={
+                      initial?.has_client_certificate
+                        ? "留空以保留现有私钥；正文不会回填"
+                        : "粘贴 PKCS#8 / RSA / EC 私钥 PEM"
+                    }
+                    rows={5}
+                    disabled={busy}
+                  />
+                </label>
+              </div>
+
+              {initial?.has_client_certificate ? (
+                <label className="checkbox-field">
+                  <input
+                    type="checkbox"
+                    aria-label="清除已有客户端证书"
+                    checked={values.clear_client_certificate}
+                    onChange={(event) =>
+                      updateBoolean("clear_client_certificate", event.target.checked)
+                    }
+                    disabled={busy}
+                  />
+                  <span>清除已有客户端证书和私钥</span>
+                </label>
+              ) : null}
+              <p className="form-help">
+                证书正文仅提交到本机安全存储，不会出现在连接配置 JSON 或导出文件中。
+              </p>
+            </div>
+          ) : null}
+        </section>
 
         {error ? (
           <p className="feedback feedback-error" role="alert">

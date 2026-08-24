@@ -11,6 +11,7 @@ import {
   deleteConnection,
   deleteKey,
   deleteStreamConsumer,
+  exportConnections,
   deleteStreamConsumerGroup,
   executeCommands,
   executeCommand,
@@ -29,6 +30,7 @@ import {
   analyzeDatabase,
   getAppSettings,
   importKeys,
+  importConnections,
   listQueryLibrary,
   listCommandHistory,
   listConnections,
@@ -65,10 +67,12 @@ import type {
   QueryLibraryItemInput,
   ConnectionInfo,
   ConnectionProfile,
+  ConnectionExportDocument,
   ExportedKey,
   KeyValue,
   RedisValue,
   SaveConnectionInput,
+  ImportConnectionsResult,
   SaveCommandHistoryInput,
   ScanPage,
   SlowLogConfig,
@@ -92,11 +96,22 @@ const profile: ConnectionProfile = {
   username: null,
   database: 0,
   has_password: false,
+  tls: false,
+  verify_server_cert: true,
+  ca_certificate_name: null,
+  client_certificate_name: null,
+  has_ca_certificate: false,
+  has_client_certificate: false,
 };
 
 const connectionInput: SaveConnectionInput = {
   profile,
   password: null,
+  ca_certificate: null,
+  client_certificate: null,
+  client_key: null,
+  clear_ca_certificate: false,
+  clear_client_certificate: false,
 };
 
 const stringValue: RedisValue = { String: { value: "value" } };
@@ -153,6 +168,24 @@ describe("Tauri IPC bridge", () => {
     await deleteConnection("local");
     expect(invokeMock).toHaveBeenLastCalledWith("delete_connection", {
       connection_id: "local",
+    });
+  });
+
+  it("为连接配置导入导出使用 typed IPC 合同", async () => {
+    const document: ConnectionExportDocument = { version: 1, connections: [] };
+    const result: ImportConnectionsResult = {
+      imported: [],
+      failed: [],
+      ignored_secret_fields: 0,
+    };
+    invokeMock.mockResolvedValueOnce(document).mockResolvedValueOnce(result);
+
+    await expect(exportConnections()).resolves.toEqual(document);
+    expect(invokeMock).toHaveBeenLastCalledWith("export_connections");
+
+    await expect(importConnections({ content: "{}" })).resolves.toEqual(result);
+    expect(invokeMock).toHaveBeenLastCalledWith("import_connections", {
+      input: { content: "{}" },
     });
   });
 

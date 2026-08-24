@@ -19,6 +19,15 @@ export interface ConnectionFormValues {
   username: string;
   database: string;
   password: string;
+  tls: boolean;
+  verify_server_cert: boolean;
+  ca_certificate_name: string;
+  ca_certificate: string;
+  client_certificate_name: string;
+  client_certificate: string;
+  client_key: string;
+  clear_ca_certificate: boolean;
+  clear_client_certificate: boolean;
 }
 
 export const initialConnectionPageState: ConnectionPageState = {
@@ -47,6 +56,15 @@ export function formValuesFromProfile(
     username: profile?.username ?? "",
     database: profile ? String(profile.database) : "0",
     password: "",
+    tls: profile?.tls ?? false,
+    verify_server_cert: profile?.verify_server_cert ?? true,
+    ca_certificate_name: profile?.ca_certificate_name ?? "",
+    ca_certificate: "",
+    client_certificate_name: profile?.client_certificate_name ?? "",
+    client_certificate: "",
+    client_key: "",
+    clear_ca_certificate: false,
+    clear_client_certificate: false,
   };
 }
 
