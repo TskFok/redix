@@ -11,6 +11,7 @@ import KeyEditor from "./KeyEditor";
 import type { KeyValue, RedisValue } from "../../lib/types";
 
 const {
+  acknowledgeStreamPendingEntriesMock,
   scanKeysMock,
   getKeyMock,
   setKeyMock,
@@ -22,7 +23,14 @@ const {
   getKeyInfoMock,
   importKeysMock,
   setKeyTtlMock,
+  createStreamConsumerGroupMock,
+  deleteStreamConsumerMock,
+  deleteStreamConsumerGroupMock,
+  getStreamConsumerGroupsMock,
+  getStreamConsumersMock,
+  getStreamPendingEntriesMock,
 } = vi.hoisted(() => ({
+  acknowledgeStreamPendingEntriesMock: vi.fn(),
   scanKeysMock: vi.fn(),
   getKeyMock: vi.fn(),
   setKeyMock: vi.fn(),
@@ -34,6 +42,12 @@ const {
   getKeyInfoMock: vi.fn(),
   importKeysMock: vi.fn(),
   setKeyTtlMock: vi.fn(),
+  createStreamConsumerGroupMock: vi.fn(),
+  deleteStreamConsumerMock: vi.fn(),
+  deleteStreamConsumerGroupMock: vi.fn(),
+  getStreamConsumerGroupsMock: vi.fn(),
+  getStreamConsumersMock: vi.fn(),
+  getStreamPendingEntriesMock: vi.fn(),
 }));
 
 vi.mock("../../lib/tauri", () => ({
@@ -48,6 +62,13 @@ vi.mock("../../lib/tauri", () => ({
   getKeyInfo: getKeyInfoMock,
   importKeys: importKeysMock,
   setKeyTtl: setKeyTtlMock,
+  acknowledgeStreamPendingEntries: acknowledgeStreamPendingEntriesMock,
+  createStreamConsumerGroup: createStreamConsumerGroupMock,
+  deleteStreamConsumer: deleteStreamConsumerMock,
+  deleteStreamConsumerGroup: deleteStreamConsumerGroupMock,
+  getStreamConsumerGroups: getStreamConsumerGroupsMock,
+  getStreamConsumers: getStreamConsumersMock,
+  getStreamPendingEntries: getStreamPendingEntriesMock,
 }));
 
 const stringSummary = {
@@ -103,6 +124,13 @@ describe("Redis Browser", () => {
       idle_seconds: 2,
     });
     setKeyTtlMock.mockResolvedValue(-1);
+    getStreamConsumerGroupsMock.mockResolvedValue([]);
+    getStreamConsumersMock.mockResolvedValue([]);
+    getStreamPendingEntriesMock.mockResolvedValue([]);
+    createStreamConsumerGroupMock.mockResolvedValue(undefined);
+    deleteStreamConsumerMock.mockResolvedValue(0);
+    deleteStreamConsumerGroupMock.mockResolvedValue(1);
+    acknowledgeStreamPendingEntriesMock.mockResolvedValue(0);
   });
 
   afterEach(() => {

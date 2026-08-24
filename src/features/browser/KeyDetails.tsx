@@ -11,6 +11,7 @@ import {
 import type { KeyInfo, KeyValue, RedisValue } from "../../lib/types";
 import { browserErrorMessage, keyTypeLabel } from "./browserState";
 import KeyEditor from "./KeyEditor";
+import StreamConsumerGroups from "./StreamConsumerGroups";
 
 interface KeyDetailsProps {
   connectionId: string;
@@ -332,6 +333,13 @@ export function KeyDetails({
         onDelete={handleDelete}
         onSetTtl={handleSetTtl}
       />
+      {detail.key_type.toLowerCase() === "stream" ? (
+        <StreamConsumerGroups
+          key={`${connectionId}:${detail.key}`}
+          connectionId={connectionId}
+          streamKey={detail.key}
+        />
+      ) : null}
     </section>
   );
 }
