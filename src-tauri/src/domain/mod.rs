@@ -1,3 +1,4 @@
+pub mod connection_transfer;
 pub mod database;
 pub mod database_analysis;
 pub mod key;
@@ -7,6 +8,7 @@ pub mod profile;
 pub mod stream;
 pub mod workbench;
 
+pub use connection_transfer::*;
 pub use database::*;
 pub use database_analysis::*;
 pub use key::*;
