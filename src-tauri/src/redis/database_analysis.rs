@@ -10,6 +10,8 @@ use crate::{
 
 use super::connection_manager::map_command_error;
 
+const METADATA_BATCH_SIZE: usize = 500;
+
 pub(crate) async fn load_instance_details(
     connection: &mut MultiplexedConnection,
 ) -> Result<InstanceDetails, AppError> {
@@ -58,13 +60,15 @@ pub(crate) async fn analyze_connection(
             .into_iter()
             .take(remaining as usize)
             .collect::<Vec<_>>();
-        let metadata = load_key_metadata(connection, &batch).await?;
-        for item in metadata {
-            if item.key_type.is_empty() {
-                continue;
+        for metadata_keys in metadata_key_batches(&batch) {
+            let metadata = load_key_metadata(connection, metadata_keys).await?;
+            for item in metadata {
+                if item.key_type.is_empty() {
+                    continue;
+                }
+                accumulator.process(item);
+                processed += 1;
             }
-            accumulator.process(item);
-            processed += 1;
         }
         if processed >= input.max_keys && next_cursor != 0 {
             return Ok(accumulator.finish(scanned, processed, true));
@@ -74,6 +78,10 @@ pub(crate) async fn analyze_connection(
             return Ok(accumulator.finish(scanned, processed, false));
         }
     }
+}
+
+fn metadata_key_batches(keys: &[String]) -> impl Iterator<Item = &[String]> {
+    keys.chunks(METADATA_BATCH_SIZE)
 }
 
 async fn load_key_metadata(
@@ -215,5 +223,24 @@ fn update_module_field(
         "name" => *name = ::redis::from_redis_value_ref::<String>(value).ok(),
         "ver" | "version" => *version = ::redis::from_redis_value_ref::<String>(value).ok(),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn splits_metadata_batches_at_five_hundred_keys() {
+        let keys = (0..501)
+            .map(|index| format!("analysis:{index}"))
+            .collect::<Vec<_>>();
+
+        let batches = metadata_key_batches(&keys).collect::<Vec<_>>();
+
+        assert_eq!(batches.len(), 2);
+        assert_eq!(batches[0].len(), 500);
+        assert_eq!(batches[1].len(), 1);
+        assert!(batches.iter().all(|batch| batch.len() <= 500));
     }
 }

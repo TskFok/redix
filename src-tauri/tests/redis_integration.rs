@@ -6,14 +6,14 @@ use std::{
 
 use redix_lib::{
     domain::{
-        AcknowledgeStreamPendingEntriesInput, ConnectionProfile, CreateKeyInput,
-        CreateStreamConsumerGroupInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
-        DeleteStreamConsumerInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
-        GetSlowLogsInput, GetStreamConsumerGroupsInput, GetStreamConsumersInput,
-        GetStreamPendingEntriesInput, HashEntry, ImportKeysInput, KeyInfoInput, KeyValue,
-        PublishPubSubInput, RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput,
-        SetKeyInput, SetKeyTtlInput, SortedSetEntry, StopPubSubInput, StreamEntry, StreamField,
-        UpdateSlowLogConfigInput,
+        AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput, ConnectionProfile,
+        CreateKeyInput, CreateStreamConsumerGroupInput, DeleteKeysInput,
+        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, ExecuteCommandsInput,
+        ExportKeysInput, ExportedKey, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
+        KeyInfoInput, KeyValue, PublishPubSubInput, RedisValue, RenameKeyInput, ScanKeysInput,
+        SelectDatabaseInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry, StopPubSubInput,
+        StreamEntry, StreamField, UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -687,6 +687,138 @@ async fn cleanup_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(
         Ok(())
     } else {
         Err(format!("cleanup failed: {}", failures.join(", ")))
+    }
+}
+
+struct AnalysisKeys {
+    pattern: String,
+    keys: Vec<String>,
+    namespace: String,
+}
+
+impl AnalysisKeys {
+    fn for_prefix(prefix: &str) -> Self {
+        let namespace = prefix
+            .split(':')
+            .next()
+            .expect("test prefix must include a namespace")
+            .to_owned();
+        let pattern = format!("{prefix}:analysis:*");
+        let keys = (0..501)
+            .map(|index| format!("{prefix}:analysis:item:{index}"))
+            .collect();
+        Self {
+            pattern,
+            keys,
+            namespace,
+        }
+    }
+}
+
+async fn cleanup_analysis_keys(service: &RedisService, keys: &AnalysisKeys) -> Result<(), String> {
+    let mut failures = Vec::new();
+    for batch in keys.keys.chunks(500) {
+        if let Err(error) = service
+            .delete_keys(DeleteKeysInput {
+                connection_id: "integration".into(),
+                keys: batch.to_vec(),
+            })
+            .await
+        {
+            failures.push(error.code());
+        }
+    }
+    if let Err(error) = service.close_connection("integration").await {
+        failures.push(error.code());
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("analysis cleanup failed: {}", failures.join(", ")))
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "设置 REDIX_TEST_REDIS_URL 后用 cargo test -- --ignored --nocapture 运行"]
+async fn analyzes_database_details_and_metadata_batches_when_redis_is_available() {
+    let url = std::env::var("REDIX_TEST_REDIS_URL")
+        .expect("请设置 REDIX_TEST_REDIS_URL 后运行 Redis 集成测试");
+    let (profile, password) = integration_profile(&url);
+    let secrets = TestSecrets::default();
+    if let Some(password) = password.as_deref() {
+        secrets.write("integration", password).unwrap();
+    }
+    let service = RedisService::new(
+        std::sync::Arc::new(TestProfiles {
+            profiles: vec![profile],
+        }),
+        std::sync::Arc::new(secrets),
+    );
+    let unique = TestKeys::unique();
+    let keys = AnalysisKeys::for_prefix(&unique.prefix);
+    service.open_connection("integration").await.unwrap();
+
+    let flow = async {
+        let details = service
+            .get_instance_details("integration")
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if details.overview.server_version.is_none() {
+            return Err("instance details did not include the Redis version".into());
+        }
+
+        for key in &keys.keys {
+            service
+                .create_key(CreateKeyInput {
+                    connection_id: "integration".into(),
+                    key: key.clone(),
+                    value: RedisValue::String {
+                        value: "analysis".into(),
+                    },
+                    ttl_ms: None,
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+        }
+
+        let report = service
+            .analyze_database(AnalyzeDatabaseInput {
+                connection_id: "integration".into(),
+                pattern: keys.pattern.clone(),
+                delimiter: ":".into(),
+                max_keys: 1_000,
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if report.pattern != keys.pattern
+            || report.progress.processed != 501
+            || report.total_keys.total != 501
+            || report.progress.truncated
+        {
+            return Err("database analysis did not report all matching keys".into());
+        }
+        if !report
+            .top_namespaces_by_keys
+            .iter()
+            .any(|namespace| namespace.namespace == keys.namespace && namespace.keys == 501)
+        {
+            return Err("database analysis did not aggregate the matching namespace".into());
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+    let cleanup = cleanup_analysis_keys(&service, &keys).await;
+
+    match (flow, cleanup) {
+        (Ok(()), Ok(())) => {}
+        (Err(flow), Ok(())) => panic!("database analysis integration flow failed: {flow}"),
+        (Ok(()), Err(cleanup)) => panic!("database analysis cleanup failed: {cleanup}"),
+        (Err(flow), Err(cleanup)) => {
+            panic!(
+                "database analysis integration flow failed: {flow}; cleanup also failed: {cleanup}"
+            )
+        }
     }
 }
 
