@@ -136,41 +136,24 @@ describe("DatabaseAnalysisPage", () => {
     await waitFor(() => expect(screen.queryByText("old:key")).not.toBeInTheDocument());
   });
 
-  it("新提交后忽略前一次分析响应", async () => {
-    let resolveFirst!: (value: DatabaseAnalysisReport) => void;
-    let resolveSecond!: (value: DatabaseAnalysisReport) => void;
-    analyzeDatabaseMock
-      .mockReturnValueOnce(
-        new Promise<DatabaseAnalysisReport>((resolve) => {
-          resolveFirst = resolve;
-        }),
-      )
-      .mockReturnValueOnce(
-        new Promise<DatabaseAnalysisReport>((resolve) => {
-          resolveSecond = resolve;
-        }),
-      );
+  it("加载期间禁用提交且只启动一次分析", async () => {
+    let resolveAnalysis!: (value: DatabaseAnalysisReport) => void;
+    analyzeDatabaseMock.mockReturnValueOnce(
+      new Promise<DatabaseAnalysisReport>((resolve) => {
+        resolveAnalysis = resolve;
+      }),
+    );
     render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
 
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-    resolveSecond({ ...report, top_keys_by_memory: [] });
-    await screen.findByText("总键数");
-    resolveFirst({
-      ...report,
-      top_keys_by_memory: [
-        {
-          key: "old:submission",
-          key_type: "string",
-          length: 1,
-          memory_bytes: 1,
-          ttl_seconds: -1,
-        },
-      ],
-    });
+    const submit = screen.getByRole("button", { name: "开始分析" });
+    fireEvent.click(submit);
+    await waitFor(() => expect(submit).toBeDisabled());
+    fireEvent.click(submit);
 
-    await waitFor(() =>
-      expect(screen.queryByText("old:submission")).not.toBeInTheDocument(),
-    );
+    expect(analyzeDatabaseMock).toHaveBeenCalledTimes(1);
+
+    resolveAnalysis(report);
+
+    await waitFor(() => expect(submit).toBeEnabled());
   });
 });

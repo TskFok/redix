@@ -374,3 +374,13 @@ Phase 11：本地 Redis Stream Consumer Group（已完成）
 - [ ] 后续模块编辑器：完整 RedisJSON、Search/Query、Vector Set、Array 与其他模块类型
 - [ ] 后续 Workbench 高级命令帮助、补全与结果可视化
 - **Status:** in_progress（Database Analysis/Instance 子批次已完成；TLS/SSH、拓扑、模块编辑器和 Workbench 高级能力仍未完成）
+
+### Database Analysis/Instance 最终集中修复波次（2026-08-24）
+
+- [x] 核验 5 个最终评审 finding 与现有实现的数据流和测试覆盖
+- [x] 按 TDD 修复 commandstats 显式读取、复制字段映射与 INFO 可选字段局部降级
+- [x] 按 TDD 修复 SCAN 最终页/非最终页上限语义、max_keys 上边界与删除竞态过滤
+- [x] 按 TDD 阻止 loading 期间重复提交，同时保留连接切换旧响应保护
+- [x] 运行 Rust domain/service/commands、前端页面、全量构建、非 Cloud、fmt、diff 验收
+- [x] 写入 final-fix-report.md，并创建一个简体中文修复提交
+- **Status:** complete

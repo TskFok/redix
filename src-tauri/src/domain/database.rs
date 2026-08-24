@@ -199,22 +199,22 @@ impl InstanceOverview {
         sections: &HashMap<String, HashMap<String, String>>,
         modules: Vec<ModuleSummary>,
     ) -> Result<Self, AppError> {
-        let max_memory_bytes = optional_metric(sections, "Memory", "maxmemory")?;
+        let max_memory_bytes = optional_metric(sections, "Memory", "maxmemory");
 
         Ok(Self {
             server_version: optional_text(sections, "Server", "redis_version"),
             redis_mode: optional_text(sections, "Server", "redis_mode"),
-            uptime_seconds: optional_metric(sections, "Server", "uptime_in_seconds")?,
-            connected_clients: optional_metric(sections, "Clients", "connected_clients")?,
-            used_memory_bytes: optional_metric(sections, "Memory", "used_memory")?,
+            uptime_seconds: optional_metric(sections, "Server", "uptime_in_seconds"),
+            connected_clients: optional_metric(sections, "Clients", "connected_clients"),
+            used_memory_bytes: optional_metric(sections, "Memory", "used_memory"),
             max_memory_bytes: max_memory_bytes.filter(|value| *value > 0),
             total_commands_processed: optional_metric(
                 sections,
                 "Stats",
                 "total_commands_processed",
-            )?,
-            keyspace_hits: optional_metric(sections, "Stats", "keyspace_hits")?,
-            keyspace_misses: optional_metric(sections, "Stats", "keyspace_misses")?,
+            ),
+            keyspace_hits: optional_metric(sections, "Stats", "keyspace_hits"),
+            keyspace_misses: optional_metric(sections, "Stats", "keyspace_misses"),
             role: optional_text(sections, "Replication", "role"),
             modules,
         })
@@ -226,8 +226,8 @@ impl InstanceDetails {
         sections: &HashMap<String, HashMap<String, String>>,
         modules: Vec<ModuleSummary>,
     ) -> Result<Self, AppError> {
-        let keyspace_hits = optional_metric(sections, "Stats", "keyspace_hits")?;
-        let keyspace_misses = optional_metric(sections, "Stats", "keyspace_misses")?;
+        let keyspace_hits = optional_metric(sections, "Stats", "keyspace_hits");
+        let keyspace_misses = optional_metric(sections, "Stats", "keyspace_misses");
         let hit_rate = match (keyspace_hits, keyspace_misses) {
             (Some(hits), Some(misses)) => hits
                 .checked_add(misses)
@@ -239,57 +239,54 @@ impl InstanceDetails {
         Ok(Self {
             overview: InstanceOverview::from_info_and_modules(sections, modules)?,
             clients: ClientDetails {
-                connected_clients: optional_metric(sections, "Clients", "connected_clients")?,
-                blocked_clients: optional_metric(sections, "Clients", "blocked_clients")?,
-                tracking_clients: optional_metric(sections, "Clients", "tracking_clients")?,
-                max_clients: optional_metric(sections, "Clients", "maxclients")?,
+                connected_clients: optional_metric(sections, "Clients", "connected_clients"),
+                blocked_clients: optional_metric(sections, "Clients", "blocked_clients"),
+                tracking_clients: optional_metric(sections, "Clients", "tracking_clients"),
+                max_clients: optional_metric(sections, "Clients", "maxclients"),
             },
             memory: MemoryDetails {
-                used_memory_bytes: optional_metric(sections, "Memory", "used_memory")?,
-                used_memory_peak_bytes: optional_metric(sections, "Memory", "used_memory_peak")?,
-                used_memory_rss_bytes: optional_metric(sections, "Memory", "used_memory_rss")?,
+                used_memory_bytes: optional_metric(sections, "Memory", "used_memory"),
+                used_memory_peak_bytes: optional_metric(sections, "Memory", "used_memory_peak"),
+                used_memory_rss_bytes: optional_metric(sections, "Memory", "used_memory_rss"),
                 mem_fragmentation_ratio: optional_float(
                     sections,
                     "Memory",
                     "mem_fragmentation_ratio",
-                )?,
-                allocator_active_bytes: optional_metric(sections, "Memory", "allocator_active")?,
-                allocator_resident_bytes: optional_metric(
-                    sections,
-                    "Memory",
-                    "allocator_resident",
-                )?,
+                ),
+                allocator_active_bytes: optional_metric(sections, "Memory", "allocator_active"),
+                allocator_resident_bytes: optional_metric(sections, "Memory", "allocator_resident"),
             },
             stats: StatsDetails {
                 instantaneous_ops_per_sec: optional_metric(
                     sections,
                     "Stats",
                     "instantaneous_ops_per_sec",
-                )?,
-                expired_keys: optional_metric(sections, "Stats", "expired_keys")?,
-                evicted_keys: optional_metric(sections, "Stats", "evicted_keys")?,
+                ),
+                expired_keys: optional_metric(sections, "Stats", "expired_keys"),
+                evicted_keys: optional_metric(sections, "Stats", "evicted_keys"),
                 hit_rate,
             },
             persistence: PersistenceDetails {
-                loading: optional_flag(sections, "Persistence", "loading")?,
-                rdb_last_save_time: optional_metric(sections, "Persistence", "rdb_last_save_time")?,
+                loading: optional_flag(sections, "Persistence", "loading"),
+                rdb_last_save_time: optional_metric(sections, "Persistence", "rdb_last_save_time"),
                 rdb_changes_since_last_save: optional_metric(
                     sections,
                     "Persistence",
                     "rdb_changes_since_last_save",
-                )?,
-                aof_enabled: optional_flag(sections, "Persistence", "aof_enabled")?,
+                ),
+                aof_enabled: optional_flag(sections, "Persistence", "aof_enabled"),
                 aof_rewrite_in_progress: optional_flag(
                     sections,
                     "Persistence",
                     "aof_rewrite_in_progress",
-                )?,
+                ),
             },
             replication: ReplicationDetails {
                 role: optional_text(sections, "Replication", "role"),
-                connected_replicas: optional_metric(sections, "Replication", "connected_replicas")?,
+                connected_replicas: optional_metric(sections, "Replication", "connected_slaves")
+                    .or_else(|| optional_metric(sections, "Replication", "connected_replicas")),
                 master_link_status: optional_text(sections, "Replication", "master_link_status"),
-                master_repl_offset: optional_metric(sections, "Replication", "master_repl_offset")?,
+                master_repl_offset: optional_metric(sections, "Replication", "master_repl_offset"),
             },
             command_stats: parse_command_stats(sections),
         })
@@ -351,41 +348,38 @@ fn optional_metric(
     sections: &HashMap<String, HashMap<String, String>>,
     section: &str,
     key: &str,
-) -> Result<Option<u64>, AppError> {
+) -> Option<u64> {
     sections
         .get(section)
         .and_then(|values| values.get(key))
-        .map(|value| parse_metric(value).map(Some))
-        .unwrap_or(Ok(None))
+        .and_then(|value| value.trim().parse::<u64>().ok())
 }
 
 fn optional_float(
     sections: &HashMap<String, HashMap<String, String>>,
     section: &str,
     key: &str,
-) -> Result<Option<f64>, AppError> {
+) -> Option<f64> {
     sections
         .get(section)
         .and_then(|values| values.get(key))
-        .map(|value| value.trim().parse::<f64>())
-        .transpose()
-        .map_err(|_| AppError::PersistenceFailed)
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|value| value.is_finite())
 }
 
 fn optional_flag(
     sections: &HashMap<String, HashMap<String, String>>,
     section: &str,
     key: &str,
-) -> Result<Option<bool>, AppError> {
+) -> Option<bool> {
     sections
         .get(section)
         .and_then(|values| values.get(key))
-        .map(|value| match value.trim() {
-            "0" => Ok(Some(false)),
-            "1" => Ok(Some(true)),
-            _ => Err(AppError::PersistenceFailed),
+        .and_then(|value| match value.trim() {
+            "0" => Some(false),
+            "1" => Some(true),
+            _ => None,
         })
-        .unwrap_or(Ok(None))
 }
 
 fn optional_field_metric(fields: &HashMap<&str, &str>, key: &str) -> Option<u64> {

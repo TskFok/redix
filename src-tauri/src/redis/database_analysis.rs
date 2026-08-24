@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ::redis::{aio::MultiplexedConnection, Value};
 
 use crate::{
@@ -19,7 +21,12 @@ pub(crate) async fn load_instance_details(
         .query_async::<String>(connection)
         .await
         .map_err(map_command_error)?;
-    let sections = parse_info_sections(&info);
+    let mut sections = parse_info_sections(&info);
+    let command_stats_info = command_stats_info_command()
+        .query_async::<String>(connection)
+        .await
+        .ok();
+    merge_command_stats_sections(&mut sections, command_stats_info.as_deref());
     let modules = ::redis::cmd("MODULE")
         .arg("LIST")
         .query_async::<Value>(connection)
@@ -27,6 +34,29 @@ pub(crate) async fn load_instance_details(
         .map(parse_module_list)
         .unwrap_or_default();
     InstanceDetails::from_info_and_modules(&sections, modules)
+}
+
+fn command_stats_info_command() -> ::redis::Cmd {
+    let mut command = ::redis::cmd("INFO");
+    command.arg("commandstats");
+    command
+}
+
+fn merge_command_stats_sections(
+    sections: &mut HashMap<String, HashMap<String, String>>,
+    command_stats_info: Option<&str>,
+) {
+    let Some(command_stats_info) = command_stats_info else {
+        return;
+    };
+    let mut explicit_sections = parse_info_sections(command_stats_info);
+    let Some(command_stats) = explicit_sections.remove("Commandstats") else {
+        return;
+    };
+    sections
+        .entry("Commandstats".to_string())
+        .or_default()
+        .extend(command_stats);
 }
 
 pub(crate) async fn analyze_connection(
@@ -54,30 +84,63 @@ pub(crate) async fn analyze_connection(
             .query_async(connection)
             .await
             .map_err(map_command_error)?;
-        scanned += keys.len() as u64;
-        let remaining = input.max_keys.saturating_sub(processed);
-        let batch = keys
-            .into_iter()
-            .take(remaining as usize)
-            .collect::<Vec<_>>();
-        for metadata_keys in metadata_key_batches(&batch) {
+        let page_plan = scan_page_plan(scanned, keys.len(), next_cursor, input.max_keys);
+        scanned = scanned.saturating_add(u64::try_from(keys.len()).unwrap_or(u64::MAX));
+        let batch = &keys[..page_plan.process_count];
+        for metadata_keys in metadata_key_batches(batch) {
             let metadata = load_key_metadata(connection, metadata_keys).await?;
-            for item in metadata {
-                if item.key_type.is_empty() {
-                    continue;
-                }
-                accumulator.process(item);
-                processed += 1;
-            }
+            processed = processed.saturating_add(accumulate_metadata(&mut accumulator, metadata));
         }
-        if processed >= input.max_keys && next_cursor != 0 {
+        if page_plan.truncated {
             return Ok(accumulator.finish(scanned, processed, true));
         }
-        cursor = next_cursor;
-        if cursor == 0 {
+        if next_cursor == 0 {
             return Ok(accumulator.finish(scanned, processed, false));
         }
+        cursor = next_cursor;
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScanPagePlan {
+    process_count: usize,
+    truncated: bool,
+}
+
+fn scan_page_plan(
+    scanned_before_page: u64,
+    page_key_count: usize,
+    next_cursor: u64,
+    max_keys: u64,
+) -> ScanPagePlan {
+    if next_cursor == 0 {
+        return ScanPagePlan {
+            process_count: page_key_count,
+            truncated: false,
+        };
+    }
+
+    let page_key_count_u64 = u64::try_from(page_key_count).unwrap_or(u64::MAX);
+    let remaining = max_keys.saturating_sub(scanned_before_page);
+    ScanPagePlan {
+        process_count: page_key_count.min(usize::try_from(remaining).unwrap_or(usize::MAX)),
+        truncated: scanned_before_page.saturating_add(page_key_count_u64) >= max_keys,
+    }
+}
+
+fn accumulate_metadata(
+    accumulator: &mut AnalysisAccumulator,
+    metadata: Vec<AnalysisKeyMetadata>,
+) -> u64 {
+    let mut processed = 0_u64;
+    for item in metadata {
+        if item.key_type.is_empty() || item.key_type == "none" || item.ttl_seconds == -2 {
+            continue;
+        }
+        accumulator.process(item);
+        processed = processed.saturating_add(1);
+    }
+    processed
 }
 
 fn metadata_key_batches(keys: &[String]) -> impl Iterator<Item = &[String]> {
@@ -229,6 +292,93 @@ fn update_module_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builds_explicit_commandstats_info_command() {
+        assert_eq!(
+            command_stats_info_command().get_packed_command(),
+            b"*2\r\n$4\r\nINFO\r\n$12\r\ncommandstats\r\n".to_vec()
+        );
+    }
+
+    #[test]
+    fn merges_explicit_commandstats_without_losing_default_info() {
+        let mut sections = parse_info_sections("# Server\r\nredis_version:7.2.5\r\n");
+
+        merge_command_stats_sections(
+            &mut sections,
+            Some(
+                "# Commandstats\r\ncmdstat_get:calls=4,usec=20,usec_per_call=5.0,rejected_calls=0,failed_calls=1\r\n",
+            ),
+        );
+
+        let details = InstanceDetails::from_info_and_modules(&sections, vec![]).unwrap();
+        assert_eq!(details.overview.server_version.as_deref(), Some("7.2.5"));
+        assert_eq!(details.command_stats.len(), 1);
+        assert_eq!(details.command_stats[0].command, "GET");
+
+        merge_command_stats_sections(&mut sections, None);
+        assert_eq!(sections["Server"]["redis_version"], "7.2.5");
+        assert_eq!(sections["Commandstats"].len(), 1);
+    }
+
+    #[test]
+    fn final_cursor_zero_page_is_processed_in_full() {
+        let plan = scan_page_plan(900, 250, 0, 1_000);
+
+        assert_eq!(plan.process_count, 250);
+        assert!(!plan.truncated);
+    }
+
+    #[test]
+    fn nonzero_cursor_page_stops_at_encountered_key_limit() {
+        let plan = scan_page_plan(900, 250, 42, 1_000);
+
+        assert_eq!(plan.process_count, 100);
+        assert!(plan.truncated);
+    }
+
+    #[test]
+    fn deleted_scan_keys_are_not_processed_or_aggregated() {
+        let mut accumulator = AnalysisAccumulator::new(0, "*".into(), ":".into(), 1_000);
+        let processed = accumulate_metadata(
+            &mut accumulator,
+            vec![
+                AnalysisKeyMetadata {
+                    key: "deleted:type".into(),
+                    key_type: "none".into(),
+                    length: None,
+                    memory_bytes: Some(64),
+                    ttl_seconds: -1,
+                },
+                AnalysisKeyMetadata {
+                    key: "deleted:ttl".into(),
+                    key_type: "string".into(),
+                    length: Some(3),
+                    memory_bytes: Some(64),
+                    ttl_seconds: -2,
+                },
+                AnalysisKeyMetadata {
+                    key: "present:nil-metadata".into(),
+                    key_type: "string".into(),
+                    length: None,
+                    memory_bytes: None,
+                    ttl_seconds: -1,
+                },
+            ],
+        );
+        let report = accumulator.finish(3, processed, false);
+
+        assert_eq!(processed, 1);
+        assert_eq!(report.progress.scanned, 3);
+        assert_eq!(report.progress.processed, 1);
+        assert_eq!(report.total_keys.total, 1);
+        assert_eq!(report.total_keys.types[0].r#type, "string");
+        assert_eq!(report.total_keys.types[0].total, 1);
+        assert_eq!(report.total_memory.observed, 0);
+        assert_eq!(report.expiration_groups[0].label, "No Expiry");
+        assert_eq!(report.expiration_groups[0].keys, 1);
+    }
 
     #[test]
     fn splits_metadata_batches_at_five_hundred_keys() {

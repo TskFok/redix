@@ -336,3 +336,17 @@
 - 清理只对测试拥有的唯一键使用分批 `DEL`（500 + 1），逐批确认实际删除数匹配；没有使用 `KEYS`，即使分析失败也保留清理分支。
 - `REDIX_TEST_REDIS_URL` 在本次环境未配置，故没有运行 ignored 外部 Redis 流程，也未误报真实 Redis 成功；普通 Rust 回归确认该 ignored 用例可编译，5 个外部集成项继续默认 ignored。
 - 全量检查通过：前端 14 文件/118 测试、生产构建、非 Cloud 检查、Rust 42+5+5+21+15 普通测试、格式检查和 diff 检查。静态扫描仅命中 `scripts/check-non-cloud-scope*.mjs` 内用于拒绝 Azure Managed Redis 的规则文本，不是生产入口。
+
+### Task 17 最终全分支评审修复核对（2026-08-24）
+
+- 最终评审的 5 个 Important finding 与已批准 spec 一致，均需在本次集中修复：显式读取 commandstats/复制字段、INFO 可选字段逐项降级、SCAN 最终页与非最终页上限、删除竞态过滤、loading 重复提交。
+- SCAN ruling 固定为：`next_cursor == 0` 时完整处理 Redis 已返回的最终页并报告 `truncated=false`；`next_cursor != 0` 时按“已遇到/扫描的键数”限制继续处理，达到上限即只处理剩余额度并报告 `truncated=true`。
+- 删除竞态键仍计入 `scanned`，但 `TYPE none` 或 `TTL -2` 不进入 `processed`、类型/命名空间/Top Keys/过期聚合；普通 metadata 的单字段 nil 仍按既有约定计入。
+- 本轮不扩展到 Cloud、SQL、KEYS、拓扑、TLS/SSH、模块编辑器或后台取消；真实 Redis 流程继续 env-gated 且默认 ignored。
+- 根因核验：`load_instance_details` 当前只执行裸 `INFO`，因此 default sections 下 `Commandstats` 不可靠；`connected_replicas` 当前只读取非标准 `connected_replicas`，没有标准 `connected_slaves` 主路径。
+- 根因核验：`InstanceOverview::from_info_and_modules` 和 `InstanceDetails::from_info_and_modules` 对 optional 数值/浮点/布尔 parser 广泛使用 `?`，任一非法值会把整份只读详情提升为 `PersistenceFailed`；`parse_keyspace_line` 另走严格 `parse_metric`，可在局部降级改造后继续保持严格。
+- 根因核验：`analyze_connection` 以成功 `processed` 而非已遇到键数计算 remaining，并在判断 `next_cursor == 0` 前截断当前页；metadata 缺失会继续超过性能上限，最终页也会静默丢键。
+- 根因核验：service 只跳过空 `key_type`，Redis 删除竞态返回的 `TYPE none` 或 `TTL -2` 会进入 processed 和聚合器；聚合器本身虽不把 -2 放入过期组，仍错误计入总键数/类型。
+- 根因核验：`DatabaseAnalysisPage.handleSubmit` 没有 loading early-return，按钮没有 disabled；现有“新提交后忽略前一次响应”测试明确触发了两次 IPC，需要替换为 loading 期间只调用一次，并保留连接切换 token 测试。
+- 最终实现核对：生产路径已显式发送 `INFO commandstats` 并可选降级；INFO optional parser 逐字段返回 `None`；SCAN 页计划以 scanned 限制非最终页并完整处理 cursor-zero 最终页；删除竞态在 accumulator 前过滤；loading 阶段只允许一个 IPC。
+- 完整矩阵通过，`REDIX_TEST_REDIS_URL` 未配置，因此 5 个真实 Redis 流程继续 ignored；详细证据见 `.superpowers/sdd/2026-08-24-database-analysis-instance-details/final-fix-report.md`。

@@ -282,3 +282,18 @@
 - 验证：`npm run test:frontend` 为 14 文件/118 测试通过；`npm run build` 通过；`npm run check:non-cloud` 通过；`cargo test --manifest-path src-tauri/Cargo.toml` 为 42 lib、5 commands、5 database analysis、21 domain、15 persistence 通过，5 Redis integration ignored；`cargo fmt --check` 和 `git diff --check` 通过。
 - `REDIX_TEST_REDIS_URL` 未配置，因此没有执行 ignored 的真实 Redis 命令；未运行包含 `SLOWLOG RESET` 的既有破坏性 ignored 测试。静态范围扫描只命中 `scripts/check-non-cloud-scope*.mjs` 的 Azure 规则文本，未发现生产 Cloud/SQL/`KEYS` 入口。
 - 提交：本任务提交信息为 `完成数据库分析与实例详情验证`；精确提交标识记录于 Task 7 交付报告。
+
+## Session: 2026-08-24 — Task 17 最终集中修复波次
+
+- **Status:** in_progress
+- 已核对当前 `main`、干净工作区和指定 HEAD `fc47cd57eba7d2bd9227e845dd5a399f0e0398c8`，不创建分支/工作树，不派生代理。
+- 已完整读取设计、实现计划和最终评审账本；5 个 finding 均与 spec/ruling 一致，无需扩大范围。
+- 执行顺序：先补 RED 测试并确认预期失败，再分别修复 INFO、SCAN/删除竞态和前端 loading；最后执行用户指定全量矩阵、写 final-fix-report.md 并创建一个中文提交。
+- `REDIX_TEST_REDIS_URL` 只在最终验收时检查；未配置则不运行默认 ignored 的真实 Redis 流程。
+- 已完成第一轮生产数据流核验并定位 5 条 finding 的直接根因；尚未修改任何生产代码。
+- TDD RED 已确认：Redis helper 单测因 `command_stats_info_command`、section 合并、SCAN 页计划和 metadata 过滤 helper 缺失而编译失败；领域测试显示 `connected_slaves` 得到 `None` 且非法 optional INFO 导致 `PersistenceFailed`；前端测试显示 loading 时提交按钮仍可用。
+- TDD GREEN：数据库分析领域/service 7/7、既有 domain 21/21、Redis helper 6/6、Database Analysis 页面 5/5 通过；生产修复已完成，进入完整验收与报告阶段。
+- **Status:** complete
+- 完整验收：Rust 47 lib + 5 commands + 7 database analysis + 21 domain + 15 persistence 通过，5 Redis integration ignored；前端 14 文件/118 测试、production build、non-cloud、cargo fmt/check 和 git diff check 通过。
+- `REDIX_TEST_REDIS_URL` 未配置，未运行真实 Redis；既有 dead-code warning 与 jsdom navigation 提示均未造成失败。
+- 详细报告已写入 `.superpowers/sdd/2026-08-24-database-analysis-instance-details/final-fix-report.md`；准备创建单个中文修复提交。

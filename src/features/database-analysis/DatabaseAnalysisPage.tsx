@@ -265,6 +265,10 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
   }, [connectionId]);
 
   const handleSubmit = () => {
+    if (state.loading) {
+      return;
+    }
+
     const error = validateInput(state.input);
     if (error) {
       setState((current) => ({ ...current, error }));
@@ -310,7 +314,12 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
             <h3>分析参数</h3>
             <p className="database-current">连接：{connectionId} · 数据库 {activeDatabase}</p>
           </div>
-          <button type="button" className="button button-primary" onClick={handleSubmit}>
+          <button
+            type="button"
+            className="button button-primary"
+            disabled={state.loading}
+            onClick={handleSubmit}
+          >
             开始分析
           </button>
         </div>

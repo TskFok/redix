@@ -85,6 +85,12 @@ fn validates_analysis_input_limits() {
     };
     assert_eq!(input.validate(), Ok(()));
 
+    input.max_keys = 1_000_000;
+    assert_eq!(input.validate(), Ok(()));
+
+    input.max_keys = 1_000_001;
+    assert_eq!(input.validate().unwrap_err().code(), "INVALID_INPUT");
+
     input.max_keys = 999;
     assert_eq!(input.validate().unwrap_err().code(), "INVALID_INPUT");
     input.max_keys = 100_000;
@@ -109,18 +115,12 @@ fn aggregates_types_namespaces_top_keys_memory_coverage_and_ttl_groups() {
         memory_bytes: Some(256),
         ttl_seconds: 120,
     });
-    accumulator.process(AnalysisKeyMetadata {
-        key: "no-namespace".into(),
-        key_type: "stream".into(),
-        length: None,
-        memory_bytes: None,
-        ttl_seconds: -2,
-    });
-
-    let report = accumulator.finish(3, 3, false);
+    let report = accumulator.finish(3, 2, false);
     assert_eq!(report.database, 0);
-    assert_eq!(report.total_keys.total, 3);
-    assert_eq!(report.total_keys.observed, 3);
+    assert_eq!(report.progress.scanned, 3);
+    assert_eq!(report.progress.processed, 2);
+    assert_eq!(report.total_keys.total, 2);
+    assert_eq!(report.total_keys.observed, 2);
     assert_eq!(report.total_memory.total, 384);
     assert_eq!(report.total_memory.observed, 2);
     assert_eq!(report.top_namespaces_by_keys[0].namespace, "user");
@@ -165,6 +165,93 @@ fn parses_commandstats_and_optional_instance_metrics_without_raw_text() {
     assert_eq!(details.overview.server_version.as_deref(), Some("7.2.5"));
     assert_eq!(details.clients.blocked_clients, Some(1));
     assert_eq!(parse_command_stats(&sections)[0].command, "GET");
+}
+
+#[test]
+fn maps_standard_connected_slaves_to_connected_replicas() {
+    let sections = HashMap::from([(
+        "Replication".into(),
+        HashMap::from([("connected_slaves".into(), "2".into())]),
+    )]);
+
+    let details = InstanceDetails::from_info_and_modules(&sections, vec![]).unwrap();
+
+    assert_eq!(details.replication.connected_replicas, Some(2));
+}
+
+#[test]
+fn malformed_optional_info_fields_degrade_independently() {
+    let sections = HashMap::from([
+        (
+            "Server".into(),
+            HashMap::from([
+                ("redis_version".into(), "7.2.5".into()),
+                ("uptime_in_seconds".into(), "not-a-number".into()),
+            ]),
+        ),
+        (
+            "Clients".into(),
+            HashMap::from([
+                ("connected_clients".into(), "invalid".into()),
+                ("blocked_clients".into(), "1".into()),
+            ]),
+        ),
+        (
+            "Memory".into(),
+            HashMap::from([
+                ("used_memory".into(), "invalid".into()),
+                ("used_memory_peak".into(), "2048".into()),
+                ("mem_fragmentation_ratio".into(), "NaN".into()),
+            ]),
+        ),
+        (
+            "Stats".into(),
+            HashMap::from([
+                ("total_commands_processed".into(), "invalid".into()),
+                ("keyspace_hits".into(), "invalid".into()),
+                ("keyspace_misses".into(), "2".into()),
+                ("instantaneous_ops_per_sec".into(), "invalid".into()),
+                ("expired_keys".into(), "4".into()),
+            ]),
+        ),
+        (
+            "Persistence".into(),
+            HashMap::from([
+                ("loading".into(), "invalid".into()),
+                ("rdb_last_save_time".into(), "invalid".into()),
+                ("aof_enabled".into(), "1".into()),
+            ]),
+        ),
+        (
+            "Replication".into(),
+            HashMap::from([
+                ("role".into(), "master".into()),
+                ("connected_slaves".into(), "3".into()),
+                ("master_repl_offset".into(), "invalid".into()),
+            ]),
+        ),
+    ]);
+
+    let details = InstanceDetails::from_info_and_modules(&sections, vec![]).unwrap();
+
+    assert_eq!(details.overview.server_version.as_deref(), Some("7.2.5"));
+    assert_eq!(details.overview.uptime_seconds, None);
+    assert_eq!(details.overview.connected_clients, None);
+    assert_eq!(details.overview.used_memory_bytes, None);
+    assert_eq!(details.overview.total_commands_processed, None);
+    assert_eq!(details.clients.blocked_clients, Some(1));
+    assert_eq!(details.memory.used_memory_bytes, None);
+    assert_eq!(details.memory.used_memory_peak_bytes, Some(2048));
+    assert_eq!(details.memory.mem_fragmentation_ratio, None);
+    assert_eq!(details.stats.instantaneous_ops_per_sec, None);
+    assert_eq!(details.stats.expired_keys, Some(4));
+    assert_eq!(details.stats.hit_rate, None);
+    assert_eq!(details.persistence.loading, None);
+    assert_eq!(details.persistence.rdb_last_save_time, None);
+    assert_eq!(details.persistence.aof_enabled, Some(true));
+    assert_eq!(details.replication.role.as_deref(), Some("master"));
+    assert_eq!(details.replication.connected_replicas, Some(3));
+    assert_eq!(details.replication.master_repl_offset, None);
 }
 
 #[test]
