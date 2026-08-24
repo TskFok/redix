@@ -23,6 +23,70 @@ pub struct ModuleSummary {
     pub version: Option<String>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct InstanceDetails {
+    pub overview: InstanceOverview,
+    pub clients: ClientDetails,
+    pub memory: MemoryDetails,
+    pub stats: StatsDetails,
+    pub persistence: PersistenceDetails,
+    pub replication: ReplicationDetails,
+    pub command_stats: Vec<CommandStat>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ClientDetails {
+    pub connected_clients: Option<u64>,
+    pub blocked_clients: Option<u64>,
+    pub tracking_clients: Option<u64>,
+    pub max_clients: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct MemoryDetails {
+    pub used_memory_bytes: Option<u64>,
+    pub used_memory_peak_bytes: Option<u64>,
+    pub used_memory_rss_bytes: Option<u64>,
+    pub mem_fragmentation_ratio: Option<f64>,
+    pub allocator_active_bytes: Option<u64>,
+    pub allocator_resident_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct StatsDetails {
+    pub instantaneous_ops_per_sec: Option<u64>,
+    pub expired_keys: Option<u64>,
+    pub evicted_keys: Option<u64>,
+    pub hit_rate: Option<f64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PersistenceDetails {
+    pub loading: Option<bool>,
+    pub rdb_last_save_time: Option<u64>,
+    pub rdb_changes_since_last_save: Option<u64>,
+    pub aof_enabled: Option<bool>,
+    pub aof_rewrite_in_progress: Option<bool>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ReplicationDetails {
+    pub role: Option<String>,
+    pub connected_replicas: Option<u64>,
+    pub master_link_status: Option<String>,
+    pub master_repl_offset: Option<u64>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct CommandStat {
+    pub command: String,
+    pub calls: Option<u64>,
+    pub usec: Option<u64>,
+    pub usec_per_call: Option<f64>,
+    pub rejected_calls: Option<u64>,
+    pub failed_calls: Option<u64>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DatabaseOverview {
     pub database: u8,
@@ -157,6 +221,118 @@ impl InstanceOverview {
     }
 }
 
+impl InstanceDetails {
+    pub fn from_info_and_modules(
+        sections: &HashMap<String, HashMap<String, String>>,
+        modules: Vec<ModuleSummary>,
+    ) -> Result<Self, AppError> {
+        let keyspace_hits = optional_metric(sections, "Stats", "keyspace_hits")?;
+        let keyspace_misses = optional_metric(sections, "Stats", "keyspace_misses")?;
+        let hit_rate = match (keyspace_hits, keyspace_misses) {
+            (Some(hits), Some(misses)) if hits + misses > 0 => {
+                Some(hits as f64 / (hits + misses) as f64)
+            }
+            _ => None,
+        };
+
+        Ok(Self {
+            overview: InstanceOverview::from_info_and_modules(sections, modules)?,
+            clients: ClientDetails {
+                connected_clients: optional_metric(sections, "Clients", "connected_clients")?,
+                blocked_clients: optional_metric(sections, "Clients", "blocked_clients")?,
+                tracking_clients: optional_metric(sections, "Clients", "tracking_clients")?,
+                max_clients: optional_metric(sections, "Clients", "maxclients")?,
+            },
+            memory: MemoryDetails {
+                used_memory_bytes: optional_metric(sections, "Memory", "used_memory")?,
+                used_memory_peak_bytes: optional_metric(sections, "Memory", "used_memory_peak")?,
+                used_memory_rss_bytes: optional_metric(sections, "Memory", "used_memory_rss")?,
+                mem_fragmentation_ratio: optional_float(
+                    sections,
+                    "Memory",
+                    "mem_fragmentation_ratio",
+                )?,
+                allocator_active_bytes: optional_metric(sections, "Memory", "allocator_active")?,
+                allocator_resident_bytes: optional_metric(
+                    sections,
+                    "Memory",
+                    "allocator_resident",
+                )?,
+            },
+            stats: StatsDetails {
+                instantaneous_ops_per_sec: optional_metric(
+                    sections,
+                    "Stats",
+                    "instantaneous_ops_per_sec",
+                )?,
+                expired_keys: optional_metric(sections, "Stats", "expired_keys")?,
+                evicted_keys: optional_metric(sections, "Stats", "evicted_keys")?,
+                hit_rate,
+            },
+            persistence: PersistenceDetails {
+                loading: optional_flag(sections, "Persistence", "loading")?,
+                rdb_last_save_time: optional_metric(sections, "Persistence", "rdb_last_save_time")?,
+                rdb_changes_since_last_save: optional_metric(
+                    sections,
+                    "Persistence",
+                    "rdb_changes_since_last_save",
+                )?,
+                aof_enabled: optional_flag(sections, "Persistence", "aof_enabled")?,
+                aof_rewrite_in_progress: optional_flag(
+                    sections,
+                    "Persistence",
+                    "aof_rewrite_in_progress",
+                )?,
+            },
+            replication: ReplicationDetails {
+                role: optional_text(sections, "Replication", "role"),
+                connected_replicas: optional_metric(sections, "Replication", "connected_replicas")?,
+                master_link_status: optional_text(sections, "Replication", "master_link_status"),
+                master_repl_offset: optional_metric(sections, "Replication", "master_repl_offset")?,
+            },
+            command_stats: parse_command_stats(sections),
+        })
+    }
+}
+
+pub fn parse_command_stats(
+    sections: &HashMap<String, HashMap<String, String>>,
+) -> Vec<CommandStat> {
+    let Some(command_stats) = sections.get("Commandstats") else {
+        return Vec::new();
+    };
+
+    let mut stats = command_stats
+        .iter()
+        .filter_map(|(key, value)| parse_command_stat(key, value))
+        .collect::<Vec<_>>();
+    stats.sort_by(|left, right| left.command.cmp(&right.command));
+    stats
+}
+
+fn parse_command_stat(key: &str, value: &str) -> Option<CommandStat> {
+    let command = key.strip_prefix("cmdstat_")?;
+    if command.is_empty() || !command.is_ascii() {
+        return None;
+    }
+
+    let fields = value
+        .split(',')
+        .map(str::trim)
+        .filter_map(|item| item.split_once('='))
+        .collect::<HashMap<_, _>>();
+    let calls = fields.get("calls")?.trim().parse().ok()?;
+
+    Some(CommandStat {
+        command: command.to_ascii_uppercase(),
+        calls: Some(calls),
+        usec: optional_field_metric(&fields, "usec"),
+        usec_per_call: optional_field_float(&fields, "usec_per_call"),
+        rejected_calls: optional_field_metric(&fields, "rejected_calls"),
+        failed_calls: optional_field_metric(&fields, "failed_calls"),
+    })
+}
+
 fn optional_text(
     sections: &HashMap<String, HashMap<String, String>>,
     section: &str,
@@ -180,6 +356,43 @@ fn optional_metric(
         .and_then(|values| values.get(key))
         .map(|value| parse_metric(value).map(Some))
         .unwrap_or(Ok(None))
+}
+
+fn optional_float(
+    sections: &HashMap<String, HashMap<String, String>>,
+    section: &str,
+    key: &str,
+) -> Result<Option<f64>, AppError> {
+    sections
+        .get(section)
+        .and_then(|values| values.get(key))
+        .map(|value| value.trim().parse::<f64>())
+        .transpose()
+        .map_err(|_| AppError::PersistenceFailed)
+}
+
+fn optional_flag(
+    sections: &HashMap<String, HashMap<String, String>>,
+    section: &str,
+    key: &str,
+) -> Result<Option<bool>, AppError> {
+    sections
+        .get(section)
+        .and_then(|values| values.get(key))
+        .map(|value| match value.trim() {
+            "0" => Ok(Some(false)),
+            "1" => Ok(Some(true)),
+            _ => Err(AppError::PersistenceFailed),
+        })
+        .unwrap_or(Ok(None))
+}
+
+fn optional_field_metric(fields: &HashMap<&str, &str>, key: &str) -> Option<u64> {
+    fields.get(key)?.trim().parse().ok()
+}
+
+fn optional_field_float(fields: &HashMap<&str, &str>, key: &str) -> Option<f64> {
+    fields.get(key)?.trim().parse().ok()
 }
 
 fn parse_metric(value: &str) -> Result<u64, AppError> {
