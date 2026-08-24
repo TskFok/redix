@@ -1,7 +1,192 @@
+use std::{
+    collections::HashMap,
+    sync::Mutex,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use futures_util::StreamExt;
+use tauri::Emitter;
+use tokio::task::JoinHandle;
+
 use crate::{
-    domain::{SlowLogConfig, SlowLogEntry},
+    domain::{
+        PubSubMessageEvent, PubSubSession, PubSubStatusEvent, SlowLogConfig, SlowLogEntry,
+        StartPubSubInput, StopPubSubInput,
+    },
     error::AppError,
 };
+
+pub const PUBSUB_MESSAGE_EVENT: &str = "redix://pubsub/message";
+pub const PUBSUB_STATUS_EVENT: &str = "redix://pubsub/status";
+
+struct PubSubTask {
+    connection_id: String,
+    session_id: String,
+    app: tauri::AppHandle,
+    handle: JoinHandle<()>,
+}
+
+pub struct PubSubManager {
+    tasks: Mutex<HashMap<String, PubSubTask>>,
+}
+
+impl Default for PubSubManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl PubSubManager {
+    pub fn new() -> Self {
+        Self {
+            tasks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub async fn start(
+        &self,
+        app: tauri::AppHandle,
+        client: &::redis::Client,
+        input: StartPubSubInput,
+    ) -> Result<PubSubSession, AppError> {
+        input.validate()?;
+        let topics = input.normalized_topics();
+        let mut pubsub = client.get_async_pubsub().await.map_err(map_pubsub_error)?;
+
+        for topic in &topics {
+            if topic.pattern {
+                pubsub
+                    .psubscribe(topic.name.as_str())
+                    .await
+                    .map_err(map_pubsub_error)?;
+            } else {
+                pubsub
+                    .subscribe(topic.name.as_str())
+                    .await
+                    .map_err(map_pubsub_error)?;
+            }
+        }
+
+        self.cancel_connection(&input.connection_id);
+
+        let connection_id = input.connection_id.clone();
+        let session_id = input.session_id.clone();
+        let task_connection_id = connection_id.clone();
+        let task_session_id = session_id.clone();
+        let task_app = app.clone();
+        let handle = tokio::spawn(async move {
+            let mut stream = pubsub.into_on_message();
+            while let Some(message) = stream.next().await {
+                let pattern = message.get_pattern::<String>().ok();
+                let event = PubSubMessageEvent {
+                    connection_id: task_connection_id.clone(),
+                    session_id: task_session_id.clone(),
+                    channel: message.get_channel_name().to_owned(),
+                    pattern,
+                    message: String::from_utf8_lossy(message.get_payload_bytes()).into_owned(),
+                    received_at_ms: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                };
+                let _ = task_app.emit(PUBSUB_MESSAGE_EVENT, event);
+            }
+
+            let _ = task_app.emit(
+                PUBSUB_STATUS_EVENT,
+                PubSubStatusEvent {
+                    connection_id: task_connection_id,
+                    session_id: task_session_id,
+                    state: "stopped".into(),
+                    error_code: None,
+                },
+            );
+        });
+
+        let task = PubSubTask {
+            connection_id: connection_id.clone(),
+            session_id: session_id.clone(),
+            app: app.clone(),
+            handle,
+        };
+        let mut tasks = match self.tasks.lock() {
+            Ok(tasks) => tasks,
+            Err(_) => {
+                task.handle.abort();
+                return Err(AppError::CommandFailed);
+            }
+        };
+        tasks.insert(connection_id.clone(), task);
+        drop(tasks);
+
+        let session = PubSubSession {
+            connection_id,
+            session_id,
+            topics,
+        };
+        let _ = app.emit(
+            PUBSUB_STATUS_EVENT,
+            PubSubStatusEvent {
+                connection_id: session.connection_id.clone(),
+                session_id: session.session_id.clone(),
+                state: "running".into(),
+                error_code: None,
+            },
+        );
+        Ok(session)
+    }
+
+    pub fn stop(&self, input: StopPubSubInput) -> Result<(), AppError> {
+        input.validate()?;
+        let task = {
+            let mut tasks = self.tasks.lock().map_err(|_| AppError::CommandFailed)?;
+            if tasks
+                .get(&input.connection_id)
+                .is_some_and(|task| task.session_id == input.session_id)
+            {
+                tasks.remove(&input.connection_id)
+            } else {
+                None
+            }
+        };
+        if let Some(task) = task {
+            stop_task(task);
+        }
+        Ok(())
+    }
+
+    pub fn cancel_connection(&self, connection_id: &str) {
+        let task = self
+            .tasks
+            .lock()
+            .ok()
+            .and_then(|mut tasks| tasks.remove(connection_id));
+        if let Some(task) = task {
+            stop_task(task);
+        }
+    }
+}
+
+fn stop_task(task: PubSubTask) {
+    let _ = task.app.emit(
+        PUBSUB_STATUS_EVENT,
+        PubSubStatusEvent {
+            connection_id: task.connection_id,
+            session_id: task.session_id,
+            state: "stopped".into(),
+            error_code: None,
+        },
+    );
+    task.handle.abort();
+}
+
+fn map_pubsub_error(error: ::redis::RedisError) -> AppError {
+    match error.kind() {
+        ::redis::ErrorKind::AuthenticationFailed => AppError::AuthenticationFailed,
+        ::redis::ErrorKind::Io => AppError::ConnectionFailed,
+        _ => AppError::CommandFailed,
+    }
+}
 
 pub fn parse_slow_log_reply(value: ::redis::Value) -> Result<Vec<SlowLogEntry>, AppError> {
     let entries = match value {

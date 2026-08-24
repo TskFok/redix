@@ -8,9 +8,11 @@ use crate::{
         normalize_key_type, parse_info_sections, parse_keyspace_line, CommandDefinition,
         CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
         DatabaseOverview, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
-        HashEntry, ImportKeysInput, InstanceOverview, KeyInfo, KeyInfoInput, KeySummary, KeyValue,
-        ModuleSummary, RedisValue, RenameKeyInput, ScanKeysInput, ScanPage, SelectDatabaseInput,
-        SetKeyInput, SetKeyTtlInput, SortedSetEntry, StreamEntry,
+        GetSlowLogsInput, HashEntry, ImportKeysInput, InstanceOverview, KeyInfo, KeyInfoInput,
+        KeySummary, KeyValue, ModuleSummary, PubSubSession, PublishPubSubInput, RedisValue,
+        RenameKeyInput, ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput,
+        SlowLogConfig, SlowLogEntry, SortedSetEntry, StartPubSubInput, StopPubSubInput,
+        StreamEntry, UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -18,6 +20,7 @@ use crate::{
 
 use super::{
     key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
+    observability::{parse_slow_log_config_reply, parse_slow_log_reply, PubSubManager},
     tokenize_command,
 };
 
@@ -30,6 +33,14 @@ pub trait RedisOperations: Send + Sync {
     ) -> Result<ConnectionInfo, AppError>;
     async fn open_connection(&self, connection_id: &str) -> Result<ConnectionInfo, AppError>;
     async fn close_connection(&self, connection_id: &str) -> Result<(), AppError>;
+    async fn get_slow_logs(&self, input: GetSlowLogsInput) -> Result<Vec<SlowLogEntry>, AppError>;
+    async fn clear_slow_logs(&self, connection_id: &str) -> Result<(), AppError>;
+    async fn get_slow_log_config(&self, connection_id: &str) -> Result<SlowLogConfig, AppError>;
+    async fn update_slow_log_config(
+        &self,
+        input: UpdateSlowLogConfigInput,
+    ) -> Result<SlowLogConfig, AppError>;
+    async fn publish_pub_sub(&self, input: PublishPubSubInput) -> Result<u64, AppError>;
     async fn scan_keys(&self, input: crate::domain::ScanKeysInput) -> Result<ScanPage, AppError>;
     async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError>;
     async fn set_key(&self, input: SetKeyInput) -> Result<KeyValue, AppError>;
@@ -69,6 +80,7 @@ pub struct RedisService {
     profiles: Arc<dyn ProfileRepository>,
     secrets: Arc<dyn SecretStore>,
     active: Arc<RwLock<HashMap<String, Client>>>,
+    pubsub: Arc<PubSubManager>,
 }
 
 impl RedisService {
@@ -77,7 +89,22 @@ impl RedisService {
             profiles,
             secrets,
             active: Arc::new(RwLock::new(HashMap::new())),
+            pubsub: Arc::new(PubSubManager::new()),
         }
+    }
+
+    pub async fn start_pub_sub(
+        &self,
+        app: tauri::AppHandle,
+        input: StartPubSubInput,
+    ) -> Result<PubSubSession, AppError> {
+        input.validate()?;
+        let client = self.client(&input.connection_id).await?;
+        self.pubsub.start(app, &client, input).await
+    }
+
+    pub async fn stop_pub_sub(&self, input: StopPubSubInput) -> Result<(), AppError> {
+        self.pubsub.stop(input)
     }
 
     async fn client(&self, connection_id: &str) -> Result<Client, AppError> {
@@ -168,6 +195,7 @@ impl RedisOperations for RedisService {
         let client = Client::open(connection_url(&profile, password.as_deref())?)
             .map_err(|_| AppError::InvalidConnection)?;
         let info = Self::inspect_client(&client).await?;
+        self.pubsub.cancel_connection(connection_id);
         self.active
             .write()
             .await
@@ -176,8 +204,83 @@ impl RedisOperations for RedisService {
     }
 
     async fn close_connection(&self, connection_id: &str) -> Result<(), AppError> {
+        self.pubsub.cancel_connection(connection_id);
         self.active.write().await.remove(connection_id);
         Ok(())
+    }
+
+    async fn get_slow_logs(&self, input: GetSlowLogsInput) -> Result<Vec<SlowLogEntry>, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let count = if input.count == -1 {
+            let config = get_slow_log_config_with_connection(&mut connection).await?;
+            i64::try_from(config.slowlog_max_len).map_err(|_| AppError::CommandFailed)?
+        } else {
+            input.count
+        };
+        let reply = ::redis::cmd("SLOWLOG")
+            .arg("GET")
+            .arg(count)
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_slow_log_reply(reply)
+    }
+
+    async fn clear_slow_logs(&self, connection_id: &str) -> Result<(), AppError> {
+        validate_connection_id(connection_id)?;
+        let mut connection = self.connection(connection_id).await?;
+        ::redis::cmd("SLOWLOG")
+            .arg("RESET")
+            .query_async::<String>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(())
+    }
+
+    async fn get_slow_log_config(&self, connection_id: &str) -> Result<SlowLogConfig, AppError> {
+        validate_connection_id(connection_id)?;
+        let mut connection = self.connection(connection_id).await?;
+        get_slow_log_config_with_connection(&mut connection).await
+    }
+
+    async fn update_slow_log_config(
+        &self,
+        input: UpdateSlowLogConfigInput,
+    ) -> Result<SlowLogConfig, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        if let Some(value) = input.slowlog_max_len {
+            ::redis::cmd("CONFIG")
+                .arg("SET")
+                .arg("slowlog-max-len")
+                .arg(value)
+                .query_async::<String>(&mut connection)
+                .await
+                .map_err(map_command_error)?;
+        }
+        if let Some(value) = input.slowlog_log_slower_than {
+            ::redis::cmd("CONFIG")
+                .arg("SET")
+                .arg("slowlog-log-slower-than")
+                .arg(value)
+                .query_async::<String>(&mut connection)
+                .await
+                .map_err(map_command_error)?;
+        }
+        get_slow_log_config_with_connection(&mut connection).await
+    }
+
+    async fn publish_pub_sub(&self, input: PublishPubSubInput) -> Result<u64, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let receivers = ::redis::cmd("PUBLISH")
+            .arg(&input.channel)
+            .arg(&input.message)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        u64::try_from(receivers).map_err(|_| AppError::CommandFailed)
     }
 
     async fn scan_keys(&self, input: ScanKeysInput) -> Result<ScanPage, AppError> {
@@ -481,6 +584,7 @@ impl RedisOperations for RedisService {
             return Err(AppError::PersistenceFailed);
         }
 
+        self.pubsub.cancel_connection(&input.connection_id);
         self.active
             .write()
             .await
@@ -544,6 +648,18 @@ async fn execute_tokenized_command(
         .await
         .map_err(map_command_error)?;
     command_result(value)
+}
+
+async fn get_slow_log_config_with_connection(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+) -> Result<SlowLogConfig, AppError> {
+    let reply = ::redis::cmd("CONFIG")
+        .arg("GET")
+        .arg("slowlog-*")
+        .query_async::<Value>(connection)
+        .await
+        .map_err(map_command_error)?;
+    parse_slow_log_config_reply(reply)
 }
 
 async fn key_size(
@@ -1060,6 +1176,14 @@ fn map_connection_error(error: ::redis::RedisError) -> AppError {
     }
 }
 
+fn validate_connection_id(connection_id: &str) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() {
+        Err(AppError::InvalidInput)
+    } else {
+        Ok(())
+    }
+}
+
 fn map_command_error(error: ::redis::RedisError) -> AppError {
     match error.kind() {
         ::redis::ErrorKind::AuthenticationFailed => AppError::AuthenticationFailed,
@@ -1084,9 +1208,43 @@ fn map_json_command_error(error: ::redis::RedisError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use crate::{domain::ConnectionProfile, error::AppError};
+    use std::sync::Arc;
 
-    use super::{command_result, connection_url, validate_ttl};
+    use crate::{
+        domain::{ConnectionProfile, GetSlowLogsInput, PublishPubSubInput},
+        error::AppError,
+        persistence::{ProfileRepository, SecretStore},
+    };
+
+    use super::{command_result, connection_url, validate_ttl, RedisOperations, RedisService};
+
+    struct EmptyProfiles;
+
+    impl ProfileRepository for EmptyProfiles {
+        fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
+            Ok(Vec::new())
+        }
+
+        fn save(&self, _profiles: &[ConnectionProfile]) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    struct EmptySecrets;
+
+    impl SecretStore for EmptySecrets {
+        fn read(&self, _connection_id: &str) -> Result<Option<String>, AppError> {
+            Ok(None)
+        }
+
+        fn write(&self, _connection_id: &str, _password: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        fn delete(&self, _connection_id: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
 
     fn valid_profile() -> ConnectionProfile {
         ConnectionProfile {
@@ -1129,5 +1287,29 @@ mod tests {
 
         assert_eq!(result.kind, "array");
         assert_eq!(result.value, serde_json::json!([["field", 1]]));
+    }
+
+    #[tokio::test]
+    async fn rejects_observability_operations_without_active_connection() {
+        let service = RedisService::new(Arc::new(EmptyProfiles), Arc::new(EmptySecrets));
+
+        let error = service
+            .get_slow_logs(GetSlowLogsInput {
+                connection_id: "local".into(),
+                count: 50,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, AppError::ConnectionFailed);
+
+        let error = service
+            .publish_pub_sub(PublishPubSubInput {
+                connection_id: "local".into(),
+                channel: "events".into(),
+                message: "hello".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, AppError::ConnectionFailed);
     }
 }

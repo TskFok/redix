@@ -20,6 +20,7 @@ thiserror = "2"
 keyring = { version = "4.1", default-features = false, features = ["v1"] }
 redis = { version = "1.5", features = ["tokio-comp"] }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tempfile = "3"

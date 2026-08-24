@@ -7,9 +7,10 @@ use std::{
 use redix_lib::{
     domain::{
         ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput,
-        ExportedKey, HashEntry, ImportKeysInput, KeyInfoInput, KeyValue, RedisValue,
-        RenameKeyInput, ScanKeysInput, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput,
-        SortedSetEntry, StreamEntry, StreamField,
+        ExportedKey, GetSlowLogsInput, HashEntry, ImportKeysInput, KeyInfoInput, KeyValue,
+        PublishPubSubInput, RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput,
+        SetKeyInput, SetKeyTtlInput, SortedSetEntry, StopPubSubInput, StreamEntry, StreamField,
+        UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -750,5 +751,63 @@ async fn preserves_active_client_when_database_profile_save_fails() {
         .await
         .expect("the old active client must remain usable");
     assert_eq!(ping.value, serde_json::json!("PONG"));
+    service.close_connection("integration").await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "设置 REDIX_TEST_REDIS_URL 后用 cargo test -- --ignored --nocapture 运行"]
+async fn runs_slow_log_and_pubsub_flow_when_redis_is_available() {
+    let url = std::env::var("REDIX_TEST_REDIS_URL")
+        .expect("请设置 REDIX_TEST_REDIS_URL 后运行 Redis 集成测试");
+    let (profile, password) = integration_profile(&url);
+    let secrets = TestSecrets::default();
+    if let Some(password) = password.as_deref() {
+        secrets.write("integration", password).unwrap();
+    }
+    let service = RedisService::new(
+        std::sync::Arc::new(TestProfiles {
+            profiles: vec![profile],
+        }),
+        std::sync::Arc::new(secrets),
+    );
+
+    service.open_connection("integration").await.unwrap();
+    service.clear_slow_logs("integration").await.unwrap();
+    let config = service.get_slow_log_config("integration").await.unwrap();
+    let updated = service
+        .update_slow_log_config(UpdateSlowLogConfigInput {
+            connection_id: "integration".into(),
+            slowlog_max_len: Some(config.slowlog_max_len),
+            slowlog_log_slower_than: Some(config.slowlog_log_slower_than),
+        })
+        .await
+        .unwrap();
+    assert_eq!(updated, config);
+
+    let logs = service
+        .get_slow_logs(GetSlowLogsInput {
+            connection_id: "integration".into(),
+            count: 20,
+        })
+        .await
+        .unwrap();
+    assert!(logs.iter().all(|entry| !entry.args.is_empty()));
+
+    let _receivers = service
+        .publish_pub_sub(PublishPubSubInput {
+            connection_id: "integration".into(),
+            channel: "redix:integration".into(),
+            message: "hello from redix".into(),
+        })
+        .await
+        .unwrap();
+
+    service
+        .stop_pub_sub(StopPubSubInput {
+            connection_id: "integration".into(),
+            session_id: "missing-session".into(),
+        })
+        .await
+        .unwrap();
     service.close_connection("integration").await.unwrap();
 }
