@@ -229,9 +229,10 @@ impl InstanceDetails {
         let keyspace_hits = optional_metric(sections, "Stats", "keyspace_hits")?;
         let keyspace_misses = optional_metric(sections, "Stats", "keyspace_misses")?;
         let hit_rate = match (keyspace_hits, keyspace_misses) {
-            (Some(hits), Some(misses)) if hits + misses > 0 => {
-                Some(hits as f64 / (hits + misses) as f64)
-            }
+            (Some(hits), Some(misses)) => hits
+                .checked_add(misses)
+                .filter(|total| *total > 0)
+                .map(|total| hits as f64 / total as f64),
             _ => None,
         };
 

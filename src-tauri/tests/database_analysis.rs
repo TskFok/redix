@@ -96,3 +96,18 @@ fn parses_commandstats_and_optional_instance_metrics_without_raw_text() {
     assert_eq!(details.clients.blocked_clients, Some(1));
     assert_eq!(parse_command_stats(&sections)[0].command, "GET");
 }
+
+#[test]
+fn degrades_hit_rate_to_none_when_info_counters_overflow() {
+    let sections = HashMap::from([(
+        "Stats".into(),
+        HashMap::from([
+            ("keyspace_hits".into(), u64::MAX.to_string()),
+            ("keyspace_misses".into(), "1".into()),
+        ]),
+    )]);
+
+    let details = InstanceDetails::from_info_and_modules(&sections, vec![]).unwrap();
+
+    assert_eq!(details.stats.hit_rate, None);
+}
