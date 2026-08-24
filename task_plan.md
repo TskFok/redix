@@ -295,3 +295,18 @@ Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
 | Error | Attempt | Resolution |
 |---|---:|---|
 | 编排读取文件的 JS 字符串转义导致 `SyntaxError` | 1 | 将命令字符串拆分为简单字符串后重跑，未修改文件、未影响计划内容 |
+
+## Phase 10：本地 Redis Profiler（2026-08-24）
+
+### Goal
+
+对照 RedisInsight 的 Profiler/Monitor 能力，补齐本地 Standalone Redis 的独立 `MONITOR` 实时命令流、停止和前端展示；不引入日志文件、拓扑 fan-out、TLS/SSH、模块或任何云功能。
+
+### Status
+
+已完成 spec 与实施计划，准备按 TDD 执行。
+
+### Artifacts
+
+- 设计：`docs/superpowers/specs/2026-08-24-profiler-design.md`
+- 计划：`docs/superpowers/plans/2026-08-24-profiler.md`
