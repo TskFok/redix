@@ -226,3 +226,13 @@
 - 定向验证：Profiler 解析 6/6、连接管理 5/5、命令集成 5/5、前端页面/状态 7/7、Tauri bridge 12/12；前端全量 105/105，`npm run build` 通过。
 - 最终回归通过：Rust 全量测试（34 库、5 commands、20 domain、15 persistence，3 个 Redis 集成测试 ignored）、前端全量 105/105、`npm run build`、`npm run check:non-cloud`、`cargo fmt --check` 和 `git diff --check`。
 - 真实 MONITOR 集成保持 ignored，未自动连接或影响用户实例；现有 Redis 集成中包含清空型 Slow Log 流程，也未在未获授权时执行。
+
+## Session: 2026-08-24 — Task 16 Stream Consumer Group 交付
+
+- **Status:** complete
+- 对照 RedisInsight 的 Stream Browser 能力，在本地 Redis Standalone 详情页补齐 Consumer Group 管理：`XINFO GROUPS`、`XGROUP CREATE/DESTROY`、`XINFO CONSUMERS`、`XPENDING`、`XACK` 和 `XGROUP DELCONSUMER`。
+- Rust 新增 Stream Consumer Group DTO、输入上限和 RESP2/RESP3 parser；解析失败只返回固定 `COMMAND_FAILED`，不把 Group、消费者或 Pending 原始内容写入错误。
+- Tauri 新增 7 个 typed command/bridge；Browser 新增 Group 创建/删除、消费者与 Pending 表格、Pending 多选确认、消费者删除和旧响应取消保护。
+- TDD 定向验证通过：Stream parser 6/6、领域校验 1/1、Redis service 连接校验 1/1、Tauri command adapter 1/1、Stream Groups 前端 5/5、既有 Browser 31/31、bridge 13/13；前端构建通过。
+- Redis Consumer Group standalone 流程已加入默认 `ignored` 集成测试，未自动连接或修改外部 Redis；本批不实现实时消费、Claim、Cluster/Sentinel、TLS/SSH、模块或 Cloud 能力。
+- 提交：`bdf0460`、`54f592b`、`5c0706f`、`d21ca27`。

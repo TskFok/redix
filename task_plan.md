@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
+Phase 11：本地 Redis Stream Consumer Group（已完成）
 
 ## Phases
 
@@ -333,7 +333,7 @@ Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
 
 ### Status
 
-设计与实施计划已完成，等待按 TDD 执行。
+已完成领域解析、Redis service、Tauri bridge、Browser 工作区和全量回归；真实 Redis Consumer Group 流程保留为默认 ignored 集成测试。
 
 ### Artifacts
 
@@ -342,8 +342,15 @@ Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
 
 ### Checklist
 
-- [ ] Stream Consumer Group DTO、输入校验和 RESP parser
-- [ ] Redis service 与 XINFO/XGROUP/XPENDING/XACK 命令
-- [ ] Tauri command 和 TypeScript bridge
-- [ ] Stream 键详情 Consumer Groups UI
-- [ ] Rust/前端/非 Cloud/构建/差异回归验证
+- [x] Stream Consumer Group DTO、输入校验和 RESP parser
+- [x] Redis service 与 XINFO/XGROUP/XPENDING/XACK 命令
+- [x] Tauri command 和 TypeScript bridge
+- [x] Stream 键详情 Consumer Groups UI
+- [x] Rust/前端/非 Cloud/构建/差异回归验证
+
+### Delivery
+
+- `bdf0460`：增加 Stream Consumer Group 领域模型和解析
+- `54f592b`：实现 Stream Consumer Group Redis 服务
+- `5c0706f`：接入 Stream Consumer Group Tauri 桥接
+- `d21ca27`：增加 Stream Consumer Group Browser 工作区

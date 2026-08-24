@@ -9,6 +9,7 @@
 - Browser 使用 `SCAN`、`MATCH`、`COUNT` 分页列出键，并读取键类型、TTL 和值。
 - Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新和校验后的本地 JSON 导入导出。
 - String、Hash、List、Set、Sorted Set、Stream 的基础读取、编辑、删除和 TTL 操作；Stream 单次读取最多 500 条记录。
+- Stream Consumer Group 支持创建/删除 Group、读取消费者与 Pending 列表、确认 Pending 条目和删除消费者；Pending 单次最多读取 500 条。
 - RedisJSON 根文档的读取和编辑；未安装 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE` 错误。
 - Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
 - Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
@@ -26,7 +27,7 @@
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
 - Cluster、Sentinel、TLS、SSH、远程托管实例和云资源管理。
 - Redis 模块专用数据类型、模块查询和模块可视化（RedisJSON 根文档和 Stream 基础能力除外）。
-- Stream Consumer Group、Profiler 日志文件/历史持久化/拓扑 fan-out 和超过 500 条记录的分页编辑。
+- Stream 实时消费、阻塞式 `XREADGROUP`、`XCLAIM`/`XAUTOCLAIM`、Claim 流程、Profiler 日志文件/历史持久化/拓扑 fan-out 和超过 500 条记录的分页编辑。
 - Monaco、远程插件运行时和云端命令目录。
 - 其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
 

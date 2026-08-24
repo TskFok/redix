@@ -293,3 +293,12 @@
 - Tauri 事件固定为 `redix://pubsub/message` 与 `redix://pubsub/status`；前端 listener 按 connection/session 过滤，组件卸载会解除 listener 并停止当前会话，消息缓存最多 5000 条。
 - 新增“运维观察”导航与 Slow Log/Pub/Sub 页面，沿用现有 RedisInsight 风格 token、响应式表格、可见焦点和 reduced-motion 规则；未新增云入口、模块编辑器或 SQL。
 - 安全验证：`cargo test`、`npm test`、`npm run build`、`npm run check:non-cloud`、`cargo fmt --check` 均通过；真实集成用例包含 `SLOWLOG RESET`，因破坏性副作用未在沙箱外执行。
+
+## Task 16：Stream Consumer Group 非 Cloud 差异补全（2026-08-24）
+
+- 目标 RedisInsight 的 Stream 页面包含 Consumer Group、消费者和 Pending 观察；本轮将范围收敛为本地 Standalone 的组管理与 Pending 运维，不引入实时消费后台任务。
+- 已交付 DTO 和 parser：支持 XINFO GROUPS/CONSUMERS 的 RESP2 数组、RESP3 Map/Attribute，以及 XPENDING 扩展结果；Group/消费者/Pending 名称上限 256，Pending 查询上限 500，XACK 条目上限 500。
+- 已交付 Redis service 和 IPC：统一绑定当前打开连接，封装 XGROUP CREATE/DESTROY/DELCONSUMER、XINFO GROUPS/CONSUMERS、XPENDING 和 XACK；所有 Redis 错误映射为固定应用错误。
+- Browser Stream 详情新增 Consumer Groups 工作区：创建/删除 Group、查看消费者与 Pending、选择并确认 Pending、删除消费者；连接或键切换时丢弃旧响应。
+- 明确不实现：XREADGROUP 实时/阻塞消费、XCLAIM/XAUTOCLAIM、Claim 拓扑、Cluster/Sentinel fan-out、TLS/SSH、模块专用能力和 Redis Cloud。
+- 本批提交为 `bdf0460`、`54f592b`、`5c0706f`、`d21ca27`；默认 ignored 的 standalone 集成流程覆盖组生命周期与 Pending/ACK 语义，不在未授权时自动连接外部 Redis。
