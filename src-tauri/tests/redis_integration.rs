@@ -693,24 +693,30 @@ async fn cleanup_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(
 struct AnalysisKeys {
     pattern: String,
     keys: Vec<String>,
-    namespace: String,
+    string_keys: Vec<String>,
+    hash: String,
+    list: String,
+    stream: String,
 }
 
 impl AnalysisKeys {
     fn for_prefix(prefix: &str) -> Self {
-        let namespace = prefix
-            .split(':')
-            .next()
-            .expect("test prefix must include a namespace")
-            .to_owned();
         let pattern = format!("{prefix}:analysis:*");
-        let keys = (0..501)
-            .map(|index| format!("{prefix}:analysis:item:{index}"))
+        let string_keys: Vec<_> = (0..498)
+            .map(|index| format!("{prefix}:analysis:string:{index}"))
             .collect();
+        let hash = format!("{prefix}:analysis:hash");
+        let list = format!("{prefix}:analysis:list");
+        let stream = format!("{prefix}:analysis:stream");
+        let mut keys = string_keys.clone();
+        keys.extend([hash.clone(), list.clone(), stream.clone()]);
         Self {
             pattern,
             keys,
-            namespace,
+            string_keys,
+            hash,
+            list,
+            stream,
         }
     }
 }
@@ -718,18 +724,23 @@ impl AnalysisKeys {
 async fn cleanup_analysis_keys(service: &RedisService, keys: &AnalysisKeys) -> Result<(), String> {
     let mut failures = Vec::new();
     for batch in keys.keys.chunks(500) {
-        if let Err(error) = service
+        match service
             .delete_keys(DeleteKeysInput {
                 connection_id: "integration".into(),
                 keys: batch.to_vec(),
             })
             .await
         {
-            failures.push(error.code());
+            Ok(deleted) if deleted == batch.len() as u64 => {}
+            Ok(deleted) => failures.push(format!(
+                "DEL deleted {deleted} keys instead of {}",
+                batch.len()
+            )),
+            Err(error) => failures.push(error.code().to_owned()),
         }
     }
     if let Err(error) = service.close_connection("integration").await {
-        failures.push(error.code());
+        failures.push(error.code().to_owned());
     }
 
     if failures.is_empty() {
@@ -768,7 +779,7 @@ async fn analyzes_database_details_and_metadata_batches_when_redis_is_available(
             return Err("instance details did not include the Redis version".into());
         }
 
-        for key in &keys.keys {
+        for key in &keys.string_keys {
             service
                 .create_key(CreateKeyInput {
                     connection_id: "integration".into(),
@@ -776,6 +787,45 @@ async fn analyzes_database_details_and_metadata_batches_when_redis_is_available(
                     value: RedisValue::String {
                         value: "analysis".into(),
                     },
+                    ttl_ms: None,
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+        }
+        for (key, value) in [
+            (
+                &keys.hash,
+                RedisValue::Hash {
+                    fields: vec![HashEntry {
+                        field: "field".into(),
+                        value: "value".into(),
+                    }],
+                },
+            ),
+            (
+                &keys.list,
+                RedisValue::List {
+                    items: vec!["first".into(), "second".into()],
+                },
+            ),
+            (
+                &keys.stream,
+                RedisValue::Stream {
+                    entries: vec![StreamEntry {
+                        id: "1-0".into(),
+                        fields: vec![StreamField {
+                            field: "event".into(),
+                            value: "analysis".into(),
+                        }],
+                    }],
+                },
+            ),
+        ] {
+            service
+                .create_key(CreateKeyInput {
+                    connection_id: "integration".into(),
+                    key: key.clone(),
+                    value,
                     ttl_ms: None,
                 })
                 .await
@@ -801,9 +851,21 @@ async fn analyzes_database_details_and_metadata_batches_when_redis_is_available(
         if !report
             .top_namespaces_by_keys
             .iter()
-            .any(|namespace| namespace.namespace == keys.namespace && namespace.keys == 501)
+            .any(|namespace| namespace.namespace == "redix" && namespace.keys == 501)
         {
-            return Err("database analysis did not aggregate the matching namespace".into());
+            return Err("database analysis did not aggregate the redix namespace".into());
+        }
+        for expected_type in ["string", "hash", "list", "stream"] {
+            if !report
+                .total_keys
+                .types
+                .iter()
+                .any(|summary| summary.r#type == expected_type)
+            {
+                return Err(format!(
+                    "database analysis did not include {expected_type} keys"
+                ));
+            }
         }
         Ok::<(), String>(())
     }

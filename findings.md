@@ -302,3 +302,37 @@
 - Browser Stream 详情新增 Consumer Groups 工作区：创建/删除 Group、查看消费者与 Pending、选择并确认 Pending、删除消费者；连接或键切换时丢弃旧响应。
 - 明确不实现：XREADGROUP 实时/阻塞消费、XCLAIM/XAUTOCLAIM、Claim 拓扑、Cluster/Sentinel fan-out、TLS/SSH、模块专用能力和 Redis Cloud。
 - 本批提交为 `bdf0460`、`54f592b`、`5c0706f`、`d21ca27`；默认 ignored 的 standalone 集成流程覆盖组生命周期与 Pending/ACK 语义，不在未授权时自动连接外部 Redis。
+
+## Task 17：当前项目与 RedisInsight 的非 Cloud 功能全量对照（2026-08-24）
+
+- 目标项目 README 明确列出 Browser、Workbench、Analysis、Slow Log、CLI、Profiler、Pub/Sub、Bulk actions、Search/Query、Vector Search、JSON/Array/Vector Set、插件等能力；其中 Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry 和远程插件属于本轮继续排除或需单独确认的边界。
+- 目标 UI 还包含 `database-analysis`、`instance`、`analytics`、`redis-cluster`、`autodiscover-sentinel`、`vector-search`、`redis-stack`、Browser module 编辑器和 Workbench Monaco/复杂结果视图；当前 Redix 已有 `database`、`observability`、Query Library/Settings、Browser 基础类型/Stream/JSON 根文档和 Workbench 基础命令工作区。
+- 当前 Redix 已落地的功能不应重复实现：Standalone 连接与密码钥匙串、SCAN 分页/过滤/类型过滤、基础五类型 CRUD、新增/重命名/批量删除/导入导出/元数据、Stream 基础读写与 Consumer Group、Profiler、Slow Log、Pub/Sub、实例/数据库概览、Workbench 命令目录/多命令/Raw-Text-JSON/安全历史、Query Library 和 Settings。
+- 仍存在的主要本地缺口按风险分为：
+  1. 低至中风险的通用工作区：Database Analysis/内存与键空间分析、实例客户端/统计细节、连接配置导入导出与最近连接体验。
+  2. 连接栈：TLS/证书、SSH 隧道、Sentinel 和 Cluster 拓扑；会改变 profile、client 生命周期、命令路由和错误模型。
+  3. Redis 模块：完整 RedisJSON 路径编辑、RedisSearch/Query 索引与查询、Vector Set、Array、TimeSeries/Geo/Bloom 等模块专用类型；必须先做 `MODULE LIST`/命令能力探测和不可用降级。
+  4. Workbench 高级能力：更完整命令帮助/自动补全、CLI 独立会话、复杂结果可视化；Monaco 和插件运行时会显著扩大依赖与安全边界。
+- 推荐将后续实现拆成相互可验收的四批：`Database Analysis → 连接导入导出/TLS → Sentinel/Cluster/SSH → Redis 模块编辑器/Vector Search`；每批仍沿用 typed IPC、固定错误码、TDD 和真实 Redis ignored 集成测试，不跨批重构。
+- 当前仍遵守：默认在 `main` 修改，不创建分支；提交信息使用简体中文；不引入 SQL，更禁止在循环遍历中查询 SQL；不把 RedisInsight Electron/NestJS/Redux/Monaco 代码直接复制到 Redix。
+
+### Task 17 设计确认记录
+
+- 用户已确认先实现 Database Analysis + Instance 细节。
+- 正式设计文档为 `docs/superpowers/specs/2026-08-24-database-analysis-instance-details-design.md`，已完成自审并提交为 `2a42997`。
+- 本批分析采用显式触发、SCAN 游标、固定 500 键 pipeline、默认 100000 键上限和前端过期响应保护；不落盘、不自动扫描、不承诺后端 command 可取消。
+
+### Task 17 Task 6 导航接入核对（2026-08-24）
+
+- 指定基线为 `0c333cac2d04d4fba655238d963180ab289811ee`，当前在 `main`，仅规划记录尚未提交；本任务不会覆盖或提交这些记录。
+- `Workspace` 已包含 `database-analysis`，但 `App.tsx` 尚未导入或列出该工作区；未连接时的资源访问规则已经只允许连接管理、Query Library 和设置，因此新入口会自然保持禁用。
+- `DatabaseAnalysisPage` 仅在用户点击“开始分析”时调用 typed bridge，默认输入的最大扫描键数由已完成实现设为 100000；`DatabasePage` 已包含 INFO 分组与 commandstats。
+- 页面已复用 `.database-page`、`.database-panel` 和 `.database-table` 基础结构；Task 6 将在允许文件内补齐专属 RedisInsight 风格样式、内部横向滚动和 reduced-motion 兼容，而不改变页面行为或引入 Cloud/SQL/拓扑能力。
+
+### Task 17 Task 7 Standalone Redis 分析交付核对（2026-08-24）
+
+- Database Analysis/Instance 子批次已完成最终交付：ignored 的 `analyzes_database_details_and_metadata_batches_when_redis_is_available` 保持唯一的 501-key 流程，以唯一 `redix:task4:<pid>:<timestamp>:analysis:*` 模式写入 498 个 string 和各 1 个 hash/list/stream。
+- 流程在写入前调用 `get_instance_details("integration")` 并要求 server version；分析以明确 pattern、`:` delimiter、`max_keys: 1000` 运行，断言已处理 501 键、未截断、类型摘要包含 string/hash/list/stream、顶级命名空间包含 `redix`。
+- 清理只对测试拥有的唯一键使用分批 `DEL`（500 + 1），逐批确认实际删除数匹配；没有使用 `KEYS`，即使分析失败也保留清理分支。
+- `REDIX_TEST_REDIS_URL` 在本次环境未配置，故没有运行 ignored 外部 Redis 流程，也未误报真实 Redis 成功；普通 Rust 回归确认该 ignored 用例可编译，5 个外部集成项继续默认 ignored。
+- 全量检查通过：前端 14 文件/118 测试、生产构建、非 Cloud 检查、Rust 42+5+5+21+15 普通测试、格式检查和 diff 检查。静态扫描仅命中 `scripts/check-non-cloud-scope*.mjs` 内用于拒绝 Azure Managed Redis 的规则文本，不是生产入口。

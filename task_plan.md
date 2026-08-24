@@ -138,6 +138,7 @@ Phase 11：本地 Redis Stream Consumer Group（已完成）
 | Task 1 RED 命令多写测试筛选词 | 1 | 改用 `--lib` 与 `--test domain` 两个独立命令执行聚焦测试 |
 | `cargo info` 无法解析 crates.io | 1 | 记录错误；依赖安装阶段根据需要申请网络权限，当前使用 `cargo search` 已返回的版本信息 |
 | 沙箱内 Redis 集成测试无法访问 `127.0.0.1` | 1 | 使用授权的沙箱外命令确认 Redis 返回 `PONG`，随后集成测试 1/1 通过 |
+| 首次用 JS 字符串写实现计划时引号未转义触发 SyntaxError | 1 | 改用 String.raw 和 fenced plan patch 重试，随后完成计划自审 |
 
 ## Notes
 
@@ -295,6 +296,7 @@ Phase 11：本地 Redis Stream Consumer Group（已完成）
 | Error | Attempt | Resolution |
 |---|---:|---|
 | 编排读取文件的 JS 字符串转义导致 `SyntaxError` | 1 | 将命令字符串拆分为简单字符串后重跑，未修改文件、未影响计划内容 |
+| 追加 Task 17 记录的首次补丁上下文未命中 | 1 | 重新读取文件尾部并使用精确末行重新应用补丁 |
 
 ## Phase 10：本地 Redis Profiler（2026-08-24）
 
@@ -354,3 +356,21 @@ Phase 11：本地 Redis Stream Consumer Group（已完成）
 - `54f592b`：实现 Stream Consumer Group Redis 服务
 - `5c0706f`：接入 Stream Consumer Group Tauri 桥接
 - `d21ca27`：增加 Stream Consumer Group Browser 工作区
+
+## Phase 12：RedisInsight 非 Cloud 功能全量补齐
+
+- [x] 恢复既有计划、发现和进度记录，确认已完成能力与工作区状态
+- [x] 只读盘点目标 RedisInsight 的 README、UI 页面、API 模块和当前 Redix 的实现面
+- [x] 将缺口按通用工作区、连接栈、拓扑安全、模块专用能力分批
+- [x] 在聊天中确认本轮推荐设计和执行批次
+- [x] 编写并自审本轮 Database Analysis/Instance 设计文档
+- [x] 用户审阅本轮设计文档
+- [x] 编写并自审本轮实现计划
+- [x] 用户选择并执行 Database Analysis/Instance 批次
+- [x] 按 TDD 完成 Database Analysis/Instance 的领域、服务、typed IPC、前端与 ignored Standalone Redis 流程
+- [x] 完成 Database Analysis/Instance 的前端、Rust、构建、非 Cloud 和 ignored Redis 验证
+- [ ] 后续连接栈：连接导入导出、TLS/证书、SSH 隧道
+- [ ] 后续拓扑：Sentinel、Cluster 与拓扑安全/命令路由
+- [ ] 后续模块编辑器：完整 RedisJSON、Search/Query、Vector Set、Array 与其他模块类型
+- [ ] 后续 Workbench 高级命令帮助、补全与结果可视化
+- **Status:** in_progress（Database Analysis/Instance 子批次已完成；TLS/SSH、拓扑、模块编辑器和 Workbench 高级能力仍未完成）

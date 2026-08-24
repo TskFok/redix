@@ -236,3 +236,49 @@
 - TDD 定向验证通过：Stream parser 6/6、领域校验 1/1、Redis service 连接校验 1/1、Tauri command adapter 1/1、Stream Groups 前端 5/5、既有 Browser 31/31、bridge 13/13；前端构建通过。
 - Redis Consumer Group standalone 流程已加入默认 `ignored` 集成测试，未自动连接或修改外部 Redis；本批不实现实时消费、Claim、Cluster/Sentinel、TLS/SSH、模块或 Cloud 能力。
 - 提交：`bdf0460`、`54f592b`、`5c0706f`、`d21ca27`。
+
+## Session: 2026-08-24 — Task 17 Database Analysis/Instance 设计
+
+- **Status:** spec_review_pending
+- 用户已确认先实现 Database Analysis + Instance 细节。
+- 已写入正式设计：`docs/superpowers/specs/2026-08-24-database-analysis-instance-details-design.md`。
+- 设计自审已通过：无占位符；明确了 SCAN 上限/截断语义、TTL `-1/-2` 处理、前端过期响应保护、typed IPC、固定错误码和非 Cloud/SQL 边界。
+- 设计文档已提交：`2a42997`（`设计数据库分析与实例详情能力`）。
+- 当前尚未修改业务源码，等待用户审阅设计文档后再编写实现计划。
+- Files created/modified: `docs/superpowers/specs/2026-08-24-database-analysis-instance-details-design.md`, `task_plan.md`, `progress.md`
+
+## Session: 2026-08-24 — Task 17 非 Cloud 功能全量对照
+
+- **Status:** discovery_pending_approval
+- 已恢复现有 `task_plan.md`、`findings.md` 和 `progress.md`，确认当前工作区干净且继续在 `main` 分支工作。
+- 已只读检查目标项目 README、UI 页面目录、API module 目录、当前 Redix 的 feature/command/service 清单。
+- 已确认当前 Redix 已完成 Browser 首批生产力、Workbench 增强、Database/Settings/Query Library、Slow Log、Pub/Sub、Profiler 和 Stream Consumer Group；本轮不重复这些能力。
+- 已确认目标项目仍存在 Database Analysis、实例细节、连接导入导出、TLS/证书、SSH、Sentinel/Cluster、Redis 模块编辑器、Vector Search、Array、Search/Query 以及 Workbench 高级可视化等缺口。
+- 已将证据和推荐批次写入 `findings.md`；当前尚未修改业务源码，等待用户批准推荐设计后再进入新 spec/plan 和 TDD 实现。
+- Files created/modified: `findings.md`, `progress.md`
+
+## Session: 2026-08-24 — Task 17 Database Analysis/Instance 实现计划
+
+- **Status:** plan_ready（等待用户选择执行方式）
+- 用户已确认设计文档：`docs/superpowers/specs/2026-08-24-database-analysis-instance-details-design.md`；本轮仍只实现 Database Analysis + Instance 详情，不包含 Redis Cloud。
+- 已完成并提交详细实现计划：`docs/superpowers/plans/2026-08-24-database-analysis-instance-details.md`（`272a8ed`），按领域、Redis service、typed IPC、前端页面、导航和 ignored 集成验证拆为 7 个任务。
+- 计划自审通过：接口字段已明确到 Rust/TypeScript DTO，明确 `load_key_metadata` 签名、SCAN 截断条件、前端错误/旧响应测试、现有 database SVG 图标复用方案；占位符扫描、`git diff --check` 通过。
+- 首次生成计划时曾因 JS 字符串引号未转义触发 SyntaxError，已记录到 `task_plan.md` 并使用 `String.raw` fenced patch 重试；当前尚未修改业务源码。
+
+## Session: 2026-08-24 — Task 17 Task 6 导航、样式与文档
+
+- **Status:** complete
+- TDD RED：新增“数据库分析”入口 smoke 因导航按钮缺失而失败；同次发现既有 Database 回归的 bridge mock 缺少 `getInstanceDetails`，已补齐只读 DTO mock。
+- TDD GREEN：接入 `DatabaseAnalysisPage`、导航说明、复用 database SVG 和主内容分支；连接后默认仍是 Browser，未调用 `analyzeDatabase`。
+- 验证：Smoke 7/7、全量前端 118/118、`npm run build`、`npm run check:non-cloud`、`git diff --check` 均通过；375px 检查无 body 横向溢出。
+- 已提交仅限 brief 指定的五个文件：`ffacb8405d9a00af873735035d44f45faadb7366`（`接入数据库分析导航并完善实例详情样式`）。任务报告位于 `.superpowers/sdd/2026-08-24-database-analysis-instance-details/task-6-report.md`，未混入产品提交。
+
+## Session: 2026-08-24 — Task 17 Task 7 Standalone Redis 分析、全量验证与交付
+
+- **Status:** complete
+- 在既有 501-key ignored 集成流程中完成最终覆盖：498 个 string、各 1 个 hash/list/stream；以唯一 pattern 和 `max_keys: 1000` 调用 Instance Details/Database Analysis，核对 Redis version、501 processed/total、未截断、四种类型和 `redix` namespace。
+- 清理继续只用测试唯一前缀的分批 `DEL`，并断言每个批次返回的删除数量等于请求数量（500 + 1）；没有 `KEYS`。
+- 首次定向编译发现测试辅助代码的 `Vec` 推断和 `String`/`&str` 混用（E0282、E0308）；已以显式 `Vec<_>` 和 `to_owned()` 最小修正，随后 `cargo fmt --check` 与 Redis integration 测试目标编译通过（5 ignored）。
+- 验证：`npm run test:frontend` 为 14 文件/118 测试通过；`npm run build` 通过；`npm run check:non-cloud` 通过；`cargo test --manifest-path src-tauri/Cargo.toml` 为 42 lib、5 commands、5 database analysis、21 domain、15 persistence 通过，5 Redis integration ignored；`cargo fmt --check` 和 `git diff --check` 通过。
+- `REDIX_TEST_REDIS_URL` 未配置，因此没有执行 ignored 的真实 Redis 命令；未运行包含 `SLOWLOG RESET` 的既有破坏性 ignored 测试。静态范围扫描只命中 `scripts/check-non-cloud-scope*.mjs` 的 Azure 规则文本，未发现生产 Cloud/SQL/`KEYS` 入口。
+- 提交：本任务提交信息为 `完成数据库分析与实例详情验证`；精确提交标识记录于 Task 7 交付报告。
