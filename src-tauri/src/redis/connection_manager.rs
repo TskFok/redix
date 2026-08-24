@@ -5,14 +5,18 @@ use tokio::sync::RwLock;
 
 use crate::{
     domain::{
-        normalize_key_type, parse_info_sections, parse_keyspace_line, CommandDefinition,
-        CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
-        DatabaseOverview, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
-        GetSlowLogsInput, HashEntry, ImportKeysInput, InstanceOverview, KeyInfo, KeyInfoInput,
-        KeySummary, KeyValue, ModuleSummary, ProfilerSession, PubSubSession, PublishPubSubInput,
-        RedisValue, RenameKeyInput, ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput,
-        SetKeyTtlInput, SlowLogConfig, SlowLogEntry, SortedSetEntry, StartProfilerInput,
-        StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamEntry,
+        normalize_key_type, parse_info_sections, parse_keyspace_line,
+        AcknowledgeStreamPendingEntriesInput, CommandDefinition, CommandExecutionItem,
+        CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
+        CreateStreamConsumerGroupInput, DatabaseOverview, DeleteKeysInput,
+        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, ExecuteCommandsInput,
+        ExportKeysInput, ExportedKey, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
+        InstanceOverview, KeyInfo, KeyInfoInput, KeySummary, KeyValue, ModuleSummary,
+        ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue, RenameKeyInput,
+        ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput, SlowLogConfig,
+        SlowLogEntry, SortedSetEntry, StartProfilerInput, StartPubSubInput, StopProfilerInput,
+        StopPubSubInput, StreamConsumer, StreamConsumerGroup, StreamEntry, StreamPendingEntry,
         UpdateSlowLogConfigInput,
     },
     error::AppError,
@@ -23,6 +27,9 @@ use super::{
     key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
     observability::{
         parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager, PubSubManager,
+    },
+    stream_groups::{
+        parse_stream_consumer_groups, parse_stream_consumers, parse_stream_pending_entries,
     },
     tokenize_command,
 };
@@ -53,6 +60,34 @@ pub trait RedisOperations: Send + Sync {
     async fn delete_keys(&self, input: DeleteKeysInput) -> Result<u64, AppError>;
     async fn set_key_ttl(&self, input: SetKeyTtlInput) -> Result<i64, AppError>;
     async fn get_key_info(&self, input: KeyInfoInput) -> Result<KeyInfo, AppError>;
+    async fn get_stream_consumer_groups(
+        &self,
+        input: GetStreamConsumerGroupsInput,
+    ) -> Result<Vec<StreamConsumerGroup>, AppError>;
+    async fn create_stream_consumer_group(
+        &self,
+        input: CreateStreamConsumerGroupInput,
+    ) -> Result<(), AppError>;
+    async fn delete_stream_consumer_group(
+        &self,
+        input: DeleteStreamConsumerGroupInput,
+    ) -> Result<u64, AppError>;
+    async fn get_stream_consumers(
+        &self,
+        input: GetStreamConsumersInput,
+    ) -> Result<Vec<StreamConsumer>, AppError>;
+    async fn get_stream_pending_entries(
+        &self,
+        input: GetStreamPendingEntriesInput,
+    ) -> Result<Vec<StreamPendingEntry>, AppError>;
+    async fn acknowledge_stream_pending_entries(
+        &self,
+        input: AcknowledgeStreamPendingEntriesInput,
+    ) -> Result<u64, AppError>;
+    async fn delete_stream_consumer(
+        &self,
+        input: DeleteStreamConsumerInput,
+    ) -> Result<u64, AppError>;
     async fn export_keys(&self, input: ExportKeysInput) -> Result<Vec<ExportedKey>, AppError>;
     async fn import_keys(&self, input: ImportKeysInput) -> Result<u64, AppError>;
     async fn get_instance_overview(
@@ -465,6 +500,126 @@ impl RedisOperations for RedisService {
         input.validate()?;
         let mut connection = self.connection(&input.connection_id).await?;
         read_key_info(&mut connection, &input.key).await
+    }
+
+    async fn get_stream_consumer_groups(
+        &self,
+        input: GetStreamConsumerGroupsInput,
+    ) -> Result<Vec<StreamConsumerGroup>, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let reply = ::redis::cmd("XINFO")
+            .arg("GROUPS")
+            .arg(&input.key)
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_stream_consumer_groups(reply)
+    }
+
+    async fn create_stream_consumer_group(
+        &self,
+        input: CreateStreamConsumerGroupInput,
+    ) -> Result<(), AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ::redis::cmd("XGROUP")
+            .arg("CREATE")
+            .arg(&input.key)
+            .arg(&input.name)
+            .arg(&input.last_delivered_id)
+            .query_async::<String>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(())
+    }
+
+    async fn delete_stream_consumer_group(
+        &self,
+        input: DeleteStreamConsumerGroupInput,
+    ) -> Result<u64, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let deleted = ::redis::cmd("XGROUP")
+            .arg("DESTROY")
+            .arg(&input.key)
+            .arg(&input.name)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        u64::try_from(deleted).map_err(|_| AppError::CommandFailed)
+    }
+
+    async fn get_stream_consumers(
+        &self,
+        input: GetStreamConsumersInput,
+    ) -> Result<Vec<StreamConsumer>, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let reply = ::redis::cmd("XINFO")
+            .arg("CONSUMERS")
+            .arg(&input.key)
+            .arg(&input.group)
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_stream_consumers(reply)
+    }
+
+    async fn get_stream_pending_entries(
+        &self,
+        input: GetStreamPendingEntriesInput,
+    ) -> Result<Vec<StreamPendingEntry>, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let mut command = ::redis::cmd("XPENDING");
+        command
+            .arg(&input.key)
+            .arg(&input.group)
+            .arg("-")
+            .arg("+")
+            .arg(input.count);
+        if let Some(consumer) = input.consumer.as_deref() {
+            command.arg(consumer);
+        }
+        let reply = command
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_stream_pending_entries(reply)
+    }
+
+    async fn acknowledge_stream_pending_entries(
+        &self,
+        input: AcknowledgeStreamPendingEntriesInput,
+    ) -> Result<u64, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let acknowledged = ::redis::cmd("XACK")
+            .arg(&input.key)
+            .arg(&input.group)
+            .arg(&input.entries)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        u64::try_from(acknowledged).map_err(|_| AppError::CommandFailed)
+    }
+
+    async fn delete_stream_consumer(
+        &self,
+        input: DeleteStreamConsumerInput,
+    ) -> Result<u64, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let pending = ::redis::cmd("XGROUP")
+            .arg("DELCONSUMER")
+            .arg(&input.key)
+            .arg(&input.group)
+            .arg(&input.consumer)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        u64::try_from(pending).map_err(|_| AppError::CommandFailed)
     }
 
     async fn export_keys(&self, input: ExportKeysInput) -> Result<Vec<ExportedKey>, AppError> {
@@ -1233,7 +1388,10 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        domain::{ConnectionProfile, GetSlowLogsInput, PublishPubSubInput, StopProfilerInput},
+        domain::{
+            ConnectionProfile, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+            GetStreamPendingEntriesInput, PublishPubSubInput, StopProfilerInput,
+        },
         error::AppError,
         persistence::{ProfileRepository, SecretStore},
     };
@@ -1333,6 +1491,32 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error, AppError::ConnectionFailed);
+    }
+
+    #[tokio::test]
+    async fn rejects_stream_group_operations_without_active_connection() {
+        let service = RedisService::new(Arc::new(EmptyProfiles), Arc::new(EmptySecrets));
+
+        let error = service
+            .get_stream_consumer_groups(GetStreamConsumerGroupsInput {
+                connection_id: "local".into(),
+                key: "events".into(),
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, AppError::ConnectionFailed);
+
+        let error = service
+            .get_stream_pending_entries(GetStreamPendingEntriesInput {
+                connection_id: "local".into(),
+                key: "events".into(),
+                group: "workers".into(),
+                count: 0,
+                consumer: None,
+            })
+            .await
+            .unwrap_err();
+        assert_eq!(error, AppError::InvalidConnection);
     }
 
     #[tokio::test]

@@ -6,8 +6,11 @@ use std::{
 
 use redix_lib::{
     domain::{
-        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput,
-        ExportedKey, GetSlowLogsInput, HashEntry, ImportKeysInput, KeyInfoInput, KeyValue,
+        AcknowledgeStreamPendingEntriesInput, ConnectionProfile, CreateKeyInput,
+        CreateStreamConsumerGroupInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
+        DeleteStreamConsumerInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
+        GetSlowLogsInput, GetStreamConsumerGroupsInput, GetStreamConsumersInput,
+        GetStreamPendingEntriesInput, HashEntry, ImportKeysInput, KeyInfoInput, KeyValue,
         PublishPubSubInput, RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput,
         SetKeyInput, SetKeyTtlInput, SortedSetEntry, StopPubSubInput, StreamEntry, StreamField,
         UpdateSlowLogConfigInput,
@@ -810,4 +813,182 @@ async fn runs_slow_log_and_pubsub_flow_when_redis_is_available() {
         .await
         .unwrap();
     service.close_connection("integration").await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "设置 REDIX_TEST_REDIS_URL 后用 cargo test -- --ignored --nocapture 运行"]
+async fn runs_stream_consumer_group_flow_when_redis_is_available() {
+    let url = std::env::var("REDIX_TEST_REDIS_URL")
+        .expect("请设置 REDIX_TEST_REDIS_URL 后运行 Redis 集成测试");
+    let (profile, password) = integration_profile(&url);
+    let secrets = TestSecrets::default();
+    if let Some(password) = password.as_deref() {
+        secrets.write("integration", password).unwrap();
+    }
+    let service = RedisService::new(
+        std::sync::Arc::new(TestProfiles {
+            profiles: vec![profile],
+        }),
+        std::sync::Arc::new(secrets),
+    );
+    let keys = TestKeys::unique();
+    service.open_connection("integration").await.unwrap();
+
+    let flow = async {
+        service
+            .create_key(CreateKeyInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                value: RedisValue::Stream {
+                    entries: vec![
+                        StreamEntry {
+                            id: "1-0".into(),
+                            fields: vec![StreamField {
+                                field: "event".into(),
+                                value: "created".into(),
+                            }],
+                        },
+                        StreamEntry {
+                            id: "2-0".into(),
+                            fields: vec![StreamField {
+                                field: "event".into(),
+                                value: "updated".into(),
+                            }],
+                        },
+                    ],
+                },
+                ttl_ms: None,
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        service
+            .create_stream_consumer_group(CreateStreamConsumerGroupInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                name: "workers".into(),
+                last_delivered_id: "0-0".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+
+        let groups = service
+            .get_stream_consumer_groups(GetStreamConsumerGroupsInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "workers");
+        assert_eq!(groups[0].pending, 0);
+
+        let consumers = service
+            .get_stream_consumers(GetStreamConsumersInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                group: "workers".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        assert!(consumers.is_empty());
+        let pending = service
+            .get_stream_pending_entries(GetStreamPendingEntriesInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                group: "workers".into(),
+                count: 20,
+                consumer: None,
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        assert!(pending.is_empty());
+
+        let raw_client = redis::Client::open(url.as_str()).unwrap();
+        let mut raw_connection = raw_client.get_multiplexed_async_connection().await.unwrap();
+        let _: redis::Value = redis::cmd("XREADGROUP")
+            .arg("GROUP")
+            .arg("workers")
+            .arg("consumer-1")
+            .arg("COUNT")
+            .arg(1)
+            .arg("STREAMS")
+            .arg(&keys.stream)
+            .arg(">")
+            .query_async(&mut raw_connection)
+            .await
+            .unwrap();
+
+        let consumers = service
+            .get_stream_consumers(GetStreamConsumersInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                group: "workers".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        assert_eq!(consumers.len(), 1);
+        assert_eq!(consumers[0].name, "consumer-1");
+        assert_eq!(consumers[0].pending, 1);
+
+        let pending = service
+            .get_stream_pending_entries(GetStreamPendingEntriesInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                group: "workers".into(),
+                count: 20,
+                consumer: Some("consumer-1".into()),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].consumer, "consumer-1");
+        assert_eq!(pending[0].deliveries, 1);
+
+        let acknowledged = service
+            .acknowledge_stream_pending_entries(AcknowledgeStreamPendingEntriesInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                group: "workers".into(),
+                entries: vec![pending[0].id.clone()],
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        assert_eq!(acknowledged, 1);
+
+        let removed_consumer = service
+            .delete_stream_consumer(DeleteStreamConsumerInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                group: "workers".into(),
+                consumer: "consumer-1".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        assert_eq!(removed_consumer, 0);
+
+        let deleted_group = service
+            .delete_stream_consumer_group(DeleteStreamConsumerGroupInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                name: "workers".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        assert_eq!(deleted_group, 1);
+        Ok::<(), String>(())
+    }
+    .await;
+
+    let cleanup = service.delete_key("integration", &keys.stream).await;
+    let close = service.close_connection("integration").await;
+    match (flow, cleanup, close) {
+        (Ok(()), Ok(()), Ok(())) => {}
+        (Err(flow), Ok(()), Ok(())) => panic!("Redis stream group flow failed: {flow}"),
+        (flow, cleanup, close) => panic!(
+            "Redis stream group flow cleanup failed: flow={:?}, cleanup={:?}, close={:?}",
+            flow.map_err(|error| error),
+            cleanup.map_err(|error| error.code().to_owned()),
+            close.map_err(|error| error.code().to_owned())
+        ),
+    }
 }
