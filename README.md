@@ -40,12 +40,12 @@ Browser 支持新增键、重命名、批量删除、元数据刷新、类型过
 
 Workbench 支持本地内置命令目录、命令前缀提示、多行批量执行、遇错继续策略、Raw/Text/JSON 结果格式和复制。命令历史按连接保存到应用数据目录的版本化 JSON 文件；AUTH、HELLO、ACL、CONFIG 命令族不会写入历史，也不使用 `localStorage`。
 
-Database 工作区提供服务器版本、运行模式、连接数、内存、命令量、命中率和已加载模块等只读概览，并展示数据库键空间统计；数据库切换成功后才更新当前连接配置。Query Library 使用应用数据目录中的版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench，AUTH、HELLO、ACL、CONFIG 命令族不会保存。设置使用 `settings.json` 持久化主题、结果格式、Browser 扫描数量和批量命令错误策略。
+Database 工作区提供服务器版本、运行模式、连接数、内存、命令量、命中率和已加载模块等只读概览，并展示数据库键空间统计；实例详情按 INFO 分组展示客户端、内存、统计、持久化与复制指标，并提供 commandstats 命令统计。数据库切换成功后才更新当前连接配置。Database Analysis 是显式触发的只读工具：仅在用户点击“开始分析”后，以 `SCAN` 加固定批次 pipeline 汇总当前数据库；默认最多处理 100000 个键，结果不落盘，也不会在连接后自动开始分析。Query Library 使用应用数据目录中的版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench，AUTH、HELLO、ACL、CONFIG 命令族不会保存。设置使用 `settings.json` 持久化主题、结果格式、Browser 扫描数量和批量命令错误策略。
 
 运维观察工作区提供 Slow Log 的读取、清空和 `slowlog-*` 配置，独立 Pub/Sub channel/pattern 订阅、发布和实时消息流，以及基于独立 `MONITOR` socket 的 Profiler 实时命令流。Pub/Sub 每个连接只保留一个可取消会话，前端最多缓存 5000 条消息；Profiler 前端最多缓存 10000 条事件；关闭连接、切换数据库或卸载页面时会清理后台任务。Profiler 启动前会提示 MONITOR 可能带来的性能影响，不保存日志文件或历史记录。
 
 ## 当前边界
 
-本版本明确只支持本地 Redis Standalone。当前不支持 Redis Cloud、Azure Managed Redis、Cluster、Sentinel、TLS、SSH、Stream 实时消费、XCLAIM/XAUTOCLAIM 或其他 Redis 模块专用编辑器；Profiler 仅提供基础实时 MONITOR，不包含日志文件、历史持久化或拓扑 fan-out，也不包含云登录、云账户、云端点、云数据库发现和云 SDK 集成。
+本版本明确只支持本地 Redis Standalone。当前不支持 Redis Cloud、Azure Managed Redis、RDI、AI、Telemetry、Cluster/Sentinel 或其他拓扑能力、TLS、SSH、Stream 实时消费、XCLAIM/XAUTOCLAIM 或其他 Redis 模块专用编辑器；Profiler 仅提供基础实时 MONITOR，不包含日志文件、历史持久化或拓扑 fan-out，也不包含云登录、云账户、云端点、云数据库发现和云 SDK 集成。
 
 模块专用数据编辑器、Monaco/插件运行时和远程托管实例管理同样不在本 MVP 范围内。

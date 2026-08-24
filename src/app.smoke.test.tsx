@@ -11,7 +11,9 @@ const {
   executeCommandsMock,
   getCommandCatalogMock,
   getDatabaseOverviewMock,
+  getInstanceDetailsMock,
   getInstanceOverviewMock,
+  analyzeDatabaseMock,
   getAppSettingsMock,
   listQueryLibraryMock,
   listCommandHistoryMock,
@@ -29,7 +31,9 @@ const {
   executeCommandsMock: vi.fn(),
   getCommandCatalogMock: vi.fn(),
   getDatabaseOverviewMock: vi.fn(),
+  getInstanceDetailsMock: vi.fn(),
   getInstanceOverviewMock: vi.fn(),
+  analyzeDatabaseMock: vi.fn(),
   getAppSettingsMock: vi.fn(),
   listQueryLibraryMock: vi.fn(),
   listCommandHistoryMock: vi.fn(),
@@ -49,7 +53,9 @@ vi.mock("./lib/tauri", () => ({
   executeCommands: executeCommandsMock,
   getCommandCatalog: getCommandCatalogMock,
   getDatabaseOverview: getDatabaseOverviewMock,
+  getInstanceDetails: getInstanceDetailsMock,
   getInstanceOverview: getInstanceOverviewMock,
+  analyzeDatabase: analyzeDatabaseMock,
   getAppSettings: getAppSettingsMock,
   listQueryLibrary: listQueryLibraryMock,
   listCommandHistory: listCommandHistoryMock,
@@ -109,9 +115,59 @@ beforeEach(() => {
     role: "master",
     modules: [],
   });
+  getInstanceDetailsMock.mockResolvedValue({
+    overview: {
+      server_version: "8.4.0",
+      redis_mode: "standalone",
+      uptime_seconds: 42,
+      connected_clients: 1,
+      used_memory_bytes: 1024,
+      max_memory_bytes: null,
+      total_commands_processed: 1,
+      keyspace_hits: 1,
+      keyspace_misses: 0,
+      role: "master",
+      modules: [],
+    },
+    clients: { connected_clients: 1, blocked_clients: 0, tracking_clients: 0, max_clients: 10000 },
+    memory: {
+      used_memory_bytes: 1024,
+      used_memory_peak_bytes: 1024,
+      used_memory_rss_bytes: 1024,
+      mem_fragmentation_ratio: 1,
+      allocator_active_bytes: null,
+      allocator_resident_bytes: null,
+    },
+    stats: { instantaneous_ops_per_sec: 0, expired_keys: 0, evicted_keys: 0, hit_rate: 1 },
+    persistence: {
+      loading: false,
+      rdb_last_save_time: null,
+      rdb_changes_since_last_save: 0,
+      aof_enabled: false,
+      aof_rewrite_in_progress: false,
+    },
+    replication: {
+      role: "master",
+      connected_replicas: 0,
+      master_link_status: null,
+      master_repl_offset: null,
+    },
+    command_stats: [],
+  });
   getDatabaseOverviewMock.mockResolvedValue([
     { database: 0, key_count: 1, expires: 0, avg_ttl_ms: 0 },
   ]);
+  analyzeDatabaseMock.mockResolvedValue({
+    database: 0,
+    total_keys: { total: 0, observed: 0, types: [] },
+    total_memory: { total: 0, observed: 0, types: [] },
+    top_keys_by_memory: [],
+    top_keys_by_length: [],
+    top_namespaces_by_keys: [],
+    top_namespaces_by_memory: [],
+    expiration_groups: [],
+    progress: { scanned: 0, processed: 0, truncated: false },
+  });
   selectDatabaseMock.mockResolvedValue(localProfile);
   getAppSettingsMock.mockResolvedValue({
     version: 1,
@@ -164,8 +220,21 @@ describe("Redix 应用壳", () => {
     expect(screen.getByRole("button", { name: "Browser" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Workbench" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Database" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "数据库分析" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Query Library" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "设置" })).toBeEnabled();
+  });
+
+  it("连接后显示可用的数据库分析入口，默认仍停留在 Browser", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await waitFor(() => expect(openConnectionMock).toHaveBeenCalledWith("local"));
+
+    expect(screen.getByRole("button", { name: "数据库分析" })).toBeEnabled();
+    expect(screen.getByRole("heading", { name: "数据浏览" })).toBeInTheDocument();
+    expect(analyzeDatabaseMock).not.toHaveBeenCalled();
   });
 
   it("连接后显示 Database 工作区并可加载概览", async () => {

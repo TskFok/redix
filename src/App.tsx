@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
+import DatabaseAnalysisPage from "./features/database-analysis/DatabaseAnalysisPage";
 import DatabasePage from "./features/database/DatabasePage";
 import ObservabilityPage from "./features/observability/ObservabilityPage";
 import QueryLibraryPage from "./features/query-library/QueryLibraryPage";
@@ -22,6 +23,7 @@ interface NavigationItem {
     | "browser"
     | "workbench"
     | "database"
+    | "database-analysis"
     | "observability"
     | "query-library"
     | "settings";
@@ -48,6 +50,12 @@ const navigationItems: NavigationItem[] = [
     icon: "database",
   },
   {
+    id: "database-analysis",
+    label: "数据库分析",
+    description: "键空间分析",
+    icon: "database-analysis",
+  },
+  {
     id: "observability",
     label: "运维观察",
     description: "Slow Log / Pub/Sub / Profiler",
@@ -72,6 +80,7 @@ const sectionDescriptions: Record<AppSection, string> = {
   browser: "使用 SCAN 浏览键和值",
   workbench: "直接执行 Redis 命令并查看返回值",
   database: "查看实例指标和数据库键空间",
+  "database-analysis": "显式扫描并汇总键空间与内存",
   observability: "查看 Slow Log、Pub/Sub 和 Profiler",
   "query-library": "保存命令并回填 Workbench",
   settings: "调整主题和工作区偏好",
@@ -96,7 +105,7 @@ function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
     );
   }
 
-  if (type === "database") {
+  if (type === "database" || type === "database-analysis") {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <ellipse cx="12" cy="6" rx="7" ry="3" />
@@ -291,6 +300,12 @@ export default function App() {
               connectionId={activeProfile.id}
               activeDatabase={activeProfile.database}
               onProfileChanged={handleProfileChanged}
+            />
+          ) : null}
+          {activeProfile && activeSection === "database-analysis" ? (
+            <DatabaseAnalysisPage
+              connectionId={activeProfile.id}
+              activeDatabase={activeProfile.database}
             />
           ) : null}
           {activeProfile && activeSection === "observability" ? (

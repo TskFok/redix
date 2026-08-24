@@ -2123,6 +2123,98 @@ code {
   background: var(--color-danger-surface);
 }
 
+/* Database analysis and instance details */
+
+.database-analysis-page,
+.database-page[aria-labelledby="database-analysis-page-title"] {
+  gap: 16px;
+}
+
+.analysis-form,
+.database-page[aria-labelledby="database-analysis-page-title"] .form-grid {
+  grid-template-columns: minmax(0, 1.35fr) repeat(2, minmax(140px, 0.65fr));
+  gap: 12px;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+}
+
+.analysis-form .field,
+.database-page[aria-labelledby="database-analysis-page-title"] .form-grid .field {
+  min-width: 0;
+}
+
+.analysis-summary-grid,
+.database-page[aria-labelledby="database-analysis-page-title"] .database-metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.database-page[aria-labelledby="database-analysis-page-title"] .database-metric-card {
+  min-height: 96px;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.database-page[aria-labelledby="database-analysis-page-title"] .database-metric-card:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-raised);
+}
+
+.analysis-table,
+.database-page[aria-labelledby="database-analysis-page-title"] .database-table {
+  min-width: 680px;
+}
+
+.database-page[aria-labelledby="database-analysis-page-title"] .database-table-wrap,
+.database-page[aria-labelledby="database-page-title"] .database-table-wrap {
+  max-width: 100%;
+  overscroll-behavior-inline: contain;
+}
+
+.analysis-progress,
+.database-page[aria-labelledby="database-analysis-page-title"] .database-panel[aria-labelledby="expiration-groups-title"] .database-module-list {
+  gap: 10px;
+}
+
+.analysis-progress > li,
+.database-page[aria-labelledby="database-analysis-page-title"] .database-panel[aria-labelledby="expiration-groups-title"] .database-module-list li {
+  display: grid;
+  grid-template-columns: minmax(104px, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.analysis-progress > li > :last-child,
+.database-page[aria-labelledby="database-analysis-page-title"] .database-panel[aria-labelledby="expiration-groups-title"] .database-module-list li > :last-child {
+  grid-column: 1 / -1;
+}
+
+.instance-detail-grid,
+.database-page[aria-labelledby="database-page-title"] .database-metric-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.database-page[aria-labelledby="database-page-title"] .database-module-list li {
+  min-height: 42px;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.database-page[aria-labelledby="database-page-title"] .database-module-list li:hover {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-raised);
+}
+
+.instance-command-table,
+.database-page[aria-labelledby="database-page-title"] .database-panel[aria-labelledby="command-stats-title"] .database-table {
+  min-width: 760px;
+}
+
+.database-page[aria-labelledby="database-page-title"] .database-panel[aria-labelledby="command-stats-title"] .database-table tbody th {
+  color: var(--color-primary);
+  font-family: "JetBrains Mono", monospace;
+}
+
 /* Observability */
 
 .observability-page {
@@ -2531,6 +2623,13 @@ code {
   .database-metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .analysis-summary-grid,
+  .instance-detail-grid,
+  .database-page[aria-labelledby="database-analysis-page-title"] .database-metric-grid,
+  .database-page[aria-labelledby="database-page-title"] .database-metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -2633,6 +2732,7 @@ code {
   }
 
   .form-grid,
+  .analysis-form,
   .browser-add-key-grid,
   .stream-group-create,
   .stream-group-data-grid,
@@ -2667,6 +2767,18 @@ code {
   }
 
   .database-metric-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-summary-grid,
+  .instance-detail-grid,
+  .database-page[aria-labelledby="database-analysis-page-title"] .database-metric-grid,
+  .database-page[aria-labelledby="database-page-title"] .database-metric-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .analysis-progress > li,
+  .database-page[aria-labelledby="database-analysis-page-title"] .database-panel[aria-labelledby="expiration-groups-title"] .database-module-list li {
     grid-template-columns: minmax(0, 1fr);
   }
 

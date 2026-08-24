@@ -14,6 +14,8 @@
 - Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
 - Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
 - Database 工作区读取本地实例与数据库键空间概览，并支持安全的数据库切换；指标不可用时按字段降级，不暴露 Redis 原始错误。
+- Instance 详情按 INFO 分组展示客户端、内存、统计、持久化、复制指标及 commandstats；全部为当前连接的只读请求。
+- Database Analysis 仅支持当前本地 Standalone 数据库的显式触发扫描：使用 `SCAN` 与固定批次 pipeline 汇总键空间、内存和过期时间；默认上限为 100000 个键，只读且不落盘，不会因连接或进入页面自动开始。
 - Query Library 使用版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench；敏感命令不保存。
 - 设置使用版本化 `settings.json` 保存主题、结果格式、Browser 扫描数量和批量命令遇错策略，Rust 与前端均执行范围校验。
 - Slow Log 支持读取、清空和 `slowlog-max-len`/`slowlog-log-slower-than` 配置；Redis 回复解析兼容 RESP2 数组和 RESP3 Map。
@@ -23,10 +25,10 @@
 
 ## 明确排除项
 
-- Redis Cloud、Azure Managed Redis 及其他云托管 Redis 产品。
+- Redis Cloud、Azure Managed Redis、RDI、AI、Telemetry 及其他云托管 Redis 产品。
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
-- Cluster、Sentinel、TLS、SSH、远程托管实例和云资源管理。
-- Redis 模块专用数据类型、模块查询和模块可视化（RedisJSON 根文档和 Stream 基础能力除外）。
+- Cluster、Sentinel、拓扑发现或拓扑 fan-out、TLS、SSH、远程托管实例和云资源管理。
+- Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档和 Stream 基础能力除外）。
 - Stream 实时消费、阻塞式 `XREADGROUP`、`XCLAIM`/`XAUTOCLAIM`、Claim 流程、Profiler 日志文件/历史持久化/拓扑 fan-out 和超过 500 条记录的分页编辑。
 - Monaco、远程插件运行时和云端命令目录。
 - 其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
