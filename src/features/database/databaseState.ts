@@ -1,9 +1,9 @@
-import type { DatabaseOverview, InstanceOverview } from "../../lib/types";
+import type { DatabaseOverview, InstanceDetails } from "../../lib/types";
 
 export interface DatabasePageState {
   loading: boolean;
   switching: boolean;
-  instance: InstanceOverview | null;
+  details: InstanceDetails | null;
   databases: DatabaseOverview[];
   error: string | null;
   switchError: string | null;
@@ -13,7 +13,7 @@ export interface DatabasePageState {
 export const initialDatabasePageState: DatabasePageState = {
   loading: true,
   switching: false,
-  instance: null,
+  details: null,
   databases: [],
   error: null,
   switchError: null,
@@ -45,6 +45,38 @@ export function formatBytes(value: number | null | undefined): string {
     return `${(value / (1024 * 1024)).toFixed(1)} MB`;
   }
   return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+export function formatBoolean(value: boolean | null | undefined): string {
+  if (value === null || value === undefined) {
+    return "不可用";
+  }
+
+  return value ? "是" : "否";
+}
+
+export function formatPercentage(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "不可用";
+  }
+
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+export function formatTimestamp(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "不可用";
+  }
+
+  return new Date(value * 1_000).toLocaleString("zh-CN", {
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
 }
 
 export function toUserFacingDatabaseError(

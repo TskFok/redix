@@ -2,15 +2,18 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   getDatabaseOverview,
-  getInstanceOverview,
+  getInstanceDetails,
   selectDatabase,
 } from "../../lib/tauri";
 import type { ConnectionProfile } from "../../lib/types";
 import {
   databaseLoadFailedMessage,
   databaseSwitchFailedMessage,
+  formatBoolean,
   formatBytes,
   formatMetric,
+  formatPercentage,
+  formatTimestamp,
   initialDatabasePageState,
   toUserFacingDatabaseError,
   type DatabasePageState,
@@ -53,7 +56,7 @@ export function DatabasePage({
     }));
 
     const overview = Promise.allSettled([
-      getInstanceOverview(connectionId),
+      getInstanceDetails(connectionId),
       getDatabaseOverview(connectionId),
     ]);
 
@@ -62,7 +65,7 @@ export function DatabasePage({
         return;
       }
 
-      const instance = instanceResult.status === "fulfilled" ? instanceResult.value : null;
+      const details = instanceResult.status === "fulfilled" ? instanceResult.value : null;
       const databases =
         databaseResult.status === "fulfilled" ? databaseResult.value : [];
       const failed = [instanceResult, databaseResult].find(
@@ -71,7 +74,7 @@ export function DatabasePage({
       setState((current) => ({
         ...current,
         loading: false,
-        instance,
+        details,
         databases,
         error: failed
           ? toUserFacingDatabaseError(
@@ -157,32 +160,138 @@ export function DatabasePage({
       ) : null}
 
       <div className="database-metric-grid" aria-label="实例指标">
-        <MetricCard label="服务器版本" value={formatMetric(state.instance?.server_version)} />
-        <MetricCard label="Redis 模式" value={formatMetric(state.instance?.redis_mode)} />
+        <MetricCard
+          label="服务器版本"
+          value={formatMetric(state.details?.overview.server_version)}
+        />
+        <MetricCard label="Redis 模式" value={formatMetric(state.details?.overview.redis_mode)} />
         <MetricCard
           label="已连接客户端"
-          value={formatMetric(state.instance?.connected_clients)}
+          value={formatMetric(state.details?.overview.connected_clients)}
         />
         <MetricCard
           label="已用内存"
-          value={formatBytes(state.instance?.used_memory_bytes)}
+          value={formatBytes(state.details?.overview.used_memory_bytes)}
         />
         <MetricCard
           label="最大内存"
-          value={formatBytes(state.instance?.max_memory_bytes)}
+          value={formatBytes(state.details?.overview.max_memory_bytes)}
         />
-        <MetricCard label="主从角色" value={formatMetric(state.instance?.role)} />
+        <MetricCard label="主从角色" value={formatMetric(state.details?.overview.role)} />
         <MetricCard
           label="命令处理数"
-          value={formatMetric(state.instance?.total_commands_processed)}
+          value={formatMetric(state.details?.overview.total_commands_processed)}
         />
         <MetricCard
           label="命中 / 未命中"
-          value={`${formatMetric(state.instance?.keyspace_hits)} / ${formatMetric(
-            state.instance?.keyspace_misses,
+          value={`${formatMetric(state.details?.overview.keyspace_hits)} / ${formatMetric(
+            state.details?.overview.keyspace_misses,
           )}`}
         />
       </div>
+
+      <InfoPanel
+        id="client-details"
+        title="客户端"
+        items={[
+          ["已连接客户端", formatMetric(state.details?.clients.connected_clients)],
+          ["阻塞客户端", formatMetric(state.details?.clients.blocked_clients)],
+          ["跟踪客户端", formatMetric(state.details?.clients.tracking_clients)],
+          ["最大客户端数", formatMetric(state.details?.clients.max_clients)],
+        ]}
+      />
+
+      <InfoPanel
+        id="memory-details"
+        title="内存"
+        items={[
+          ["已用内存", formatBytes(state.details?.memory.used_memory_bytes)],
+          ["内存峰值", formatBytes(state.details?.memory.used_memory_peak_bytes)],
+          ["RSS 内存", formatBytes(state.details?.memory.used_memory_rss_bytes)],
+          ["内存碎片率", formatPercentage(state.details?.memory.mem_fragmentation_ratio)],
+          ["分配器活跃内存", formatBytes(state.details?.memory.allocator_active_bytes)],
+          ["分配器驻留内存", formatBytes(state.details?.memory.allocator_resident_bytes)],
+        ]}
+      />
+
+      <InfoPanel
+        id="stats-details"
+        title="统计"
+        items={[
+          ["即时操作数 / 秒", formatMetric(state.details?.stats.instantaneous_ops_per_sec)],
+          ["过期键数", formatMetric(state.details?.stats.expired_keys)],
+          ["淘汰键数", formatMetric(state.details?.stats.evicted_keys)],
+          ["命中率", formatPercentage(state.details?.stats.hit_rate)],
+        ]}
+      />
+
+      <InfoPanel
+        id="persistence-details"
+        title="持久化"
+        items={[
+          ["正在加载", formatBoolean(state.details?.persistence.loading)],
+          ["RDB 最近保存时间", formatTimestamp(state.details?.persistence.rdb_last_save_time)],
+          [
+            "自上次保存后的变更数",
+            formatMetric(state.details?.persistence.rdb_changes_since_last_save),
+          ],
+          ["AOF 已启用", formatBoolean(state.details?.persistence.aof_enabled)],
+          [
+            "AOF 重写进行中",
+            formatBoolean(state.details?.persistence.aof_rewrite_in_progress),
+          ],
+        ]}
+      />
+
+      <InfoPanel
+        id="replication-details"
+        title="复制"
+        items={[
+          ["角色", formatMetric(state.details?.replication.role)],
+          ["已连接副本", formatMetric(state.details?.replication.connected_replicas)],
+          ["主节点连接状态", formatMetric(state.details?.replication.master_link_status)],
+          ["主节点复制偏移量", formatMetric(state.details?.replication.master_repl_offset)],
+        ]}
+      />
+
+      <section className="database-panel" aria-labelledby="command-stats-title">
+        <div className="database-panel-heading">
+          <div>
+            <p className="eyebrow">INFO</p>
+            <h3 id="command-stats-title">命令统计</h3>
+          </div>
+        </div>
+        {state.details?.command_stats.length ? (
+          <div className="database-table-wrap">
+            <table className="database-table">
+              <thead>
+                <tr>
+                  <th scope="col">命令</th>
+                  <th scope="col">调用次数</th>
+                  <th scope="col">总耗时</th>
+                  <th scope="col">平均耗时</th>
+                  <th scope="col">拒绝次数</th>
+                  <th scope="col">失败次数</th>
+                </tr>
+              </thead>
+              <tbody>
+                {state.details.command_stats.map((command) => (
+                  <tr key={command.command}>
+                    <th scope="row">{command.command}</th>
+                    <td>{formatMetric(command.calls)}</td>
+                    <td>{formatMetric(command.usec)}</td>
+                    <td>{formatMetric(command.usec_per_call)}</td>
+                    <td>{formatMetric(command.rejected_calls)}</td>
+                    <td>{formatMetric(command.failed_calls)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="empty-state-compact">未检测到命令统计或命令统计不可用。</p>
+        )}
+      </section>
 
       <section className="database-panel" aria-labelledby="database-list-title">
         <div className="database-panel-heading">
@@ -251,9 +360,9 @@ export function DatabasePage({
             <h3 id="module-list-title">已加载模块</h3>
           </div>
         </div>
-        {state.instance?.modules.length ? (
+        {state.details?.overview.modules.length ? (
           <ul className="database-module-list">
-            {state.instance.modules.map((module) => (
+            {state.details.overview.modules.map((module) => (
               <li key={`${module.name}-${module.version ?? "unknown"}`}>
                 <strong>{module.name}</strong>
                 <span>{module.version ?? "版本不可用"}</span>
@@ -274,6 +383,35 @@ function MetricCard({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </article>
+  );
+}
+
+function InfoPanel({
+  id,
+  title,
+  items,
+}: {
+  id: string;
+  title: string;
+  items: Array<[string, string]>;
+}) {
+  return (
+    <section className="database-panel" aria-labelledby={id}>
+      <div className="database-panel-heading">
+        <div>
+          <p className="eyebrow">INFO</p>
+          <h3 id={id}>{title}</h3>
+        </div>
+      </div>
+      <ul className="database-module-list">
+        {items.map(([label, value]) => (
+          <li key={label}>
+            <strong>{label}</strong>
+            <span>{value}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

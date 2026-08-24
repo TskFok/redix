@@ -1,21 +1,34 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getDatabaseOverview,
-  getInstanceOverview,
+  getInstanceDetails,
   selectDatabase,
 } from "../../lib/tauri";
-import type { ConnectionProfile, DatabaseOverview, InstanceOverview } from "../../lib/types";
+import type {
+  ConnectionProfile,
+  DatabaseOverview,
+  InstanceDetails,
+  InstanceOverview,
+} from "../../lib/types";
 import DatabasePage from "./DatabasePage";
 
 vi.mock("../../lib/tauri", () => ({
   getDatabaseOverview: vi.fn(),
-  getInstanceOverview: vi.fn(),
+  getInstanceDetails: vi.fn(),
   selectDatabase: vi.fn(),
 }));
 
-const getInstanceOverviewMock = vi.mocked(getInstanceOverview);
+const getInstanceDetailsMock = vi.mocked(getInstanceDetails);
 const getDatabaseOverviewMock = vi.mocked(getDatabaseOverview);
 const selectDatabaseMock = vi.mocked(selectDatabase);
 
@@ -43,6 +56,53 @@ const instance: InstanceOverview = {
   modules: [],
 };
 
+const details: InstanceDetails = {
+  overview: instance,
+  clients: {
+    connected_clients: 3,
+    blocked_clients: 1,
+    tracking_clients: 0,
+    max_clients: 10_000,
+  },
+  memory: {
+    used_memory_bytes: 1024,
+    used_memory_peak_bytes: 2048,
+    used_memory_rss_bytes: 4096,
+    mem_fragmentation_ratio: 1.2,
+    allocator_active_bytes: null,
+    allocator_resident_bytes: null,
+  },
+  stats: {
+    instantaneous_ops_per_sec: 12,
+    expired_keys: 4,
+    evicted_keys: 0,
+    hit_rate: 0.8,
+  },
+  persistence: {
+    loading: false,
+    rdb_last_save_time: 1_710_000_000,
+    rdb_changes_since_last_save: 2,
+    aof_enabled: false,
+    aof_rewrite_in_progress: false,
+  },
+  replication: {
+    role: "master",
+    connected_replicas: 0,
+    master_link_status: null,
+    master_repl_offset: null,
+  },
+  command_stats: [
+    {
+      command: "GET",
+      calls: 4,
+      usec: 20,
+      usec_per_call: 5,
+      rejected_calls: 0,
+      failed_calls: 1,
+    },
+  ],
+};
+
 const databases: DatabaseOverview[] = [
   { database: 0, key_count: 8, expires: 2, avg_ttl_ms: 1200 },
   { database: 1, key_count: null, expires: null, avg_ttl_ms: null },
@@ -64,7 +124,7 @@ function renderPage(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getInstanceOverviewMock.mockResolvedValue(instance);
+  getInstanceDetailsMock.mockResolvedValue(details);
   getDatabaseOverviewMock.mockResolvedValue(databases);
   selectDatabaseMock.mockResolvedValue(profile);
 });
@@ -74,14 +134,22 @@ afterEach(() => {
 });
 
 describe("DatabasePage", () => {
-  it("加载实例指标和数据库列表，并将空指标显示为不可用", async () => {
+  it("加载实例详情和数据库列表，并将空指标显示为不可用", async () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "数据库概览" })).toBeInTheDocument();
     expect(screen.getByText("7.2.5")).toBeInTheDocument();
-    expect(screen.getByText("3")).toBeInTheDocument();
     expect(screen.getByText("数据库 0")).toBeInTheDocument();
     expect(screen.getByText("数据库 1")).toBeInTheDocument();
+    const clientPanel = screen.getByRole("heading", { name: "客户端" }).closest("section");
+    expect(clientPanel).not.toBeNull();
+    expect(within(clientPanel!).getByText("阻塞客户端")).toBeInTheDocument();
+    expect(within(clientPanel!).getByText("1")).toBeInTheDocument();
+    expect(screen.getByText("内存峰值")).toBeInTheDocument();
+    expect(screen.getByText("2.0 KB")).toBeInTheDocument();
+    expect(screen.getByText("80.0%")).toBeInTheDocument();
+    expect(screen.getByRole("rowheader", { name: "GET" })).toBeInTheDocument();
+    expect(screen.getByText("未检测到模块或模块信息不可用。")).toBeInTheDocument();
     expect(screen.getAllByText("不可用").length).toBeGreaterThanOrEqual(3);
   });
 
@@ -114,18 +182,18 @@ describe("DatabasePage", () => {
     expect(screen.getByText("当前数据库：0")).toBeInTheDocument();
   });
 
-  it("连接变化后忽略旧概览响应", async () => {
-    let resolveOldInstance: (value: InstanceOverview) => void = () => undefined;
+  it("连接变化后忽略旧详情和数据库列表响应", async () => {
+    let resolveOldDetails: (value: InstanceDetails) => void = () => undefined;
     let resolveOldDatabases: (value: DatabaseOverview[]) => void = () => undefined;
-    const oldInstance = new Promise<InstanceOverview>((resolve) => {
-      resolveOldInstance = resolve;
+    const oldDetails = new Promise<InstanceDetails>((resolve) => {
+      resolveOldDetails = resolve;
     });
     const oldDatabases = new Promise<DatabaseOverview[]>((resolve) => {
       resolveOldDatabases = resolve;
     });
-    getInstanceOverviewMock.mockReturnValueOnce(oldInstance).mockResolvedValueOnce({
-      ...instance,
-      server_version: "8.0.0",
+    getInstanceDetailsMock.mockReturnValueOnce(oldDetails).mockResolvedValueOnce({
+      ...details,
+      overview: { ...instance, server_version: "8.0.0" },
     });
     getDatabaseOverviewMock.mockReturnValueOnce(oldDatabases).mockResolvedValueOnce([
       { database: 2, key_count: 2, expires: 0, avg_ttl_ms: 0 },
@@ -142,7 +210,7 @@ describe("DatabasePage", () => {
     expect(await screen.findByText("8.0.0")).toBeInTheDocument();
 
     await act(async () => {
-      resolveOldInstance({ ...instance, server_version: "old" });
+      resolveOldDetails({ ...details, overview: { ...instance, server_version: "old" } });
       resolveOldDatabases(databases);
     });
     expect(screen.queryByText("old")).not.toBeInTheDocument();
