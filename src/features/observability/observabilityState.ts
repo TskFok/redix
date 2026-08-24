@@ -1,10 +1,12 @@
 import type {
   IpcError,
+  ProfilerEvent,
   PubSubMessageEvent,
   PubSubTopic,
 } from "../../lib/types";
 
 export const MAX_PUBSUB_MESSAGES = 5_000;
+export const MAX_PROFILER_EVENTS = 10_000;
 
 export function parsePubSubTopics(value: string, pattern: boolean): PubSubTopic[] {
   const seen = new Set<string>();
@@ -30,6 +32,16 @@ export function appendPubSubMessage(
   const next = [...messages, message];
   return next.length > MAX_PUBSUB_MESSAGES
     ? next.slice(next.length - MAX_PUBSUB_MESSAGES)
+    : next;
+}
+
+export function appendProfilerEvent(
+  events: ProfilerEvent[],
+  event: ProfilerEvent,
+): ProfilerEvent[] {
+  const next = [...events, event];
+  return next.length > MAX_PROFILER_EVENTS
+    ? next.slice(next.length - MAX_PROFILER_EVENTS)
     : next;
 }
 
@@ -91,4 +103,13 @@ export function formatPubSubTime(timestampMs: number): string {
     minute: "2-digit",
     second: "2-digit",
   });
+}
+
+export function formatProfilerTime(timestamp: string): string {
+  const seconds = Number(timestamp);
+  return formatSlowLogTime(seconds);
+}
+
+export function formatProfilerCommand(args: string[]): string {
+  return args.map((arg) => JSON.stringify(arg)).join(" ");
 }

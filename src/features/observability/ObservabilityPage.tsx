@@ -6,11 +6,16 @@ import {
   getSlowLogConfig,
   getSlowLogs,
   publishPubSub,
+  startProfiler,
   startPubSub,
+  stopProfiler,
   stopPubSub,
   updateSlowLogConfig,
 } from "../../lib/tauri";
 import type {
+  ProfilerEvent,
+  ProfilerSession,
+  ProfilerStatusEvent,
   PubSubMessageEvent,
   PubSubSession,
   PubSubStatusEvent,
@@ -18,7 +23,10 @@ import type {
   SlowLogEntry,
 } from "../../lib/types";
 import {
+  appendProfilerEvent,
   appendPubSubMessage,
+  formatProfilerCommand,
+  formatProfilerTime,
   formatPubSubTime,
   formatSlowLogDuration,
   formatSlowLogTime,
@@ -28,8 +36,10 @@ import {
 
 const PUBSUB_MESSAGE_EVENT = "redix://pubsub/message";
 const PUBSUB_STATUS_EVENT = "redix://pubsub/status";
+const PROFILER_EVENT = "redix://profiler/event";
+const PROFILER_STATUS_EVENT = "redix://profiler/status";
 
-type ObservabilityTab = "slowlog" | "pubsub";
+type ObservabilityTab = "slowlog" | "pubsub" | "profiler";
 
 interface ObservabilityPageProps {
   connectionId: string;
@@ -53,8 +63,13 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
   const [publishChannel, setPublishChannel] = useState("events");
   const [publishMessage, setPublishMessage] = useState("");
   const [publishFeedback, setPublishFeedback] = useState<string | null>(null);
+  const [profilerSession, setProfilerSession] = useState<ProfilerSession | null>(null);
+  const [profilerStatus, setProfilerStatus] = useState("idle");
+  const [profilerEvents, setProfilerEvents] = useState<ProfilerEvent[]>([]);
+  const [profilerBusy, setProfilerBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const sessionRef = useRef<PubSubSession | null>(null);
+  const profilerSessionRef = useRef<ProfilerSession | null>(null);
   const requestRef = useRef(0);
 
   useEffect(() => {
@@ -101,6 +116,8 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
     let disposed = false;
     let unlistenMessage: (() => void) | undefined;
     let unlistenStatus: (() => void) | undefined;
+    let unlistenProfiler: (() => void) | undefined;
+    let unlistenProfilerStatus: (() => void) | undefined;
 
     void Promise.all([
       listen<PubSubMessageEvent>(PUBSUB_MESSAGE_EVENT, (event) => {
@@ -126,15 +143,42 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
         }
         setPubSubStatus(payload.state);
       }),
+      listen<ProfilerEvent>(PROFILER_EVENT, (event) => {
+        const payload = event.payload;
+        const session = profilerSessionRef.current;
+        if (
+          payload.connection_id !== connectionId ||
+          session === null ||
+          payload.session_id !== session.session_id
+        ) {
+          return;
+        }
+        setProfilerEvents((current) => appendProfilerEvent(current, payload));
+      }),
+      listen<ProfilerStatusEvent>(PROFILER_STATUS_EVENT, (event) => {
+        const payload = event.payload;
+        const session = profilerSessionRef.current;
+        if (
+          payload.connection_id !== connectionId ||
+          (session !== null && payload.session_id !== session.session_id)
+        ) {
+          return;
+        }
+        setProfilerStatus(payload.state);
+      }),
     ])
-      .then(([messageUnlisten, statusUnlisten]) => {
+      .then(([messageUnlisten, statusUnlisten, profilerUnlisten, profilerStatusUnlisten]) => {
         if (disposed) {
           messageUnlisten();
           statusUnlisten();
+          profilerUnlisten();
+          profilerStatusUnlisten();
           return;
         }
         unlistenMessage = messageUnlisten;
         unlistenStatus = statusUnlisten;
+        unlistenProfiler = profilerUnlisten;
+        unlistenProfilerStatus = profilerStatusUnlisten;
       })
       .catch((reason: unknown) => {
         if (!disposed) {
@@ -146,12 +190,22 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
       disposed = true;
       unlistenMessage?.();
       unlistenStatus?.();
+      unlistenProfiler?.();
+      unlistenProfilerStatus?.();
       const session = sessionRef.current;
       sessionRef.current = null;
       if (session) {
         void stopPubSub({
           connection_id: session.connection_id,
           session_id: session.session_id,
+        }).catch(() => undefined);
+      }
+      const profiler = profilerSessionRef.current;
+      profilerSessionRef.current = null;
+      if (profiler) {
+        void stopProfiler({
+          connection_id: profiler.connection_id,
+          session_id: profiler.session_id,
         }).catch(() => undefined);
       }
     };
@@ -263,6 +317,49 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
     }
   };
 
+  const handleStartProfiler = async () => {
+    setProfilerBusy(true);
+    setError(null);
+    const sessionId = createSessionId("profiler");
+    try {
+      const session = await startProfiler({
+        connection_id: connectionId,
+        session_id: sessionId,
+      });
+      profilerSessionRef.current = session;
+      setProfilerSession(session);
+      setProfilerStatus("running");
+      setProfilerEvents([]);
+    } catch (reason) {
+      setError(toUserFacingObservabilityError(reason));
+    } finally {
+      setProfilerBusy(false);
+    }
+  };
+
+  const handleStopProfiler = async () => {
+    const session = profilerSessionRef.current;
+    if (!session) {
+      return;
+    }
+
+    setProfilerBusy(true);
+    setError(null);
+    try {
+      await stopProfiler({
+        connection_id: session.connection_id,
+        session_id: session.session_id,
+      });
+      profilerSessionRef.current = null;
+      setProfilerSession(null);
+      setProfilerStatus("stopped");
+    } catch (reason) {
+      setError(toUserFacingObservabilityError(reason));
+    } finally {
+      setProfilerBusy(false);
+    }
+  };
+
   const handlePublish = async () => {
     if (!publishChannel.trim() || !publishMessage) {
       setError("频道和消息不能为空。");
@@ -291,14 +388,14 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
     <section
       className="observability-page"
       aria-labelledby="observability-page-title"
-      aria-busy={slowLogLoading || slowLogBusy || pubSubBusy}
+      aria-busy={slowLogLoading || slowLogBusy || pubSubBusy || profilerBusy}
     >
       <div className="page-heading observability-page-heading">
         <div>
           <p className="eyebrow">OPERATIONS / OBSERVABILITY</p>
           <h2 id="observability-page-title">运维观察</h2>
           <p className="page-description">
-            用 Slow Log 定位慢命令，并通过 Pub/Sub 观察频道消息。所有操作只针对当前 Standalone Redis 连接。
+            用 Slow Log 定位慢命令、通过 Pub/Sub 观察频道消息，并用 Profiler 查看实时命令。所有操作只针对当前 Standalone Redis 连接。
           </p>
         </div>
         <span className="observability-scope">当前连接 · {connectionId}</span>
@@ -325,6 +422,16 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
           Pub/Sub
           <small>频道消息流</small>
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "profiler"}
+          className={`observability-tab${tab === "profiler" ? " observability-tab-active" : ""}`}
+          onClick={() => setTab("profiler")}
+        >
+          Profiler
+          <small>实时命令监控</small>
+        </button>
       </div>
 
       {error ? (
@@ -349,7 +456,7 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
           onClear={() => void handleClearSlowLogs()}
           onSaveConfig={() => void handleSaveSlowLogConfig()}
         />
-      ) : (
+      ) : tab === "pubsub" ? (
         <PubSubPanel
           activeSession={pubSubSession}
           busy={pubSubBusy}
@@ -368,6 +475,16 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
           onStart={() => void handleStartPubSub()}
           onStop={() => void handleStopPubSub()}
           onTopicTextChange={setTopicText}
+        />
+      ) : (
+        <ProfilerPanel
+          activeSession={profilerSession}
+          busy={profilerBusy}
+          events={profilerEvents}
+          status={profilerStatus}
+          onClearEvents={() => setProfilerEvents([])}
+          onStart={() => void handleStartProfiler()}
+          onStop={() => void handleStopProfiler()}
         />
       )}
     </section>
@@ -702,11 +819,122 @@ function PubSubPanel({
   );
 }
 
-function createSessionId(): string {
+interface ProfilerPanelProps {
+  activeSession: ProfilerSession | null;
+  busy: boolean;
+  events: ProfilerEvent[];
+  status: string;
+  onClearEvents: () => void;
+  onStart: () => void;
+  onStop: () => void;
+}
+
+function ProfilerPanel({
+  activeSession,
+  busy,
+  events,
+  status,
+  onClearEvents,
+  onStart,
+  onStop,
+}: ProfilerPanelProps) {
+  const running = activeSession !== null && status === "running";
+
+  return (
+    <div className="observability-content">
+      <section className="observability-panel" aria-labelledby="profiler-title">
+        <div className="observability-panel-heading">
+          <div>
+            <p className="eyebrow">MONITOR</p>
+            <h3 id="profiler-title">实时命令监控</h3>
+          </div>
+          <span className={`observability-status observability-status-${status}`} role="status">
+            <span className="observability-status-dot" aria-hidden="true" />
+            {running ? "监控中" : status === "stopped" ? "已停止" : "未启动"}
+          </span>
+        </div>
+        <p className="observability-warning" role="note">
+          MONITOR 会接收当前实例的全部命令，可能影响 Redis 性能；生产环境请谨慎使用。
+        </p>
+        <div className="profiler-controls">
+          <div>
+            <p className="panel-hint observability-panel-hint">
+              Profiler 只在当前页面保留实时事件，不会写入日志文件或持久化历史。
+            </p>
+            {activeSession ? (
+              <p className="observability-session-note">会话 {activeSession.session_id}</p>
+            ) : null}
+          </div>
+          {running ? (
+            <button type="button" className="button button-danger" onClick={onStop} disabled={busy}>
+              {busy ? "停止中…" : "停止监控"}
+            </button>
+          ) : (
+            <button type="button" className="button button-primary" onClick={onStart} disabled={busy}>
+              {busy ? "启动中…" : "开始监控"}
+            </button>
+          )}
+        </div>
+      </section>
+
+      <section className="observability-panel" aria-labelledby="profiler-event-list-title">
+        <div className="observability-panel-heading">
+          <div>
+            <p className="eyebrow">LIVE COMMANDS</p>
+            <h3 id="profiler-event-list-title">命令流</h3>
+          </div>
+          <div className="observability-toolbar">
+            <span className="observability-config-summary">{events.length} / 10000 条</span>
+            <button
+              type="button"
+              className="button button-quiet button-compact"
+              onClick={onClearEvents}
+              disabled={events.length === 0}
+            >
+              清空视图
+            </button>
+          </div>
+        </div>
+        {events.length === 0 ? (
+          <p className="empty-state-compact">开始监控后，当前实例收到的命令会显示在这里。</p>
+        ) : (
+          <div className="observability-table-wrap profiler-event-table-wrap">
+            <table className="observability-table profiler-event-table">
+              <thead>
+                <tr>
+                  <th scope="col">时间</th>
+                  <th scope="col">数据库</th>
+                  <th scope="col">来源</th>
+                  <th scope="col">命令</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[...events].reverse().map((event, index) => (
+                  <tr key={`${event.received_at_ms}-${event.session_id}-${index}`}>
+                    <td className="observability-mono">{formatProfilerTime(event.time)}</td>
+                    <td className="observability-mono">DB{event.database}</td>
+                    <td className="observability-mono">{event.source}</td>
+                    <td>
+                      <code className="observability-command">
+                        {formatProfilerCommand(event.args)}
+                      </code>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function createSessionId(prefix = "pubsub"): string {
   if (typeof globalThis.crypto?.randomUUID === "function") {
     return globalThis.crypto.randomUUID();
   }
-  return `pubsub-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 export default ObservabilityPage;

@@ -50,7 +50,7 @@ const navigationItems: NavigationItem[] = [
   {
     id: "observability",
     label: "运维观察",
-    description: "Slow Log / Pub/Sub",
+    description: "Slow Log / Pub/Sub / Profiler",
     icon: "observability",
   },
   {
@@ -72,7 +72,7 @@ const sectionDescriptions: Record<AppSection, string> = {
   browser: "使用 SCAN 浏览键和值",
   workbench: "直接执行 Redis 命令并查看返回值",
   database: "查看实例指标和数据库键空间",
-  observability: "查看 Slow Log 和 Pub/Sub 消息",
+  observability: "查看 Slow Log、Pub/Sub 和 Profiler",
   "query-library": "保存命令并回填 Workbench",
   settings: "调整主题和工作区偏好",
 };

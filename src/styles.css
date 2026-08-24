@@ -2086,6 +2086,17 @@ code {
   text-align: left;
 }
 
+.observability-warning {
+  margin: 16px 0 0;
+  padding: 11px 13px;
+  border: 1px solid var(--color-danger-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-danger-text);
+  background: var(--color-danger-surface);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
 .observability-table-wrap {
   margin: 16px -4px -4px;
   overflow-x: auto;
@@ -2266,6 +2277,27 @@ code {
 
 .pubsub-message-table {
   min-width: 680px;
+}
+
+.profiler-controls {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 4px;
+}
+
+.profiler-controls .observability-panel-hint {
+  margin-top: 12px;
+}
+
+.profiler-event-table-wrap {
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.profiler-event-table {
+  min-width: 800px;
 }
 
 /* Utility and responsive behavior */
@@ -2557,9 +2589,15 @@ code {
     gap: 12px;
   }
 
+  .profiler-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .pubsub-subscribe-actions .button,
   .pubsub-publish-grid .button,
-  .observability-panel-actions .button {
+  .observability-panel-actions .button,
+  .profiler-controls .button {
     width: 100%;
   }
 }

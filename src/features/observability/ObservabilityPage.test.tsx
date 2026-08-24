@@ -18,7 +18,9 @@ const {
   getSlowLogsMock,
   listenMock,
   publishPubSubMock,
+  startProfilerMock,
   startPubSubMock,
+  stopProfilerMock,
   stopPubSubMock,
   updateSlowLogConfigMock,
 } = vi.hoisted(() => ({
@@ -27,7 +29,9 @@ const {
   getSlowLogsMock: vi.fn(),
   listenMock: vi.fn(),
   publishPubSubMock: vi.fn(),
+  startProfilerMock: vi.fn(),
   startPubSubMock: vi.fn(),
+  stopProfilerMock: vi.fn(),
   stopPubSubMock: vi.fn(),
   updateSlowLogConfigMock: vi.fn(),
 }));
@@ -37,7 +41,9 @@ vi.mock("../../lib/tauri", () => ({
   getSlowLogConfig: getSlowLogConfigMock,
   getSlowLogs: getSlowLogsMock,
   publishPubSub: publishPubSubMock,
+  startProfiler: startProfilerMock,
   startPubSub: startPubSubMock,
+  stopProfiler: stopProfilerMock,
   stopPubSub: stopPubSubMock,
   updateSlowLogConfig: updateSlowLogConfigMock,
 }));
@@ -83,6 +89,11 @@ beforeEach(() => {
   });
   stopPubSubMock.mockResolvedValue(undefined);
   publishPubSubMock.mockResolvedValue(1);
+  startProfilerMock.mockResolvedValue({
+    connection_id: "local",
+    session_id: "profiler-1",
+  });
+  stopProfilerMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -136,6 +147,46 @@ describe("ObservabilityPage", () => {
       expect(stopPubSubMock).toHaveBeenCalledWith({
         connection_id: "local",
         session_id: "session-1",
+      }),
+    );
+  });
+
+  it("启动 Profiler 后接收命令事件，并可停止监控", async () => {
+    render(<ObservabilityPage connectionId="local" />);
+    fireEvent.click(screen.getByRole("tab", { name: /Profiler/ }));
+    await screen.findByRole("heading", { name: "实时命令监控" });
+
+    expect(
+      screen.getByText(/MONITOR 会接收当前实例的全部命令/),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "开始监控" }));
+    await waitFor(() => expect(startProfilerMock).toHaveBeenCalledTimes(1));
+    expect(startProfilerMock).toHaveBeenCalledWith({
+      connection_id: "local",
+      session_id: expect.any(String),
+    });
+
+    await act(async () => {
+      listeners.get("redix://profiler/event")?.({
+        payload: {
+          connection_id: "local",
+          session_id: "profiler-1",
+          time: "1710000000.123456",
+          database: 2,
+          source: "127.0.0.1:6379",
+          args: ["SET", "demo key", "hello redis"],
+          received_at_ms: 1,
+        },
+      });
+    });
+    expect(screen.getByText('"SET" "demo key" "hello redis"')).toBeInTheDocument();
+    expect(screen.getByText("DB2")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "停止监控" }));
+    await waitFor(() =>
+      expect(stopProfilerMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        session_id: "profiler-1",
       }),
     );
   });

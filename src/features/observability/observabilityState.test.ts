@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { PubSubMessageEvent } from "../../lib/types";
+import type { ProfilerEvent, PubSubMessageEvent } from "../../lib/types";
 import {
+  appendProfilerEvent,
   appendPubSubMessage,
+  MAX_PROFILER_EVENTS,
   parsePubSubTopics,
   toUserFacingObservabilityError,
 } from "./observabilityState";
@@ -35,6 +37,28 @@ describe("observability state", () => {
     expect(next).toHaveLength(5000);
     expect(next[0].received_at_ms).toBe(1);
     expect(next.at(-1)).toEqual(message);
+  });
+
+  it("只保留最新的 10000 条 Profiler 事件", () => {
+    const event: ProfilerEvent = {
+      connection_id: "local",
+      session_id: "profiler-1",
+      time: "1710000000.1",
+      database: 0,
+      source: "127.0.0.1:6379",
+      args: ["PING"],
+      received_at_ms: 1,
+    };
+    const history = Array.from({ length: MAX_PROFILER_EVENTS }, (_, index) => ({
+      ...event,
+      received_at_ms: index,
+    }));
+
+    const next = appendProfilerEvent(history, event);
+
+    expect(next).toHaveLength(MAX_PROFILER_EVENTS);
+    expect(next[0].received_at_ms).toBe(1);
+    expect(next.at(-1)).toEqual(event);
   });
 
   it("将后端错误映射为固定的用户提示", () => {
