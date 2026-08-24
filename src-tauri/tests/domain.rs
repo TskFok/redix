@@ -3,10 +3,11 @@ mod support;
 use redix_lib::{
     domain::{
         command_catalog, is_sensitive_command, parse_info_sections, parse_keyspace_line,
-        AppSettings, ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey,
-        GetSlowLogsInput, ImportKeysInput, KeyInfoInput, PubSubTopic, QueryLibraryItemInput,
-        RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput, StartProfilerInput,
-        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
+        AcknowledgeStreamPendingEntriesInput, AppSettings, ConnectionProfile, CreateKeyInput,
+        DeleteKeysInput, ExportedKey, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput, PubSubTopic,
+        QueryLibraryItemInput, RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput,
+        StartProfilerInput, StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -365,5 +366,41 @@ fn validates_profiler_session_inputs() {
         .validate()
         .unwrap_err(),
         AppError::InvalidInput
+    );
+}
+
+#[test]
+fn validates_stream_consumer_group_inputs() {
+    assert_eq!(
+        GetStreamConsumerGroupsInput {
+            connection_id: "".into(),
+            key: "events".into(),
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidConnection
+    );
+    assert_eq!(
+        GetStreamPendingEntriesInput {
+            connection_id: "local".into(),
+            key: "events".into(),
+            group: "workers".into(),
+            count: 501,
+            consumer: None,
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidConnection
+    );
+    assert_eq!(
+        AcknowledgeStreamPendingEntriesInput {
+            connection_id: "local".into(),
+            key: "events".into(),
+            group: "workers".into(),
+            entries: vec![],
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidConnection
     );
 }
