@@ -241,6 +241,72 @@ export interface StreamEntry {
   fields: StreamField[];
 }
 
+export interface GetStreamConsumerGroupsInput {
+  connection_id: string;
+  key: string;
+}
+
+export interface StreamConsumerGroup {
+  name: string;
+  consumers: number;
+  pending: number;
+  last_delivered_id: string;
+}
+
+export interface CreateStreamConsumerGroupInput {
+  connection_id: string;
+  key: string;
+  name: string;
+  last_delivered_id: string;
+}
+
+export interface DeleteStreamConsumerGroupInput {
+  connection_id: string;
+  key: string;
+  name: string;
+}
+
+export interface GetStreamConsumersInput {
+  connection_id: string;
+  key: string;
+  group: string;
+}
+
+export interface StreamConsumer {
+  name: string;
+  pending: number;
+  idle_ms: number;
+}
+
+export interface GetStreamPendingEntriesInput {
+  connection_id: string;
+  key: string;
+  group: string;
+  count: number;
+  consumer: string | null;
+}
+
+export interface StreamPendingEntry {
+  id: string;
+  consumer: string;
+  idle_ms: number;
+  deliveries: number;
+}
+
+export interface AcknowledgeStreamPendingEntriesInput {
+  connection_id: string;
+  key: string;
+  group: string;
+  entries: string[];
+}
+
+export interface DeleteStreamConsumerInput {
+  connection_id: string;
+  key: string;
+  group: string;
+  consumer: string;
+}
+
 export type RedisValue =
   | { String: { value: string } }
   | { Hash: { fields: Array<{ field: string; value: string }> } }

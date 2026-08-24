@@ -52,6 +52,13 @@ fn exposes_all_tauri_command_adapters() {
     let _ = browser::rename_key;
     let _ = browser::delete_keys;
     let _ = browser::get_key_info;
+    let _ = browser::get_stream_consumer_groups;
+    let _ = browser::create_stream_consumer_group;
+    let _ = browser::delete_stream_consumer_group;
+    let _ = browser::get_stream_consumers;
+    let _ = browser::get_stream_pending_entries;
+    let _ = browser::acknowledge_stream_pending_entries;
+    let _ = browser::delete_stream_consumer;
     let _ = browser::export_keys;
     let _ = browser::import_keys;
     let _ = connections::list_connections;

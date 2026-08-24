@@ -1,8 +1,11 @@
 use crate::{
     domain::{
-        CreateKeyInput, DeleteKeyInput, DeleteKeysInput, ExportKeysInput, ExportedKey, GetKeyInput,
-        ImportKeysInput, KeyInfo, KeyInfoInput, KeyValue, RenameKeyInput, ScanKeysInput, ScanPage,
-        SetKeyInput, SetKeyTtlInput,
+        AcknowledgeStreamPendingEntriesInput, CreateKeyInput, CreateStreamConsumerGroupInput,
+        DeleteKeyInput, DeleteKeysInput, DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput,
+        ExportKeysInput, ExportedKey, GetKeyInput, GetStreamConsumerGroupsInput,
+        GetStreamConsumersInput, GetStreamPendingEntriesInput, ImportKeysInput, KeyInfo,
+        KeyInfoInput, KeyValue, RenameKeyInput, ScanKeysInput, ScanPage, SetKeyInput,
+        SetKeyTtlInput, StreamConsumer, StreamConsumerGroup, StreamPendingEntry,
     },
     error::AppError,
     redis::RedisOperations,
@@ -82,6 +85,62 @@ pub async fn get_key_info(
     input: KeyInfoInput,
 ) -> Result<KeyInfo, AppError> {
     state.redis.get_key_info(input).await
+}
+
+#[tauri::command]
+pub async fn get_stream_consumer_groups(
+    state: tauri::State<'_, AppState>,
+    input: GetStreamConsumerGroupsInput,
+) -> Result<Vec<StreamConsumerGroup>, AppError> {
+    state.redis.get_stream_consumer_groups(input).await
+}
+
+#[tauri::command]
+pub async fn create_stream_consumer_group(
+    state: tauri::State<'_, AppState>,
+    input: CreateStreamConsumerGroupInput,
+) -> Result<(), AppError> {
+    state.redis.create_stream_consumer_group(input).await
+}
+
+#[tauri::command]
+pub async fn delete_stream_consumer_group(
+    state: tauri::State<'_, AppState>,
+    input: DeleteStreamConsumerGroupInput,
+) -> Result<u64, AppError> {
+    state.redis.delete_stream_consumer_group(input).await
+}
+
+#[tauri::command]
+pub async fn get_stream_consumers(
+    state: tauri::State<'_, AppState>,
+    input: GetStreamConsumersInput,
+) -> Result<Vec<StreamConsumer>, AppError> {
+    state.redis.get_stream_consumers(input).await
+}
+
+#[tauri::command]
+pub async fn get_stream_pending_entries(
+    state: tauri::State<'_, AppState>,
+    input: GetStreamPendingEntriesInput,
+) -> Result<Vec<StreamPendingEntry>, AppError> {
+    state.redis.get_stream_pending_entries(input).await
+}
+
+#[tauri::command]
+pub async fn acknowledge_stream_pending_entries(
+    state: tauri::State<'_, AppState>,
+    input: AcknowledgeStreamPendingEntriesInput,
+) -> Result<u64, AppError> {
+    state.redis.acknowledge_stream_pending_entries(input).await
+}
+
+#[tauri::command]
+pub async fn delete_stream_consumer(
+    state: tauri::State<'_, AppState>,
+    input: DeleteStreamConsumerInput,
+) -> Result<u64, AppError> {
+    state.redis.delete_stream_consumer(input).await
 }
 
 #[tauri::command]

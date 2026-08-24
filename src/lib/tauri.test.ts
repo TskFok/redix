@@ -3,11 +3,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   clearSlowLogs,
+  acknowledgeStreamPendingEntries,
   closeConnection,
   createKey,
+  createStreamConsumerGroup,
   deleteKeys,
   deleteConnection,
   deleteKey,
+  deleteStreamConsumer,
+  deleteStreamConsumerGroup,
   executeCommands,
   executeCommand,
   exportKeys,
@@ -17,6 +21,9 @@ import {
   getCommandCatalog,
   getKey,
   getKeyInfo,
+  getStreamConsumerGroups,
+  getStreamConsumers,
+  getStreamPendingEntries,
   getInstanceOverview,
   getAppSettings,
   importKeys,
@@ -64,6 +71,9 @@ import type {
   ScanPage,
   SlowLogConfig,
   SlowLogEntry,
+  StreamConsumer,
+  StreamConsumerGroup,
+  StreamPendingEntry,
 } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -466,6 +476,84 @@ describe("Tauri IPC bridge", () => {
     const importInput = { connection_id: "local", entries: exported };
     await expect(importKeys(importInput)).resolves.toBe(2);
     expect(invokeMock).toHaveBeenLastCalledWith("import_keys", { input: importInput });
+  });
+
+  it("为 Stream Consumer Group 命令保持 snake_case 和 input 包装", async () => {
+    const group: StreamConsumerGroup = {
+      name: "workers",
+      consumers: 1,
+      pending: 2,
+      last_delivered_id: "2-0",
+    };
+    const consumer: StreamConsumer = {
+      name: "consumer-1",
+      pending: 2,
+      idle_ms: 10,
+    };
+    const pending: StreamPendingEntry = {
+      id: "1-0",
+      consumer: "consumer-1",
+      idle_ms: 10,
+      deliveries: 1,
+    };
+    invokeMock
+      .mockResolvedValueOnce([group])
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce([consumer])
+      .mockResolvedValueOnce([pending])
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(0);
+
+    const groupQuery = { connection_id: "local", key: "events" };
+    await expect(getStreamConsumerGroups(groupQuery)).resolves.toEqual([group]);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_stream_consumer_groups", {
+      input: groupQuery,
+    });
+
+    const createInput = {
+      connection_id: "local",
+      key: "events",
+      name: "workers",
+      last_delivered_id: "0-0",
+    };
+    await expect(createStreamConsumerGroup(createInput)).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith("create_stream_consumer_group", {
+      input: createInput,
+    });
+
+    const deleteGroupInput = { connection_id: "local", key: "events", name: "workers" };
+    await expect(deleteStreamConsumerGroup(deleteGroupInput)).resolves.toBe(1);
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_stream_consumer_group", {
+      input: deleteGroupInput,
+    });
+
+    const consumerQuery = { ...groupQuery, group: "workers" };
+    await expect(getStreamConsumers(consumerQuery)).resolves.toEqual([consumer]);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_stream_consumers", {
+      input: consumerQuery,
+    });
+
+    const pendingQuery = { ...consumerQuery, count: 100, consumer: null };
+    await expect(getStreamPendingEntries(pendingQuery)).resolves.toEqual([pending]);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_stream_pending_entries", {
+      input: pendingQuery,
+    });
+
+    const acknowledgeInput = {
+      ...consumerQuery,
+      entries: [pending.id],
+    };
+    await expect(acknowledgeStreamPendingEntries(acknowledgeInput)).resolves.toBe(1);
+    expect(invokeMock).toHaveBeenLastCalledWith("acknowledge_stream_pending_entries", {
+      input: acknowledgeInput,
+    });
+
+    const deleteConsumerInput = { ...consumerQuery, consumer: consumer.name };
+    await expect(deleteStreamConsumer(deleteConsumerInput)).resolves.toBe(0);
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_stream_consumer", {
+      input: deleteConsumerInput,
+    });
   });
 
   it("list_connections 使用无参数调用并返回 profile 列表", async () => {

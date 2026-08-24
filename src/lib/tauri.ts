@@ -5,19 +5,26 @@ import type {
   CommandExecutionItem,
   CommandHistoryEntry,
   CommandResult,
+  AcknowledgeStreamPendingEntriesInput,
   AppSettings,
   ConnectionInfo,
   ConnectionProfile,
   CreateKeyInput,
+  CreateStreamConsumerGroupInput,
   DatabaseOverview,
   DeleteKeysInput,
   DeleteKeyInput,
+  DeleteStreamConsumerGroupInput,
+  DeleteStreamConsumerInput,
   ExecuteCommandsInput,
   ExecuteCommandInput,
   ExportedKey,
   ExportKeysInput,
   GetSlowLogsInput,
   GetKeyInput,
+  GetStreamConsumerGroupsInput,
+  GetStreamConsumersInput,
+  GetStreamPendingEntriesInput,
   IpcError,
   ImportKeysInput,
   InstanceOverview,
@@ -43,6 +50,9 @@ import type {
   StartProfilerInput,
   StopProfilerInput,
   StopPubSubInput,
+  StreamConsumer,
+  StreamConsumerGroup,
+  StreamPendingEntry,
   UpdateSlowLogConfigInput,
 } from "./types";
 
@@ -224,6 +234,44 @@ export function setKeyTtl(input: SetKeyTtlInput): Promise<number> {
 
 export function getKeyInfo(input: KeyInfoInput): Promise<KeyInfo> {
   return call<KeyInfo>("get_key_info", { input });
+}
+
+export function getStreamConsumerGroups(
+  input: GetStreamConsumerGroupsInput,
+): Promise<StreamConsumerGroup[]> {
+  return call<StreamConsumerGroup[]>("get_stream_consumer_groups", { input });
+}
+
+export function createStreamConsumerGroup(
+  input: CreateStreamConsumerGroupInput,
+): Promise<void> {
+  return call<void>("create_stream_consumer_group", { input });
+}
+
+export function deleteStreamConsumerGroup(
+  input: DeleteStreamConsumerGroupInput,
+): Promise<number> {
+  return call<number>("delete_stream_consumer_group", { input });
+}
+
+export function getStreamConsumers(input: GetStreamConsumersInput): Promise<StreamConsumer[]> {
+  return call<StreamConsumer[]>("get_stream_consumers", { input });
+}
+
+export function getStreamPendingEntries(
+  input: GetStreamPendingEntriesInput,
+): Promise<StreamPendingEntry[]> {
+  return call<StreamPendingEntry[]>("get_stream_pending_entries", { input });
+}
+
+export function acknowledgeStreamPendingEntries(
+  input: AcknowledgeStreamPendingEntriesInput,
+): Promise<number> {
+  return call<number>("acknowledge_stream_pending_entries", { input });
+}
+
+export function deleteStreamConsumer(input: DeleteStreamConsumerInput): Promise<number> {
+  return call<number>("delete_stream_consumer", { input });
 }
 
 export function executeCommand(input: ExecuteCommandInput): Promise<CommandResult> {
