@@ -324,3 +324,26 @@ Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
 - `413f8dc`：增加 Profiler 领域模型和 MONITOR 解析
 - `056b31c`：实现 Profiler Tauri 命令桥接
 - `39aa81b`：接入 Profiler 前端实时工作区
+
+## Phase 11：本地 Redis Stream Consumer Group（2026-08-24）
+
+### Goal
+
+对照 RedisInsight Stream Browser 能力，在本地 Redis Standalone 的 Stream 键详情中补齐 Consumer Group、消费者、PENDING 观察、XACK 和消费者删除；不实现实时消费、Claim、拓扑、TLS/SSH、模块或任何云功能。
+
+### Status
+
+设计与实施计划已完成，等待按 TDD 执行。
+
+### Artifacts
+
+- 设计：`docs/superpowers/specs/2026-08-24-stream-consumer-groups-design.md`
+- 计划：`docs/superpowers/plans/2026-08-24-stream-consumer-groups.md`
+
+### Checklist
+
+- [ ] Stream Consumer Group DTO、输入校验和 RESP parser
+- [ ] Redis service 与 XINFO/XGROUP/XPENDING/XACK 命令
+- [ ] Tauri command 和 TypeScript bridge
+- [ ] Stream 键详情 Consumer Groups UI
+- [ ] Rust/前端/非 Cloud/构建/差异回归验证
