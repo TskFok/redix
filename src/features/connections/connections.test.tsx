@@ -104,6 +104,79 @@ describe("Redis 连接管理页面", () => {
     expect(screen.getByLabelText("密码")).toHaveAttribute("type", "password");
   });
 
+  it("导出连接时调用 typed IPC 并显示成功反馈", async () => {
+    exportConnectionsMock.mockResolvedValue({ version: 1, connections: [] });
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+
+    await screen.findByText("还没有 Redis 连接");
+    fireEvent.click(screen.getByRole("button", { name: "导出连接" }));
+
+    await waitFor(() => expect(exportConnectionsMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("status")).toHaveTextContent("连接已导出");
+  });
+
+  it("导入 JSON 后追加连接并显示部分成功及敏感字段忽略提示", async () => {
+    importConnectionsMock.mockResolvedValue({
+      imported: [localProfile],
+      failed: [
+        {
+          index: 1,
+          name: "Broken",
+          code: "INVALID_CONNECTION",
+          message: "连接配置无效",
+        },
+      ],
+      ignored_secret_fields: 1,
+    });
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+
+    const file = new File(
+      ['{"connections":[]}'],
+      "connections.json",
+      { type: "application/json" },
+    );
+    fireEvent.change(screen.getByLabelText("导入连接文件"), {
+      target: { files: [file] },
+    });
+
+    await waitFor(() => expect(importConnectionsMock).toHaveBeenCalledTimes(1));
+    expect(importConnectionsMock).toHaveBeenCalledWith({
+      content: '{"connections":[]}',
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("部分导入");
+    expect(screen.getByRole("status")).toHaveTextContent("已忽略 1 个敏感字段");
+    expect(screen.getByRole("status")).toHaveTextContent("Broken");
+  });
+
+  it("拒绝超过 10 MiB 的连接导入文件", async () => {
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    const file = new File(["{}"], "too-large.json", { type: "application/json" });
+    Object.defineProperty(file, "size", { value: 10 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText("导入连接文件"), {
+      target: { files: [file] },
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("不能超过 10 MB");
+    expect(importConnectionsMock).not.toHaveBeenCalled();
+  });
+
+  it("连接卡片显示 TLS 与证书重新录入状态", async () => {
+    const tlsProfile: ConnectionProfile = {
+      ...localProfile,
+      id: "tls-profile",
+      name: "TLS Redis",
+      tls: true,
+      ca_certificate_name: "Root CA",
+      has_ca_certificate: false,
+    };
+    listConnectionsMock.mockResolvedValue([tlsProfile]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+
+    await screen.findByText("TLS Redis");
+    expect(screen.getByText("已启用")).toBeInTheDocument();
+    expect(screen.getByText("需重新录入")).toBeInTheDocument();
+  });
+
   it("保存成功后刷新连接列表并按顺序打开对应连接", async () => {
     const calls: string[] = [];
     const saveInput: SaveConnectionInput = {

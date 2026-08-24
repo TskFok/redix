@@ -71,6 +71,20 @@ export function ConnectionList({
                 <dt>认证</dt>
                 <dd>{profile.has_password ? "已配置" : "未配置"}</dd>
               </div>
+              <div>
+                <dt>TLS</dt>
+                <dd>{profile.tls ? "已启用" : "未启用"}</dd>
+              </div>
+              <div>
+                <dt>证书</dt>
+                <dd>
+                  {profile.has_ca_certificate || profile.has_client_certificate
+                    ? "已配置"
+                    : profile.ca_certificate_name || profile.client_certificate_name
+                      ? "需重新录入"
+                      : "未配置"}
+                </dd>
+              </div>
             </dl>
 
             <div className="card-actions">
