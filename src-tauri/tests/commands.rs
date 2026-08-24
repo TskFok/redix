@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tauri::Manager;
 
 use redix_lib::{
-    commands::{browser, connections, database, query_library, settings, workbench},
+    commands::{browser, connections, database, observability, query_library, settings, workbench},
     domain::{
         AppSettings, CommandHistoryEntry, CommandResult, QueryLibraryItemInput,
         SaveCommandHistoryInput,
@@ -63,6 +63,13 @@ fn exposes_all_tauri_command_adapters() {
     let _ = database::get_instance_overview;
     let _ = database::get_database_overview;
     let _ = database::select_database;
+    let _ = observability::get_slow_logs;
+    let _ = observability::clear_slow_logs;
+    let _ = observability::get_slow_log_config;
+    let _ = observability::update_slow_log_config;
+    let _ = observability::start_pub_sub;
+    let _ = observability::stop_pub_sub;
+    let _ = observability::publish_pub_sub;
     let _ = query_library::list_query_library;
     let _ = query_library::save_query_library_item;
     let _ = query_library::delete_query_library_item;
@@ -108,6 +115,45 @@ fn open_connection_accepts_snake_case_connection_id_from_frontend() {
         serde_json::json!({
             "code": "INVALID_CONNECTION",
             "message": "连接配置无效"
+        })
+    );
+}
+
+#[test]
+fn observability_commands_reach_redis_service_and_validate_inputs() {
+    let app = tauri::test::mock_builder()
+        .manage(AppState::new(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+        ))
+        .invoke_handler(tauri::generate_handler![observability::get_slow_logs])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("test app must build");
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("test webview must build");
+
+    let response = tauri::test::get_ipc_response(
+        &webview,
+        tauri::webview::InvokeRequest {
+            cmd: "get_slow_logs".into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: serde_json::json!({
+                "input": {"connection_id": "missing", "count": 10}
+            })
+            .into(),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+        },
+    )
+    .expect_err("missing active connection should return a typed Redis error");
+    assert_eq!(
+        response,
+        serde_json::json!({
+            "code": "CONNECTION_FAILED",
+            "message": "无法连接到 Redis 服务器"
         })
     );
 }

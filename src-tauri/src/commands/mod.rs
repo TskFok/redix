@@ -1,6 +1,7 @@
 pub mod browser;
 pub mod connections;
 pub mod database;
+pub mod observability;
 pub mod query_library;
 pub mod settings;
 pub mod workbench;
