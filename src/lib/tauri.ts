@@ -5,6 +5,7 @@ import type {
   CommandExecutionItem,
   CommandHistoryEntry,
   CommandResult,
+  AppSettings,
   ConnectionInfo,
   ConnectionProfile,
   CreateKeyInput,
@@ -25,6 +26,8 @@ import type {
   RenameKeyInput,
   SaveConnectionInput,
   SaveCommandHistoryInput,
+  QueryLibraryItem,
+  QueryLibraryItemInput,
   ScanKeysInput,
   ScanPage,
   SelectDatabaseInput,
@@ -116,6 +119,28 @@ export function getDatabaseOverview(connectionId: string): Promise<DatabaseOverv
 
 export function selectDatabase(input: SelectDatabaseInput): Promise<ConnectionProfile> {
   return call<ConnectionProfile>("select_database", { input });
+}
+
+export function listQueryLibrary(): Promise<QueryLibraryItem[]> {
+  return call<QueryLibraryItem[]>("list_query_library");
+}
+
+export function saveQueryLibraryItem(
+  input: QueryLibraryItemInput,
+): Promise<QueryLibraryItem> {
+  return call<QueryLibraryItem>("save_query_library_item", { input });
+}
+
+export function deleteQueryLibraryItem(id: string): Promise<void> {
+  return call<void>("delete_query_library_item", { id });
+}
+
+export function getAppSettings(): Promise<AppSettings> {
+  return call<AppSettings>("get_app_settings");
+}
+
+export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
+  return call<AppSettings>("save_app_settings", { settings });
 }
 
 export function getKey(input: GetKeyInput): Promise<KeyValue> {

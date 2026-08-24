@@ -10,7 +10,10 @@ use std::{
 };
 
 use redix_lib::{
-    domain::{CommandHistoryDocument, CommandHistoryEntry, CommandResult},
+    domain::{
+        AppSettings, CommandHistoryDocument, CommandHistoryEntry, CommandResult,
+        QueryLibraryDocument,
+    },
     error::AppError,
     persistence::{
         JsonDocumentStore, JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring,
@@ -165,6 +168,43 @@ fn command_history_document_round_trips_through_versioned_store() {
 
     store.save(&document).unwrap();
     assert_eq!(store.load::<CommandHistoryDocument>().unwrap(), document);
+    remove_temporary_directory(&directory);
+}
+
+#[test]
+fn local_resource_documents_migrate_legacy_version_zero_values() {
+    let query = QueryLibraryDocument::migrate(serde_json::json!({
+        "items": [{"name": "读取用户", "command": "GET user:1"}]
+    }))
+    .unwrap();
+    assert_eq!(query.version, 1);
+    assert_eq!(query.items[0].id, "legacy-0");
+    assert!(query.items[0].tags.is_empty());
+
+    let settings = AppSettings::migrate(serde_json::json!({
+        "theme": "dark",
+        "scan_count": 200
+    }))
+    .unwrap();
+    assert_eq!(settings.version, 1);
+    assert_eq!(settings.theme, "dark");
+    assert_eq!(settings.result_format, "raw");
+    assert_eq!(settings.scan_count, 200);
+    assert!(!settings.continue_on_error);
+}
+
+#[test]
+fn corrupted_local_resource_returns_default_without_overwriting_source() {
+    let directory = temporary_directory("local-resource-default");
+    let path = directory.join("query-library.json");
+    let original = "{ invalid local resource";
+    fs::write(&path, original).unwrap();
+
+    let loaded = JsonDocumentStore::new(path.clone())
+        .load_or_default::<QueryLibraryDocument>()
+        .unwrap();
+    assert_eq!(loaded, QueryLibraryDocument::default());
+    assert_eq!(fs::read_to_string(path).unwrap(), original);
     remove_temporary_directory(&directory);
 }
 

@@ -9,6 +9,7 @@ const {
   executeCommandsMock,
   executeCommandMock,
   getCommandCatalogMock,
+  getAppSettingsMock,
   listCommandHistoryMock,
   saveCommandHistoryMock,
   listConnectionsMock,
@@ -26,6 +27,7 @@ const {
   executeCommandsMock: vi.fn(),
   executeCommandMock: vi.fn(),
   getCommandCatalogMock: vi.fn(),
+  getAppSettingsMock: vi.fn(),
   listCommandHistoryMock: vi.fn(),
   saveCommandHistoryMock: vi.fn(),
   listConnectionsMock: vi.fn(),
@@ -45,6 +47,7 @@ vi.mock("../../lib/tauri", () => ({
   executeCommands: executeCommandsMock,
   executeCommand: executeCommandMock,
   getCommandCatalog: getCommandCatalogMock,
+  getAppSettings: getAppSettingsMock,
   listCommandHistory: listCommandHistoryMock,
   saveCommandHistory: saveCommandHistoryMock,
   listConnections: listConnectionsMock,
@@ -95,6 +98,13 @@ describe("Redis Workbench 工作区", () => {
       { name: "GET", summary: "读取字符串键", arguments: [{ name: "key", required: true, hint: "键名" }] },
       { name: "SET", summary: "写入字符串键", arguments: [{ name: "key", required: true, hint: "键名" }] },
     ]);
+    getAppSettingsMock.mockResolvedValue({
+      version: 1,
+      theme: "system",
+      result_format: "text",
+      scan_count: 100,
+      continue_on_error: false,
+    });
     listCommandHistoryMock.mockResolvedValue([]);
     saveCommandHistoryMock.mockResolvedValue(undefined);
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => undefined);
@@ -198,6 +208,31 @@ describe("Redis Workbench 工作区", () => {
     fireEvent.click(screen.getByRole("button", { name: "复制结果" }));
     await waitFor(() => expect(writeText).toHaveBeenCalled());
     expect(writeText.mock.calls[0][0]).toContain('"key"');
+  });
+
+  it("应用设置提供 Workbench 的初始结果格式和批量错误策略", async () => {
+    executeCommandsMock.mockResolvedValue([
+      { command: "PING", result: { kind: "string", value: "PONG" }, error_code: null },
+      { command: "DBSIZE", result: { kind: "number", value: 2 }, error_code: null },
+    ]);
+    render(
+      <WorkbenchPage
+        connectionId="local"
+        defaultFormat="json"
+        defaultContinueOnError
+      />,
+    );
+
+    expect(screen.getByLabelText("批量命令遇错后继续")).toBeChecked();
+    typeCommand("PING\nDBSIZE");
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+
+    await screen.findByText('"PONG"');
+    expect(executeCommandsMock).toHaveBeenCalledWith({
+      connection_id: "local",
+      commands: ["PING", "DBSIZE"],
+      continue_on_error: true,
+    });
   });
 
   it("根据本地命令目录显示提示并回填而不自动执行", async () => {

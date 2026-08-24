@@ -16,12 +16,12 @@ import {
 
 interface BrowserPageProps {
   connectionId: string;
+  scanCount?: number;
 }
 
-const SCAN_COUNT = 100;
 const FILTER_DEBOUNCE_MS = 320;
 
-export function BrowserPage({ connectionId }: BrowserPageProps) {
+export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps) {
   const [state, setState] = useState<BrowserPageState>(() => ({
     ...initialBrowserPageState,
   }));
@@ -36,6 +36,8 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
   const detailRequestRef = useRef(0);
   const debounceRef = useRef<number | null>(null);
   const skipDebounceForPatternRef = useRef<string | null>(null);
+  const normalizedScanCount =
+    Number.isInteger(scanCount) && scanCount >= 10 && scanCount <= 1000 ? scanCount : 100;
 
   const scanPage = useCallback(
     async (
@@ -74,7 +76,7 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
           connection_id: connectionId,
           cursor,
           pattern: requestedPattern,
-          count: SCAN_COUNT,
+          count: normalizedScanCount,
           key_type: requestedKeyType || null,
         });
         if (mountedRef.current && scanRequestRef.current === requestId) {
@@ -94,7 +96,7 @@ export function BrowserPage({ connectionId }: BrowserPageProps) {
         }
       }
     },
-    [connectionId],
+    [connectionId, normalizedScanCount],
   );
 
   useEffect(() => {

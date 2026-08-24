@@ -912,6 +912,129 @@ code {
   margin-top: 22px;
 }
 
+/* Query Library and Settings */
+
+.query-library-page,
+.settings-page {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.query-library-search {
+  max-width: 560px;
+}
+
+.query-library-list {
+  display: grid;
+  gap: 10px;
+}
+
+.query-library-card,
+.query-library-editor,
+.settings-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-panel);
+}
+
+.query-library-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.query-library-card h3 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.query-library-card code {
+  display: block;
+  margin-top: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.query-library-card time {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+
+.query-library-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.query-library-tags span {
+  padding: 4px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 99px;
+  color: var(--color-muted);
+  background: var(--color-surface-raised);
+  font-size: 10px;
+}
+
+.query-library-card .card-actions {
+  margin-top: 16px;
+}
+
+.query-library-editor {
+  display: grid;
+  gap: 14px;
+}
+
+.query-library-editor .panel-heading {
+  margin-bottom: 2px;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.settings-panel {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+}
+
+.settings-panel .panel-heading {
+  margin-bottom: 2px;
+}
+
+.settings-panel small {
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.settings-checkbox > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-checkbox input {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-primary);
+}
+
 /* Browser */
 
 .browser-page,
@@ -1994,6 +2117,7 @@ code {
 
   .form-grid,
   .browser-add-key-grid,
+  .settings-layout,
   .browser-layout,
   .workbench-layout {
     grid-template-columns: minmax(0, 1fr);

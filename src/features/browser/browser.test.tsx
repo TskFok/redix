@@ -138,6 +138,19 @@ describe("Redis Browser", () => {
     });
   });
 
+  it("使用设置传入的 SCAN 数量", async () => {
+    render(<BrowserPage connectionId="local" scanCount={250} />);
+
+    await screen.findByText("没有匹配的键。");
+    expect(scanKeysMock).toHaveBeenCalledWith({
+      connection_id: "local",
+      cursor: 0,
+      pattern: "*",
+      count: 250,
+      key_type: null,
+    });
+  });
+
   it("保存 String 后刷新详情", async () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,

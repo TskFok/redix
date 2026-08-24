@@ -12,7 +12,12 @@ const {
   getCommandCatalogMock,
   getDatabaseOverviewMock,
   getInstanceOverviewMock,
+  getAppSettingsMock,
+  listQueryLibraryMock,
   listCommandHistoryMock,
+  saveAppSettingsMock,
+  saveQueryLibraryItemMock,
+  deleteQueryLibraryItemMock,
   saveCommandHistoryMock,
   selectDatabaseMock,
 } = vi.hoisted(() => ({
@@ -25,7 +30,12 @@ const {
   getCommandCatalogMock: vi.fn(),
   getDatabaseOverviewMock: vi.fn(),
   getInstanceOverviewMock: vi.fn(),
+  getAppSettingsMock: vi.fn(),
+  listQueryLibraryMock: vi.fn(),
   listCommandHistoryMock: vi.fn(),
+  saveAppSettingsMock: vi.fn(),
+  saveQueryLibraryItemMock: vi.fn(),
+  deleteQueryLibraryItemMock: vi.fn(),
   saveCommandHistoryMock: vi.fn(),
   selectDatabaseMock: vi.fn(),
 }));
@@ -40,7 +50,12 @@ vi.mock("./lib/tauri", () => ({
   getCommandCatalog: getCommandCatalogMock,
   getDatabaseOverview: getDatabaseOverviewMock,
   getInstanceOverview: getInstanceOverviewMock,
+  getAppSettings: getAppSettingsMock,
+  listQueryLibrary: listQueryLibraryMock,
   listCommandHistory: listCommandHistoryMock,
+  saveAppSettings: saveAppSettingsMock,
+  saveQueryLibraryItem: saveQueryLibraryItemMock,
+  deleteQueryLibraryItem: deleteQueryLibraryItemMock,
   saveCommandHistory: saveCommandHistoryMock,
   selectDatabase: selectDatabaseMock,
   deleteConnection: vi.fn(),
@@ -98,6 +113,29 @@ beforeEach(() => {
     { database: 0, key_count: 1, expires: 0, avg_ttl_ms: 0 },
   ]);
   selectDatabaseMock.mockResolvedValue(localProfile);
+  getAppSettingsMock.mockResolvedValue({
+    version: 1,
+    theme: "system",
+    result_format: "text",
+    scan_count: 100,
+    continue_on_error: false,
+  });
+  listQueryLibraryMock.mockResolvedValue([]);
+  saveAppSettingsMock.mockResolvedValue({
+    version: 1,
+    theme: "dark",
+    result_format: "text",
+    scan_count: 100,
+    continue_on_error: false,
+  });
+  saveQueryLibraryItemMock.mockResolvedValue({
+    id: "query-1",
+    name: "读取用户",
+    command: "GET user:1",
+    tags: ["用户"],
+    updated_at: 1,
+  });
+  deleteQueryLibraryItemMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -126,6 +164,8 @@ describe("Redix 应用壳", () => {
     expect(screen.getByRole("button", { name: "Browser" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Workbench" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Database" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Query Library" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "设置" })).toBeEnabled();
   });
 
   it("连接后显示 Database 工作区并可加载概览", async () => {
@@ -157,5 +197,41 @@ describe("Redix 应用壳", () => {
     fireEvent.click(screen.getByRole("button", { name: "执行" }));
     expect(await screen.findByText("PONG")).toBeInTheDocument();
     expect(screen.getByLabelText("结果格式")).toBeInTheDocument();
+  });
+
+  it("Query Library 回填 Workbench，不自动执行命令", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    listQueryLibraryMock.mockResolvedValue([
+      {
+        id: "query-1",
+        name: "读取用户",
+        command: "GET user:1",
+        tags: ["用户"],
+        updated_at: 1,
+      },
+    ]);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await waitFor(() => expect(openConnectionMock).toHaveBeenCalledWith("local"));
+    fireEvent.click(screen.getByRole("button", { name: "Query Library" }));
+    await screen.findByText("读取用户");
+    fireEvent.click(screen.getByRole("button", { name: "回填 Workbench 读取用户" }));
+
+    expect(screen.getByRole("heading", { name: "Workbench" })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Redis 命令" })).toHaveValue("GET user:1");
+    expect(executeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("保存设置后更新应用主题属性", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.change(screen.getByLabelText("主题"), { target: { value: "dark" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => expect(saveAppSettingsMock).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(document.documentElement).toHaveAttribute("data-theme", "dark"),
+    );
   });
 });

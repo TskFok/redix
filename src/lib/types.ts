@@ -1,4 +1,9 @@
-export type Workspace = "browser" | "workbench" | "database";
+export type Workspace =
+  | "browser"
+  | "workbench"
+  | "database"
+  | "query-library"
+  | "settings";
 
 export interface ConnectionProfile {
   id: string;
@@ -48,6 +53,32 @@ export interface DatabaseOverview {
 export interface SelectDatabaseInput {
   connection_id: string;
   database: number;
+}
+
+export interface QueryLibraryItem {
+  id: string;
+  name: string;
+  command: string;
+  tags: string[];
+  updated_at: number;
+}
+
+export interface QueryLibraryItemInput {
+  id: string | null;
+  name: string;
+  command: string;
+  tags: string[];
+}
+
+export type ThemePreference = "system" | "light" | "dark";
+export type CommandDisplayFormat = "raw" | "text" | "json";
+
+export interface AppSettings {
+  version: number;
+  theme: ThemePreference;
+  result_format: CommandDisplayFormat;
+  scan_count: number;
+  continue_on_error: boolean;
 }
 
 export interface ScanKeysInput {
@@ -225,8 +256,6 @@ export interface SaveCommandHistoryInput {
   connection_id: string;
   entries: CommandHistoryEntry[];
 }
-
-export type CommandDisplayFormat = "raw" | "text" | "json";
 
 export interface IpcError {
   code: string;

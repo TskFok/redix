@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 8：RedisInsight 非 Cloud 差异补全（设计确认）
+Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
 
 ## Phases
 
@@ -218,7 +218,7 @@ Phase 8：RedisInsight 非 Cloud 差异补全（设计确认）
 
 ### Status
 
-in_progress：Browser 生产力和 Workbench 增强已完成并分别提交；数据库/实例概览和 Query Library/Settings 仍按顺序实现。
+第一批完成：Browser 生产力、Workbench 增强、数据库/实例概览和 Query Library/Settings 已实现并通过总体验收；Slow Log、Pub/Sub、Profiler、拓扑/安全连接和模块专用能力仍按后续批次单独规划。
 
 ### 已确认设计决策
 
@@ -241,8 +241,8 @@ in_progress：Browser 生产力和 Workbench 增强已完成并分别提交；�
 - [x] 编写四个按依赖顺序执行的详细实现计划并完成自审
 - [x] 依照计划按 TDD 实现并验证 Browser 生产力批次
 - [x] 依照计划按 TDD 实现并验证 Workbench 增强批次
-- [ ] 依照计划按 TDD 实现并验证数据库/实例概览批次
-- [ ] 依照计划按 TDD 实现并验证 Query Library/Settings 批次
+- [x] 依照计划按 TDD 实现并验证数据库/实例概览批次
+- [x] 依照计划按 TDD 实现并验证 Query Library/Settings 批次
 
 ### Phase 8 计划产物
 

@@ -3,9 +3,9 @@ mod support;
 use redix_lib::{
     domain::{
         command_catalog, is_sensitive_command, parse_info_sections, parse_keyspace_line,
-        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey, ImportKeysInput,
-        KeyInfoInput, RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput, StreamEntry,
-        StreamField,
+        AppSettings, ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey,
+        ImportKeysInput, KeyInfoInput, QueryLibraryItemInput, RedisValue, RenameKeyInput,
+        ScanKeysInput, SelectDatabaseInput, StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -254,5 +254,50 @@ fn rejects_invalid_database_selection_and_keyspace_lines() {
     assert_eq!(
         parse_keyspace_line("dbx", "keys=1,expires=0").unwrap_err(),
         AppError::PersistenceFailed
+    );
+}
+
+#[test]
+fn query_library_rejects_sensitive_commands_and_accepts_normal_commands() {
+    assert!(QueryLibraryItemInput {
+        id: None,
+        name: "读取用户".into(),
+        command: "GET user:1".into(),
+        tags: vec!["用户".into()],
+    }
+    .validate()
+    .is_ok());
+    assert_eq!(
+        QueryLibraryItemInput {
+            id: None,
+            name: "认证".into(),
+            command: "AUTH secret".into(),
+            tags: vec![],
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidConnection
+    );
+}
+
+#[test]
+fn settings_validate_fixed_enum_and_range() {
+    assert!(AppSettings {
+        version: 1,
+        theme: "dark".into(),
+        result_format: "json".into(),
+        scan_count: 200,
+        continue_on_error: true,
+    }
+    .validate()
+    .is_ok());
+    assert_eq!(
+        AppSettings {
+            scan_count: 1,
+            ..AppSettings::default()
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidConnection
     );
 }

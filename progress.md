@@ -177,3 +177,15 @@
 - 已将 Workbench 历史统一设计为共享的 Rust `JsonDocumentStore` 和 `workbench-history.json`，移除原先可能落到 `localStorage` 的计划矛盾；Query Library/Settings 复用同一仓储并保留损坏文件。
 - 计划覆盖 typed DTO/IPC、固定错误码、SCAN 游标语义、原生 file input/Blob 导入导出、数据库切换回滚、敏感命令过滤、设置迁移、导航和回归测试。
 - 已完成跨计划自审：四个子计划的文件地图、任务依赖、RED/GREEN/验证命令、中文提交信息和 Cloud 排除边界已对齐；待提交计划文档后交接执行。
+
+## Session: 2026-08-24 — Task 13 第一批非 Cloud 能力交付
+
+- **Status:** complete（第一批）
+- 保留用户原有未提交修改，继续在当前 `main` 分支工作；本轮未创建分支、未覆盖用户文件。
+- 已补齐 Database/实例概览批次：实例只读指标、模块信息、数据库键空间统计、安全数据库切换和独立导航入口。
+- 已补齐 Query Library/Settings 批次：本地版本化 JSON 存储、迁移/损坏文件安全默认值、查询 CRUD/搜索/标签/Workbench 回填、敏感命令过滤，以及主题/结果格式/SCAN 数量/批量错误策略设置。
+- 已将设置接入 Browser、Workbench 和根节点主题；Query Library 回填仅填充 Workbench，不会自动执行 Redis 命令。
+- 已补充 Rust commands、typed Tauri bridge、页面状态、应用 smoke 测试和固定错误提示；前端不显示底层文件系统或 Redis 错误文本。
+- 验证通过：`npm run test:frontend`（97/97）、`npm run build`、`npm run check:non-cloud`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`、`cargo test --manifest-path src-tauri/Cargo.toml -q`（63 个已执行测试，2 个 Redis 集成测试 ignored）和 `git diff --check`。
+- 文档已更新：README 与 `docs/non-cloud-scope.md` 记录 Database、Query Library 和 Settings 的当前能力；计划已标记第一批完成。
+- 后续未实现且不应误报为本轮完成的非 Cloud 能力：Slow Log、Pub/Sub、Profiler、TLS/SSH、Sentinel/Cluster、Vector/Array/Search 等模块专用能力；这些需要独立的事件流、连接拓扑或模块能力设计。

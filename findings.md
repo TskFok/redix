@@ -240,3 +240,12 @@
 - 四个子计划已按 Browser → Workbench → Database → Query Library/Settings 拆分，依赖关系和总体验收矩阵一致。
 - Workbench 历史、Query Library 和 Settings 均指向共享 `JsonDocumentStore`；未保留 `localStorage` 方案，损坏 JSON 恢复默认值时不覆盖原文件。
 - 每个任务均包含明确文件、RED/GREEN 命令、实现边界和简体中文提交信息；第一批不引入 Redis Cloud、Azure、AI、Telemetry、远程插件或 SQL。
+
+### Task 13 第一批交付复核（2026-08-24）
+
+- Database/实例概览批次已在当前工作区落地并接入应用导航；只读聚合指标和数据库切换不向前端暴露 Redis 原始错误。
+- Query Library 使用 `query-library.json`，Settings 使用 `settings.json`；两者均复用 `JsonDocumentStore`、版本字段和原子替换，损坏或未知版本文件恢复内存默认值且不覆盖原文件。
+- Query Library 保存前复用 Workbench 的敏感命令规则，拒绝 AUTH、HELLO、ACL、CONFIG 命令族；回填 Workbench 是显式状态传递，不会隐式执行命令。
+- Settings 的 `theme`、`result_format`、`scan_count`、`continue_on_error` 同时由 Rust/前端校验；根节点主题、Browser SCAN COUNT 和 Workbench 默认显示/批量策略均已联动。
+- 交付前验证结果：前端 97/97、Rust 63 个已执行测试通过，Redis 集成测试 2 个按约定 ignored，非 Cloud 扫描、格式检查、构建和差异检查通过。
+- 仍待后续独立批次评估的本地 Redis 能力包括 Slow Log、Pub/Sub、Profiler、TLS/SSH、Sentinel/Cluster 和 Vector/Array/Search 等模块专用功能；本轮未将其伪装成已完成。

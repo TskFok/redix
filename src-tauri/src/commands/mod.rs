@@ -1,6 +1,8 @@
 pub mod browser;
 pub mod connections;
 pub mod database;
+pub mod query_library;
+pub mod settings;
 pub mod workbench;
 
 pub use browser::{
@@ -12,6 +14,8 @@ pub use connections::{
     test_connection,
 };
 pub use database::{get_database_overview, get_instance_overview, select_database};
+pub use query_library::{delete_query_library_item, list_query_library, save_query_library_item};
+pub use settings::{get_app_settings, save_app_settings};
 pub use workbench::{
     execute_command, execute_commands, get_command_catalog, list_command_history,
     save_command_history,

@@ -3,8 +3,11 @@ use std::sync::Arc;
 use tauri::Manager;
 
 use redix_lib::{
-    commands::{browser, connections, database, workbench},
-    domain::{CommandHistoryEntry, CommandResult, SaveCommandHistoryInput},
+    commands::{browser, connections, database, query_library, settings, workbench},
+    domain::{
+        AppSettings, CommandHistoryEntry, CommandResult, QueryLibraryItemInput,
+        SaveCommandHistoryInput,
+    },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
     AppState,
@@ -60,6 +63,11 @@ fn exposes_all_tauri_command_adapters() {
     let _ = database::get_instance_overview;
     let _ = database::get_database_overview;
     let _ = database::select_database;
+    let _ = query_library::list_query_library;
+    let _ = query_library::save_query_library_item;
+    let _ = query_library::delete_query_library_item;
+    let _ = settings::get_app_settings;
+    let _ = settings::save_app_settings;
     let _ = workbench::execute_command;
     let _ = workbench::execute_commands;
     let _ = workbench::get_command_catalog;
@@ -172,4 +180,90 @@ fn command_history_commands_isolate_connections_and_filter_sensitive_entries() {
             .collect::<Vec<_>>(),
         vec!["DBSIZE"]
     );
+}
+
+#[test]
+fn local_query_library_and_settings_commands_support_crud_and_safe_defaults() {
+    let directory = tempfile::tempdir().expect("local resource directory must be created");
+    let app = tauri::test::mock_builder()
+        .manage(AppState::with_data_dir(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+            directory.path().to_path_buf(),
+        ))
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("test app must build");
+
+    let saved = query_library::save_query_library_item(
+        app.state(),
+        QueryLibraryItemInput {
+            id: None,
+            name: "读取用户".into(),
+            command: "GET user:1".into(),
+            tags: vec!["用户".into()],
+        },
+    )
+    .expect("query library item must save");
+    assert!(!saved.id.is_empty());
+    assert_eq!(
+        query_library::list_query_library(app.state())
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let updated = query_library::save_query_library_item(
+        app.state(),
+        QueryLibraryItemInput {
+            id: Some(saved.id.clone()),
+            name: "读取新用户".into(),
+            command: "GET user:2".into(),
+            tags: vec![],
+        },
+    )
+    .expect("query library item must update");
+    assert_eq!(updated.id, saved.id);
+    assert_eq!(
+        query_library::list_query_library(app.state())
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        query_library::list_query_library(app.state()).unwrap()[0].command,
+        "GET user:2"
+    );
+
+    assert_eq!(
+        query_library::save_query_library_item(
+            app.state(),
+            QueryLibraryItemInput {
+                id: None,
+                name: "认证".into(),
+                command: "CONFIG SET requirepass secret".into(),
+                tags: vec![],
+            },
+        )
+        .unwrap_err(),
+        AppError::InvalidConnection
+    );
+
+    query_library::delete_query_library_item(app.state(), saved.id)
+        .expect("query library item must delete");
+    assert!(query_library::list_query_library(app.state())
+        .unwrap()
+        .is_empty());
+
+    let settings = AppSettings {
+        version: 1,
+        theme: "dark".into(),
+        result_format: "json".into(),
+        scan_count: 250,
+        continue_on_error: true,
+    };
+    assert_eq!(
+        settings::save_app_settings(app.state(), settings.clone()).unwrap(),
+        settings
+    );
+    assert_eq!(settings::get_app_settings(app.state()).unwrap(), settings);
 }

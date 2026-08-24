@@ -7,7 +7,11 @@ import {
   listCommandHistory,
   saveCommandHistory,
 } from "../../lib/tauri";
-import type { CommandDefinition, CommandExecutionItem } from "../../lib/types";
+import type {
+  CommandDefinition,
+  CommandDisplayFormat,
+  CommandExecutionItem,
+} from "../../lib/types";
 import CommandInput from "./CommandInput";
 import CommandResult from "./CommandResult";
 import CommandSuggestions, { filterCommandCatalog } from "./CommandSuggestions";
@@ -27,11 +31,23 @@ import {
 
 interface WorkbenchPageProps {
   connectionId: string | null;
+  defaultFormat?: CommandDisplayFormat;
+  defaultContinueOnError?: boolean;
+  initialCommand?: string;
+  onCommandConsumed?: () => void;
 }
 
-export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
+export function WorkbenchPage({
+  connectionId,
+  defaultFormat = "text",
+  defaultContinueOnError = false,
+  initialCommand,
+  onCommandConsumed,
+}: WorkbenchPageProps) {
   const [state, setState] = useState<WorkbenchPageState>(() => ({
     ...initialWorkbenchPageState,
+    format: defaultFormat,
+    continueOnError: defaultContinueOnError,
   }));
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const mountedRef = useRef(false);
@@ -55,6 +71,8 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
     setSuggestionIndex(-1);
     setState({
       ...initialWorkbenchPageState,
+      format: defaultFormat,
+      continueOnError: defaultContinueOnError,
       catalogLoading: true,
     });
 
@@ -93,6 +111,20 @@ export function WorkbenchPage({ connectionId }: WorkbenchPageProps) {
         }
       });
   }, [normalizedConnectionId]);
+
+  useEffect(() => {
+    if (initialCommand === undefined) {
+      return;
+    }
+    setSuggestionIndex(-1);
+    setState((current) => ({
+      ...current,
+      command: initialCommand,
+      commands: normalizeCommandList(initialCommand),
+      error: null,
+    }));
+    onCommandConsumed?.();
+  }, [initialCommand, onCommandConsumed]);
 
   const handleSuggestionSelect = (suggestion: CommandDefinition) => {
     const lines = state.command.split(/\r?\n/);

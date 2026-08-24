@@ -15,7 +15,9 @@ import {
   getKey,
   getKeyInfo,
   getInstanceOverview,
+  getAppSettings,
   importKeys,
+  listQueryLibrary,
   listCommandHistory,
   listConnections,
   openConnection,
@@ -23,9 +25,12 @@ import {
   saveConnection,
   scanKeys,
   saveCommandHistory,
+  saveAppSettings,
+  saveQueryLibraryItem,
   selectDatabase,
   setKey,
   setKeyTtl,
+  deleteQueryLibraryItem,
   testConnection,
 } from "./tauri";
 import type {
@@ -33,8 +38,11 @@ import type {
   CommandExecutionItem,
   CommandHistoryEntry,
   CommandResult,
+  AppSettings,
   DatabaseOverview,
   InstanceOverview,
+  QueryLibraryItem,
+  QueryLibraryItemInput,
   ConnectionInfo,
   ConnectionProfile,
   ExportedKey,
@@ -237,6 +245,50 @@ describe("Tauri IPC bridge", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("select_database", {
       input: { connection_id: "local", database: 0 },
     });
+  });
+
+  it("为 Query Library 和 Settings 使用稳定的本地资源 IPC 合同", async () => {
+    const item: QueryLibraryItem = {
+      id: "query-1",
+      name: "读取用户",
+      command: "GET user:1",
+      tags: ["用户"],
+      updated_at: 1,
+    };
+    const itemInput: QueryLibraryItemInput = {
+      id: null,
+      name: item.name,
+      command: item.command,
+      tags: item.tags,
+    };
+    const settings: AppSettings = {
+      version: 1,
+      theme: "dark",
+      result_format: "json",
+      scan_count: 200,
+      continue_on_error: true,
+    };
+    invokeMock
+      .mockResolvedValueOnce([item])
+      .mockResolvedValueOnce(item)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(settings)
+      .mockResolvedValueOnce(settings);
+
+    await expect(listQueryLibrary()).resolves.toEqual([item]);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_query_library");
+    await expect(saveQueryLibraryItem(itemInput)).resolves.toEqual(item);
+    expect(invokeMock).toHaveBeenLastCalledWith("save_query_library_item", {
+      input: itemInput,
+    });
+    await expect(deleteQueryLibraryItem(item.id)).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_query_library_item", {
+      id: item.id,
+    });
+    await expect(getAppSettings()).resolves.toEqual(settings);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_app_settings");
+    await expect(saveAppSettings(settings)).resolves.toEqual(settings);
+    expect(invokeMock).toHaveBeenLastCalledWith("save_app_settings", { settings });
   });
 
   it("为 Browser 扩展命令使用稳定命令名和 input 包装", async () => {

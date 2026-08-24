@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
 import DatabasePage from "./features/database/DatabasePage";
+import QueryLibraryPage from "./features/query-library/QueryLibraryPage";
+import SettingsPage from "./features/settings/SettingsPage";
 import WorkbenchPage from "./features/workbench/WorkbenchPage";
-import type { ConnectionProfile, Workspace } from "./lib/types";
+import { getAppSettings } from "./lib/tauri";
+import type { AppSettings, ConnectionProfile, Workspace } from "./lib/types";
+import { DEFAULT_APP_SETTINGS } from "./features/settings/settingsState";
 
 type AppSection = "connections" | Workspace;
 
@@ -12,7 +16,13 @@ interface NavigationItem {
   id: AppSection;
   label: string;
   description: string;
-  icon: "connections" | "browser" | "workbench" | "database";
+  icon:
+    | "connections"
+    | "browser"
+    | "workbench"
+    | "database"
+    | "query-library"
+    | "settings";
 }
 
 const navigationItems: NavigationItem[] = [
@@ -35,6 +45,18 @@ const navigationItems: NavigationItem[] = [
     description: "实例概览",
     icon: "database",
   },
+  {
+    id: "query-library",
+    label: "Query Library",
+    description: "保存查询",
+    icon: "query-library",
+  },
+  {
+    id: "settings",
+    label: "设置",
+    description: "应用偏好",
+    icon: "settings",
+  },
 ];
 
 const sectionDescriptions: Record<AppSection, string> = {
@@ -42,6 +64,8 @@ const sectionDescriptions: Record<AppSection, string> = {
   browser: "使用 SCAN 浏览键和值",
   workbench: "直接执行 Redis 命令并查看返回值",
   database: "查看实例指标和数据库键空间",
+  "query-library": "保存命令并回填 Workbench",
+  settings: "调整主题和工作区偏好",
 };
 
 function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
@@ -72,6 +96,23 @@ function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
     );
   }
 
+  if (type === "query-library") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" />
+      </svg>
+    );
+  }
+
+  if (type === "settings") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="m9.5 4 .7-1h3.6l.7 1 1.2.7 1.2-.2 1.8 1.8-.2 1.2.7 1.2 1 .7v3.6l-1 .7-.7 1.2.2 1.2-1.8 1.8-1.2-.2-1.2.7-.7 1h-3.6l-.7-1-1.2-.7-1.2.2-1.8-1.8.2-1.2-.7-1.2-1-.7V9.4l1-.7.7-1.2-.2-1.2 1.8-1.8 1.2.2L9.5 4Z" />
+        <circle cx="12" cy="11.5" r="2.5" />
+      </svg>
+    );
+  }
+
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
       <path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 5l-4 14" />
@@ -82,6 +123,36 @@ function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
 export default function App() {
   const [activeProfile, setActiveProfile] = useState<ConnectionProfile | null>(null);
   const [activeSection, setActiveSection] = useState<AppSection>("connections");
+  const [settings, setSettings] = useState<AppSettings>(() => ({
+    ...DEFAULT_APP_SETTINGS,
+  }));
+  const [pendingWorkbenchCommand, setPendingWorkbenchCommand] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    void getAppSettings()
+      .then((loaded) => {
+        if (mounted) {
+          setSettings(loaded);
+        }
+      })
+      .catch(() => undefined);
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = settings.theme;
+    root.classList.toggle("theme-light", settings.theme === "light");
+    root.classList.toggle("theme-dark", settings.theme === "dark");
+    return () => {
+      root.classList.remove("theme-light", "theme-dark");
+      delete root.dataset.theme;
+    };
+  }, [settings.theme]);
 
   const handleOpenConnection = (profile: ConnectionProfile | null) => {
     setActiveProfile(profile);
@@ -97,6 +168,10 @@ export default function App() {
   const activeNavigation = navigationItems.find((item) => item.id === activeSection);
   const currentSection = activeNavigation ?? navigationItems[0];
   const canAccessWorkspace = activeProfile !== null;
+  const canAccessLocalResources = (section: AppSection) =>
+    section === "connections" || section === "query-library" || section === "settings";
+  const showConnectionPage =
+    activeSection === "connections" || (!activeProfile && !canAccessLocalResources(activeSection));
 
   return (
     <main className="app-shell">
@@ -114,7 +189,7 @@ export default function App() {
         <nav aria-label="主导航" className="app-navigation">
           <p className="app-navigation-label">工作区</p>
           {navigationItems.map((item) => {
-            const isAvailable = item.id === "connections" || canAccessWorkspace;
+            const isAvailable = canAccessLocalResources(item.id) || canAccessWorkspace;
             const isActive = currentSection.id === item.id;
             return (
               <button
@@ -173,7 +248,7 @@ export default function App() {
         </header>
 
         <section className="workspace" aria-label="当前工作区">
-          {activeSection === "connections" || !activeProfile ? (
+          {showConnectionPage ? (
             <ConnectionPage onOpenConnection={handleOpenConnection} />
           ) : null}
           <p className="workspace-context" aria-live="polite">
@@ -182,10 +257,16 @@ export default function App() {
               : "请先连接 Redis 后使用工作区。"}
           </p>
           {activeProfile && activeSection === "browser" ? (
-            <BrowserPage connectionId={activeProfile.id} />
+            <BrowserPage connectionId={activeProfile.id} scanCount={settings.scan_count} />
           ) : null}
           {activeProfile && activeSection === "workbench" ? (
-            <WorkbenchPage connectionId={activeProfile.id} />
+            <WorkbenchPage
+              connectionId={activeProfile.id}
+              defaultFormat={settings.result_format}
+              defaultContinueOnError={settings.continue_on_error}
+              initialCommand={pendingWorkbenchCommand ?? undefined}
+              onCommandConsumed={() => setPendingWorkbenchCommand(null)}
+            />
           ) : null}
           {activeProfile && activeSection === "database" ? (
             <DatabasePage
@@ -193,6 +274,17 @@ export default function App() {
               activeDatabase={activeProfile.database}
               onProfileChanged={handleProfileChanged}
             />
+          ) : null}
+          {activeSection === "query-library" ? (
+            <QueryLibraryPage
+              onFill={(command) => {
+                setPendingWorkbenchCommand(command);
+                setActiveSection("workbench");
+              }}
+            />
+          ) : null}
+          {activeSection === "settings" ? (
+            <SettingsPage settings={settings} onSaved={setSettings} />
           ) : null}
         </section>
       </section>
