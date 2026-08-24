@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
 import DatabasePage from "./features/database/DatabasePage";
+import ObservabilityPage from "./features/observability/ObservabilityPage";
 import QueryLibraryPage from "./features/query-library/QueryLibraryPage";
 import SettingsPage from "./features/settings/SettingsPage";
 import WorkbenchPage from "./features/workbench/WorkbenchPage";
@@ -21,6 +22,7 @@ interface NavigationItem {
     | "browser"
     | "workbench"
     | "database"
+    | "observability"
     | "query-library"
     | "settings";
 }
@@ -46,6 +48,12 @@ const navigationItems: NavigationItem[] = [
     icon: "database",
   },
   {
+    id: "observability",
+    label: "运维观察",
+    description: "Slow Log / Pub/Sub",
+    icon: "observability",
+  },
+  {
     id: "query-library",
     label: "Query Library",
     description: "保存查询",
@@ -64,6 +72,7 @@ const sectionDescriptions: Record<AppSection, string> = {
   browser: "使用 SCAN 浏览键和值",
   workbench: "直接执行 Redis 命令并查看返回值",
   database: "查看实例指标和数据库键空间",
+  observability: "查看 Slow Log 和 Pub/Sub 消息",
   "query-library": "保存命令并回填 Workbench",
   settings: "调整主题和工作区偏好",
 };
@@ -100,6 +109,15 @@ function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
     return (
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <path d="M6 4h12v16H6zM9 8h6M9 12h6M9 16h4" />
+      </svg>
+    );
+  }
+
+  if (type === "observability") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M4 17h3l2.3-6 3.1 9 2.4-7H20" />
+        <path d="M4 5h16" />
       </svg>
     );
   }
@@ -274,6 +292,9 @@ export default function App() {
               activeDatabase={activeProfile.database}
               onProfileChanged={handleProfileChanged}
             />
+          ) : null}
+          {activeProfile && activeSection === "observability" ? (
+            <ObservabilityPage connectionId={activeProfile.id} />
           ) : null}
           {activeSection === "query-library" ? (
             <QueryLibraryPage

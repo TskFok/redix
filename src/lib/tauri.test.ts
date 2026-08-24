@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearSlowLogs,
   closeConnection,
   createKey,
   deleteKeys,
@@ -10,6 +11,8 @@ import {
   executeCommands,
   executeCommand,
   exportKeys,
+  getSlowLogConfig,
+  getSlowLogs,
   getDatabaseOverview,
   getCommandCatalog,
   getKey,
@@ -21,6 +24,7 @@ import {
   listCommandHistory,
   listConnections,
   openConnection,
+  publishPubSub,
   renameKey,
   saveConnection,
   scanKeys,
@@ -28,10 +32,13 @@ import {
   saveAppSettings,
   saveQueryLibraryItem,
   selectDatabase,
+  startPubSub,
+  stopPubSub,
   setKey,
   setKeyTtl,
   deleteQueryLibraryItem,
   testConnection,
+  updateSlowLogConfig,
 } from "./tauri";
 import type {
   CommandDefinition,
@@ -41,6 +48,7 @@ import type {
   AppSettings,
   DatabaseOverview,
   InstanceOverview,
+  PubSubSession,
   QueryLibraryItem,
   QueryLibraryItemInput,
   ConnectionInfo,
@@ -51,6 +59,8 @@ import type {
   SaveConnectionInput,
   SaveCommandHistoryInput,
   ScanPage,
+  SlowLogConfig,
+  SlowLogEntry,
 } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -289,6 +299,84 @@ describe("Tauri IPC bridge", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("get_app_settings");
     await expect(saveAppSettings(settings)).resolves.toEqual(settings);
     expect(invokeMock).toHaveBeenLastCalledWith("save_app_settings", { settings });
+  });
+
+  it("为 Slow Log 和 Pub/Sub 使用稳定的运维 IPC 合同", async () => {
+    const config: SlowLogConfig = {
+      slowlog_max_len: 128,
+      slowlog_log_slower_than: 10_000,
+    };
+    const entry: SlowLogEntry = {
+      id: 7,
+      time: 1_710_000_000,
+      duration_us: 2_500,
+      args: ["SET", "demo", "hello"],
+      source: "127.0.0.1:6379",
+      client: null,
+    };
+    const session: PubSubSession = {
+      connection_id: "local",
+      session_id: "session-1",
+      topics: [{ name: "events", pattern: false }],
+    };
+    invokeMock
+      .mockResolvedValueOnce([entry])
+      .mockResolvedValueOnce(config)
+      .mockResolvedValueOnce(config)
+      .mockResolvedValueOnce(session)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(1)
+      .mockResolvedValueOnce(undefined);
+
+    const slowLogInput = { connection_id: "local", count: 50 };
+    await expect(getSlowLogs(slowLogInput)).resolves.toEqual([entry]);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_slow_logs", {
+      input: slowLogInput,
+    });
+    await expect(getSlowLogConfig("local")).resolves.toEqual(config);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_slow_log_config", {
+      connection_id: "local",
+    });
+    const configInput = {
+      connection_id: "local",
+      slowlog_max_len: 128,
+      slowlog_log_slower_than: 10_000,
+    };
+    await expect(updateSlowLogConfig(configInput)).resolves.toEqual(config);
+    expect(invokeMock).toHaveBeenLastCalledWith("update_slow_log_config", {
+      input: configInput,
+    });
+    await expect(startPubSub({
+      connection_id: "local",
+      session_id: "session-1",
+      topics: [{ name: "events", pattern: false }],
+    })).resolves.toEqual(session);
+    expect(invokeMock).toHaveBeenLastCalledWith("start_pub_sub", {
+      input: {
+        connection_id: "local",
+        session_id: "session-1",
+        topics: [{ name: "events", pattern: false }],
+      },
+    });
+    await expect(stopPubSub({
+      connection_id: "local",
+      session_id: "session-1",
+    })).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith("stop_pub_sub", {
+      input: { connection_id: "local", session_id: "session-1" },
+    });
+    await expect(publishPubSub({
+      connection_id: "local",
+      channel: "events",
+      message: "hello",
+    })).resolves.toBe(1);
+    expect(invokeMock).toHaveBeenLastCalledWith("publish_pub_sub", {
+      input: { connection_id: "local", channel: "events", message: "hello" },
+    });
+    await expect(clearSlowLogs("local")).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith("clear_slow_logs", {
+      connection_id: "local",
+    });
   });
 
   it("为 Browser 扩展命令使用稳定命令名和 input 包装", async () => {

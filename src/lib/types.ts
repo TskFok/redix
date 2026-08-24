@@ -2,6 +2,7 @@ export type Workspace =
   | "browser"
   | "workbench"
   | "database"
+  | "observability"
   | "query-library"
   | "settings";
 
@@ -48,6 +49,75 @@ export interface DatabaseOverview {
   key_count: number | null;
   expires: number | null;
   avg_ttl_ms: number | null;
+}
+
+export interface SlowLogEntry {
+  id: number;
+  time: number;
+  duration_us: number;
+  args: string[];
+  source: string;
+  client: string | null;
+}
+
+export interface SlowLogConfig {
+  slowlog_max_len: number;
+  slowlog_log_slower_than: number;
+}
+
+export interface GetSlowLogsInput {
+  connection_id: string;
+  count: number;
+}
+
+export interface UpdateSlowLogConfigInput {
+  connection_id: string;
+  slowlog_max_len: number | null;
+  slowlog_log_slower_than: number | null;
+}
+
+export interface PubSubTopic {
+  name: string;
+  pattern: boolean;
+}
+
+export interface StartPubSubInput {
+  connection_id: string;
+  session_id: string;
+  topics: PubSubTopic[];
+}
+
+export interface PubSubSession {
+  connection_id: string;
+  session_id: string;
+  topics: PubSubTopic[];
+}
+
+export interface StopPubSubInput {
+  connection_id: string;
+  session_id: string;
+}
+
+export interface PublishPubSubInput {
+  connection_id: string;
+  channel: string;
+  message: string;
+}
+
+export interface PubSubMessageEvent {
+  connection_id: string;
+  session_id: string;
+  channel: string;
+  pattern: string | null;
+  message: string;
+  received_at_ms: number;
+}
+
+export interface PubSubStatusEvent {
+  connection_id: string;
+  session_id: string;
+  state: string;
+  error_code: string | null;
 }
 
 export interface SelectDatabaseInput {

@@ -1955,6 +1955,319 @@ code {
   background: var(--color-danger-surface);
 }
 
+/* Observability */
+
+.observability-page {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.observability-page-heading {
+  align-items: flex-start;
+}
+
+.observability-scope,
+.observability-config-summary,
+.observability-session-note {
+  color: var(--color-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+
+.observability-scope {
+  max-width: 38ch;
+  overflow: hidden;
+  padding-top: 4px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.observability-tabs {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-interactive);
+}
+
+.observability-tab {
+  display: grid;
+  min-width: 150px;
+  gap: 3px;
+  padding: 9px 13px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: left;
+  transition: border-color var(--transition-fast), background-color var(--transition-fast),
+    color var(--transition-fast);
+}
+
+.observability-tab:hover,
+.observability-tab:focus-visible {
+  border-color: var(--color-border-strong);
+  color: var(--color-text-strong);
+}
+
+.observability-tab-active {
+  border-color: var(--color-primary);
+  color: var(--color-text-strong);
+  background: var(--color-primary-surface);
+}
+
+.observability-tab small {
+  color: inherit;
+  font-size: 9px;
+}
+
+.observability-content {
+  display: grid;
+  gap: 14px;
+}
+
+.observability-panel {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-panel);
+}
+
+.observability-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.observability-panel-heading h3 {
+  margin: 4px 0 0;
+  color: var(--color-text-strong);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.observability-toolbar {
+  display: flex;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.observability-inline-field {
+  display: grid;
+  align-items: center;
+  gap: 5px;
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.observability-inline-field select {
+  min-height: 32px;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface-interactive);
+  font-size: 10px;
+}
+
+.observability-panel-hint {
+  margin: 14px 0 0;
+  text-align: left;
+}
+
+.observability-table-wrap {
+  margin: 16px -4px -4px;
+  overflow-x: auto;
+  padding: 0 4px 4px;
+}
+
+.observability-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+
+.observability-table th,
+.observability-table td {
+  max-width: 360px;
+  padding: 11px 9px;
+  border-bottom: 1px solid var(--color-border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.observability-table thead th {
+  color: var(--color-muted);
+  font-size: 9px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.observability-table tbody td {
+  color: var(--color-text);
+}
+
+.observability-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.observability-mono {
+  color: var(--color-muted) !important;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.observability-command,
+.observability-message {
+  display: block;
+  max-width: 360px;
+  overflow: hidden;
+  color: var(--color-success-text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  line-height: 1.55;
+  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.observability-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.observability-config-grid .field small,
+.pubsub-subscribe-grid .field small {
+  color: var(--color-muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.observability-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.observability-form-note {
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.observability-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 9px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+
+.observability-status-running {
+  border-color: var(--color-success-border);
+  color: var(--color-success-text);
+  background: var(--color-success-surface);
+}
+
+.observability-status-stopped {
+  border-color: var(--color-border-strong);
+}
+
+.observability-status-dot {
+  width: 7px;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+
+.observability-status-running .observability-status-dot {
+  background: currentColor;
+}
+
+.pubsub-subscribe-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.36fr);
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.pubsub-subscribe-grid textarea {
+  min-height: 102px;
+  resize: vertical;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.pubsub-subscribe-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.checkbox-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted);
+  font-size: 11px;
+}
+
+.checkbox-field input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--color-primary);
+}
+
+.observability-session-note {
+  margin: 14px 0 0;
+}
+
+.pubsub-publish-grid {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.42fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.pubsub-message-field {
+  min-width: 0;
+}
+
+.pubsub-message-table-wrap {
+  max-height: 460px;
+  overflow-y: auto;
+}
+
+.pubsub-message-table {
+  min-width: 680px;
+}
+
 /* Utility and responsive behavior */
 
 .sr-only {
@@ -2051,14 +2364,17 @@ code {
   .app-navigation {
     display: flex;
     width: auto;
+    max-width: 100%;
     flex: 0 0 auto;
     gap: 3px;
     margin: 0;
+    overflow-x: auto;
   }
 
   .app-navigation-item {
     width: 44px;
     min-height: 44px;
+    flex: 0 0 44px;
     padding: 0;
   }
 
@@ -2098,7 +2414,8 @@ code {
   .panel-heading,
   .browser-panel-heading,
   .workbench-panel-heading,
-  .database-panel-heading {
+  .database-panel-heading,
+  .observability-panel-heading {
     flex-direction: column;
     gap: 8px;
   }
@@ -2119,8 +2436,32 @@ code {
   .browser-add-key-grid,
   .settings-layout,
   .browser-layout,
-  .workbench-layout {
+  .workbench-layout,
+  .observability-config-grid,
+  .pubsub-subscribe-grid,
+  .pubsub-publish-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .observability-tabs {
+    width: 100%;
+  }
+
+  .observability-tab {
+    min-width: 0;
+    flex: 1 1 0;
+  }
+
+  .observability-toolbar {
+    width: 100%;
+    align-items: stretch;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .observability-panel-actions {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .database-metric-grid {
@@ -2164,7 +2505,8 @@ code {
   .workbench-command-panel,
   .workbench-history-panel,
   .workbench-result-panel,
-  .database-panel {
+  .database-panel,
+  .observability-panel {
     padding: 16px;
   }
 
@@ -2209,6 +2551,16 @@ code {
   .editor-actions {
     align-items: stretch;
     flex-direction: column-reverse;
+  }
+
+  .pubsub-subscribe-actions {
+    gap: 12px;
+  }
+
+  .pubsub-subscribe-actions .button,
+  .pubsub-publish-grid .button,
+  .observability-panel-actions .button {
+    width: 100%;
   }
 }
 

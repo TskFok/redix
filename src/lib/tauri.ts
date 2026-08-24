@@ -16,6 +16,7 @@ import type {
   ExecuteCommandInput,
   ExportedKey,
   ExportKeysInput,
+  GetSlowLogsInput,
   GetKeyInput,
   IpcError,
   ImportKeysInput,
@@ -28,11 +29,18 @@ import type {
   SaveCommandHistoryInput,
   QueryLibraryItem,
   QueryLibraryItemInput,
+  PublishPubSubInput,
+  PubSubSession,
   ScanKeysInput,
   ScanPage,
   SelectDatabaseInput,
   SetKeyInput,
   SetKeyTtlInput,
+  SlowLogConfig,
+  SlowLogEntry,
+  StartPubSubInput,
+  StopPubSubInput,
+  UpdateSlowLogConfigInput,
 } from "./types";
 
 const IPC_ERROR: IpcError = {
@@ -119,6 +127,38 @@ export function getDatabaseOverview(connectionId: string): Promise<DatabaseOverv
 
 export function selectDatabase(input: SelectDatabaseInput): Promise<ConnectionProfile> {
   return call<ConnectionProfile>("select_database", { input });
+}
+
+export function getSlowLogs(input: GetSlowLogsInput): Promise<SlowLogEntry[]> {
+  return call<SlowLogEntry[]>("get_slow_logs", { input });
+}
+
+export function clearSlowLogs(connectionId: string): Promise<void> {
+  return call<void>("clear_slow_logs", { connection_id: connectionId });
+}
+
+export function getSlowLogConfig(connectionId: string): Promise<SlowLogConfig> {
+  return call<SlowLogConfig>("get_slow_log_config", {
+    connection_id: connectionId,
+  });
+}
+
+export function updateSlowLogConfig(
+  input: UpdateSlowLogConfigInput,
+): Promise<SlowLogConfig> {
+  return call<SlowLogConfig>("update_slow_log_config", { input });
+}
+
+export function startPubSub(input: StartPubSubInput): Promise<PubSubSession> {
+  return call<PubSubSession>("start_pub_sub", { input });
+}
+
+export function stopPubSub(input: StopPubSubInput): Promise<void> {
+  return call<void>("stop_pub_sub", { input });
+}
+
+export function publishPubSub(input: PublishPubSubInput): Promise<number> {
+  return call<number>("publish_pub_sub", { input });
 }
 
 export function listQueryLibrary(): Promise<QueryLibraryItem[]> {
