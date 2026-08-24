@@ -25,6 +25,7 @@ import {
   listConnections,
   openConnection,
   publishPubSub,
+  startProfiler,
   renameKey,
   saveConnection,
   scanKeys,
@@ -34,6 +35,7 @@ import {
   selectDatabase,
   startPubSub,
   stopPubSub,
+  stopProfiler,
   setKey,
   setKeyTtl,
   deleteQueryLibraryItem,
@@ -49,6 +51,7 @@ import type {
   DatabaseOverview,
   InstanceOverview,
   PubSubSession,
+  ProfilerSession,
   QueryLibraryItem,
   QueryLibraryItemInput,
   ConnectionInfo,
@@ -324,6 +327,11 @@ describe("Tauri IPC bridge", () => {
       .mockResolvedValueOnce(config)
       .mockResolvedValueOnce(config)
       .mockResolvedValueOnce(session)
+      .mockResolvedValueOnce({
+        connection_id: "local",
+        session_id: "profiler-1",
+      } satisfies ProfilerSession)
+      .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(undefined);
@@ -357,6 +365,21 @@ describe("Tauri IPC bridge", () => {
         session_id: "session-1",
         topics: [{ name: "events", pattern: false }],
       },
+    });
+    const profilerInput = {
+      connection_id: "local",
+      session_id: "profiler-1",
+    };
+    await expect(startProfiler(profilerInput)).resolves.toEqual({
+      connection_id: "local",
+      session_id: "profiler-1",
+    });
+    expect(invokeMock).toHaveBeenLastCalledWith("start_profiler", {
+      input: profilerInput,
+    });
+    await expect(stopProfiler(profilerInput)).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith("stop_profiler", {
+      input: profilerInput,
     });
     await expect(stopPubSub({
       connection_id: "local",

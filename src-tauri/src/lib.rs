@@ -79,6 +79,8 @@ pub fn run() {
             commands::observability::start_pub_sub,
             commands::observability::stop_pub_sub,
             commands::observability::publish_pub_sub,
+            commands::observability::start_profiler,
+            commands::observability::stop_profiler,
             commands::query_library::list_query_library,
             commands::query_library::save_query_library_item,
             commands::query_library::delete_query_library_item,

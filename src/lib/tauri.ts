@@ -31,6 +31,7 @@ import type {
   QueryLibraryItemInput,
   PublishPubSubInput,
   PubSubSession,
+  ProfilerSession,
   ScanKeysInput,
   ScanPage,
   SelectDatabaseInput,
@@ -39,6 +40,8 @@ import type {
   SlowLogConfig,
   SlowLogEntry,
   StartPubSubInput,
+  StartProfilerInput,
+  StopProfilerInput,
   StopPubSubInput,
   UpdateSlowLogConfigInput,
 } from "./types";
@@ -159,6 +162,14 @@ export function stopPubSub(input: StopPubSubInput): Promise<void> {
 
 export function publishPubSub(input: PublishPubSubInput): Promise<number> {
   return call<number>("publish_pub_sub", { input });
+}
+
+export function startProfiler(input: StartProfilerInput): Promise<ProfilerSession> {
+  return call<ProfilerSession>("start_profiler", { input });
+}
+
+export function stopProfiler(input: StopProfilerInput): Promise<void> {
+  return call<void>("stop_profiler", { input });
 }
 
 export function listQueryLibrary(): Promise<QueryLibraryItem[]> {

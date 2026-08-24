@@ -1,7 +1,8 @@
 use crate::{
     domain::{
-        GetSlowLogsInput, PubSubSession, PublishPubSubInput, SlowLogConfig, SlowLogEntry,
-        StartPubSubInput, StopPubSubInput, UpdateSlowLogConfigInput,
+        GetSlowLogsInput, ProfilerSession, PubSubSession, PublishPubSubInput, SlowLogConfig,
+        SlowLogEntry, StartProfilerInput, StartPubSubInput, StopProfilerInput, StopPubSubInput,
+        UpdateSlowLogConfigInput,
     },
     error::AppError,
     redis::RedisOperations,
@@ -63,4 +64,21 @@ pub async fn publish_pub_sub(
     input: PublishPubSubInput,
 ) -> Result<u64, AppError> {
     state.redis.publish_pub_sub(input).await
+}
+
+#[tauri::command]
+pub async fn start_profiler(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, AppState>,
+    input: StartProfilerInput,
+) -> Result<ProfilerSession, AppError> {
+    state.redis.start_profiler(app, input).await
+}
+
+#[tauri::command]
+pub async fn stop_profiler(
+    state: tauri::State<'_, AppState>,
+    input: StopProfilerInput,
+) -> Result<(), AppError> {
+    state.redis.stop_profiler(input).await
 }

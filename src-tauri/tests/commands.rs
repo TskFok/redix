@@ -70,6 +70,8 @@ fn exposes_all_tauri_command_adapters() {
     let _ = observability::start_pub_sub;
     let _ = observability::stop_pub_sub;
     let _ = observability::publish_pub_sub;
+    let _ = observability::start_profiler;
+    let _ = observability::stop_profiler;
     let _ = query_library::list_query_library;
     let _ = query_library::save_query_library_item;
     let _ = query_library::delete_query_library_item;

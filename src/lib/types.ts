@@ -120,6 +120,38 @@ export interface PubSubStatusEvent {
   error_code: string | null;
 }
 
+export interface StartProfilerInput {
+  connection_id: string;
+  session_id: string;
+}
+
+export interface StopProfilerInput {
+  connection_id: string;
+  session_id: string;
+}
+
+export interface ProfilerSession {
+  connection_id: string;
+  session_id: string;
+}
+
+export interface ProfilerEvent {
+  connection_id: string;
+  session_id: string;
+  time: string;
+  database: number;
+  source: string;
+  args: string[];
+  received_at_ms: number;
+}
+
+export interface ProfilerStatusEvent {
+  connection_id: string;
+  session_id: string;
+  state: string;
+  error_code: string | null;
+}
+
 export interface SelectDatabaseInput {
   connection_id: string;
   database: number;
