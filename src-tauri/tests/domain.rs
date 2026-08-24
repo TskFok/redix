@@ -4,8 +4,9 @@ use redix_lib::{
     domain::{
         command_catalog, is_sensitive_command, parse_info_sections, parse_keyspace_line,
         AppSettings, ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey,
-        ImportKeysInput, KeyInfoInput, QueryLibraryItemInput, RedisValue, RenameKeyInput,
-        ScanKeysInput, SelectDatabaseInput, StreamEntry, StreamField,
+        GetSlowLogsInput, ImportKeysInput, KeyInfoInput, PubSubTopic, QueryLibraryItemInput,
+        RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput, StartPubSubInput,
+        StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -300,4 +301,47 @@ fn settings_validate_fixed_enum_and_range() {
         .unwrap_err(),
         AppError::InvalidConnection
     );
+}
+
+#[test]
+fn rejects_invalid_observability_inputs_without_leaking_values() {
+    let error = GetSlowLogsInput {
+        connection_id: "".into(),
+        count: 1001,
+    }
+    .validate()
+    .unwrap_err();
+    assert_eq!(error.code(), "INVALID_INPUT");
+    assert_eq!(error.to_string(), "输入参数无效");
+
+    let error = StartPubSubInput {
+        connection_id: "local".into(),
+        session_id: "session".into(),
+        topics: vec![PubSubTopic {
+            name: "   ".into(),
+            pattern: false,
+        }],
+    }
+    .validate()
+    .unwrap_err();
+    assert_eq!(error.code(), "INVALID_INPUT");
+}
+
+#[test]
+fn normalizes_pubsub_topics_and_rejects_duplicates() {
+    let input = StartPubSubInput {
+        connection_id: "local".into(),
+        session_id: "session".into(),
+        topics: vec![
+            PubSubTopic {
+                name: " news.* ".into(),
+                pattern: true,
+            },
+            PubSubTopic {
+                name: "news.*".into(),
+                pattern: true,
+            },
+        ],
+    };
+    assert_eq!(input.validate().unwrap_err().code(), "INVALID_INPUT");
 }

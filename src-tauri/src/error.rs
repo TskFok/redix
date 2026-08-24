@@ -15,6 +15,10 @@ pub enum AppError {
     CommandFailed,
     #[error("本地数据保存失败")]
     PersistenceFailed,
+    #[error("输入参数无效")]
+    InvalidInput,
+    #[error("操作已取消")]
+    OperationCancelled,
 }
 
 impl AppError {
@@ -26,6 +30,8 @@ impl AppError {
             Self::UnsupportedDataType => "UNSUPPORTED_DATA_TYPE",
             Self::CommandFailed => "COMMAND_FAILED",
             Self::PersistenceFailed => "PERSISTENCE_FAILED",
+            Self::InvalidInput => "INVALID_INPUT",
+            Self::OperationCancelled => "OPERATION_CANCELLED",
         }
     }
 
@@ -37,6 +43,8 @@ impl AppError {
             Self::UnsupportedDataType => "不支持的 Redis 数据类型",
             Self::CommandFailed => "Redis 命令执行失败",
             Self::PersistenceFailed => "本地数据保存失败",
+            Self::InvalidInput => "输入参数无效",
+            Self::OperationCancelled => "操作已取消",
         }
     }
 }
