@@ -255,10 +255,19 @@ pub async fn test_connection(
     state: tauri::State<'_, AppState>,
     input: TestConnectionInput,
 ) -> Result<ConnectionInfo, AppError> {
-    state
-        .redis
-        .test_connection(&input.profile, input.password.as_deref())
-        .await
+    let old_profiles = state.profiles.load()?;
+    let old_profile = old_profiles
+        .iter()
+        .find(|profile| profile.id == input.profile.id);
+    let old_secret = if old_profile.is_some() {
+        state.secrets.read(&input.profile.id)?
+    } else {
+        None
+    };
+    let mut profile = input.profile.clone();
+    let secrets = resolve_secrets(&mut profile, &input, old_profile, old_secret.as_ref())?
+        .unwrap_or_default();
+    state.redis.test_connection(&profile, &secrets).await
 }
 
 #[tauri::command(rename_all = "snake_case")]

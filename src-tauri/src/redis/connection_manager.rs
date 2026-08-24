@@ -1,26 +1,26 @@
 use std::{collections::HashMap, sync::Arc};
 
-use ::redis::{Client, Value};
+use ::redis::{Client, ClientTlsConfig, TlsCertificates, Value};
 use tokio::sync::RwLock;
 
 use crate::{
     domain::{
-        normalize_key_type, parse_info_sections, parse_keyspace_line,
-        AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput, CommandDefinition,
-        CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
-        CreateStreamConsumerGroupInput, DatabaseAnalysisReport, DatabaseOverview, DeleteKeysInput,
-        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, ExecuteCommandsInput,
-        ExportKeysInput, ExportedKey, GetSlowLogsInput, GetStreamConsumerGroupsInput,
-        GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
-        InstanceDetails, InstanceOverview, KeyInfo, KeyInfoInput, KeySummary, KeyValue,
-        ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue, RenameKeyInput,
-        ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput, SlowLogConfig,
-        SlowLogEntry, SortedSetEntry, StartProfilerInput, StartPubSubInput, StopProfilerInput,
-        StopPubSubInput, StreamConsumer, StreamConsumerGroup, StreamEntry, StreamPendingEntry,
-        UpdateSlowLogConfigInput,
+        normalize_key_type, parse_info_sections, parse_keyspace_line, validate_certificate_pem,
+        validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput,
+        CommandDefinition, CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile,
+        CreateKeyInput, CreateStreamConsumerGroupInput, DatabaseAnalysisReport, DatabaseOverview,
+        DeleteKeysInput, DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput,
+        ExecuteCommandsInput, ExportKeysInput, ExportedKey, GetSlowLogsInput,
+        GetStreamConsumerGroupsInput, GetStreamConsumersInput, GetStreamPendingEntriesInput,
+        HashEntry, ImportKeysInput, InstanceDetails, InstanceOverview, KeyInfo, KeyInfoInput,
+        KeySummary, KeyValue, ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue,
+        RenameKeyInput, ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput,
+        SlowLogConfig, SlowLogEntry, SortedSetEntry, StartProfilerInput, StartPubSubInput,
+        StopProfilerInput, StopPubSubInput, StreamConsumer, StreamConsumerGroup, StreamEntry,
+        StreamPendingEntry, UpdateSlowLogConfigInput,
     },
     error::AppError,
-    persistence::{ProfileRepository, SecretStore},
+    persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
 };
 
 use super::{
@@ -40,7 +40,7 @@ pub trait RedisOperations: Send + Sync {
     async fn test_connection(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
+        secrets: &ConnectionSecrets,
     ) -> Result<ConnectionInfo, AppError>;
     async fn open_connection(&self, connection_id: &str) -> Result<ConnectionInfo, AppError>;
     async fn close_connection(&self, connection_id: &str) -> Result<(), AppError>;
@@ -231,11 +231,10 @@ impl RedisOperations for RedisService {
     async fn test_connection(
         &self,
         profile: &ConnectionProfile,
-        password: Option<&str>,
+        secrets: &ConnectionSecrets,
     ) -> Result<ConnectionInfo, AppError> {
         profile.validate()?;
-        let client = Client::open(connection_url(profile, password)?)
-            .map_err(|_| AppError::InvalidConnection)?;
+        let client = build_client(profile, secrets)?;
         Self::inspect_client(&client).await
     }
 
@@ -247,15 +246,14 @@ impl RedisOperations for RedisService {
             .find(|profile| profile.id == connection_id)
             .ok_or(AppError::InvalidConnection)?;
         profile.validate()?;
-        let password = if profile.has_password {
-            self.secrets
-                .read(connection_id)?
-                .and_then(|secrets| secrets.password)
-        } else {
-            None
-        };
-        let client = Client::open(connection_url(&profile, password.as_deref())?)
-            .map_err(|_| AppError::InvalidConnection)?;
+        let secrets =
+            if profile.has_password || profile.has_ca_certificate || profile.has_client_certificate
+            {
+                self.secrets.read(connection_id)?.unwrap_or_default()
+            } else {
+                ConnectionSecrets::default()
+            };
+        let client = build_client(&profile, &secrets)?;
         let info = Self::inspect_client(&client).await?;
         self.pubsub.cancel_connection(connection_id);
         self.profiler.cancel_connection(connection_id);
@@ -757,21 +755,17 @@ impl RedisOperations for RedisService {
             .cloned()
             .ok_or(AppError::InvalidConnection)?;
         old_profile.validate()?;
-        let password = if old_profile.has_password {
-            self.secrets
-                .read(&input.connection_id)?
-                .and_then(|secrets| secrets.password)
+        let secrets = if old_profile.has_password
+            || old_profile.has_ca_certificate
+            || old_profile.has_client_certificate
+        {
+            self.secrets.read(&input.connection_id)?.unwrap_or_default()
         } else {
-            None
+            ConnectionSecrets::default()
         };
         let mut new_profile = old_profile.clone();
         new_profile.database = input.database;
-        let client = Client::open(connection_url_with_database(
-            &old_profile,
-            password.as_deref(),
-            input.database,
-        )?)
-        .map_err(|_| AppError::InvalidConnection)?;
+        let client = build_client_with_database(&old_profile, &secrets, input.database)?;
         Self::inspect_client(&client).await?;
 
         let mut profiles = old_profiles.clone();
@@ -1260,6 +1254,55 @@ pub fn connection_url(
     connection_url_with_database(profile, password, profile.database)
 }
 
+fn build_client(
+    profile: &ConnectionProfile,
+    secrets: &ConnectionSecrets,
+) -> Result<Client, AppError> {
+    build_client_with_database(profile, secrets, profile.database)
+}
+
+fn build_client_with_database(
+    profile: &ConnectionProfile,
+    secrets: &ConnectionSecrets,
+    database: u8,
+) -> Result<Client, AppError> {
+    let url = connection_url_with_database(profile, secrets.password.as_deref(), database)?;
+    if !profile.tls {
+        return Client::open(url).map_err(|_| AppError::InvalidConnection);
+    }
+
+    let root_cert = if let Some(certificate) = secrets.ca_certificate.as_deref() {
+        validate_certificate_pem(certificate)?;
+        Some(certificate.as_bytes().to_vec())
+    } else {
+        None
+    };
+    let client_tls = match (
+        secrets.client_certificate.as_deref(),
+        secrets.client_key.as_deref(),
+    ) {
+        (Some(certificate), Some(key)) => {
+            validate_certificate_pem(certificate)?;
+            validate_private_key_pem(key)?;
+            Some(ClientTlsConfig {
+                client_cert: certificate.as_bytes().to_vec(),
+                client_key: key.as_bytes().to_vec(),
+            })
+        }
+        (None, None) => None,
+        _ => return Err(AppError::InvalidInput),
+    };
+
+    Client::build_with_tls(
+        url,
+        TlsCertificates {
+            client_tls,
+            root_cert,
+        },
+    )
+    .map_err(|_| AppError::InvalidInput)
+}
+
 pub fn connection_url_with_database(
     profile: &ConnectionProfile,
     password: Option<&str>,
@@ -1278,8 +1321,14 @@ pub fn connection_url_with_database(
         (None, Some(password)) => format!(":{}@", percent_encode(password)),
         (None, None) => String::new(),
     };
+    let scheme = if profile.tls { "rediss" } else { "redis" };
+    let insecure_fragment = if profile.tls && !profile.verify_server_cert {
+        "#insecure"
+    } else {
+        ""
+    };
     Ok(format!(
-        "redis://{credentials}{host}:{}/{}",
+        "{scheme}://{credentials}{host}:{}/{}{insecure_fragment}",
         profile.port, database
     ))
 }
@@ -1370,7 +1419,9 @@ mod tests {
         persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
     };
 
-    use super::{command_result, connection_url, validate_ttl, RedisOperations, RedisService};
+    use super::{
+        build_client, command_result, connection_url, validate_ttl, RedisOperations, RedisService,
+    };
 
     struct EmptyProfiles;
 
@@ -1431,6 +1482,51 @@ mod tests {
         let url = connection_url(&profile, Some("p@ss word")).unwrap();
 
         assert_eq!(url, "redis://user%20name:p%40ss%20word@127.0.0.1:6379/3");
+    }
+
+    #[test]
+    fn builds_rediss_url_when_tls_is_enabled() {
+        let mut profile = valid_profile();
+        profile.tls = true;
+
+        assert_eq!(
+            connection_url(&profile, Some("secret")).unwrap(),
+            "rediss://:secret@127.0.0.1:6379/0"
+        );
+    }
+
+    #[test]
+    fn appends_insecure_marker_only_when_server_verification_is_disabled() {
+        let mut profile = valid_profile();
+        profile.tls = true;
+        profile.verify_server_cert = false;
+
+        assert!(connection_url(&profile, None)
+            .unwrap()
+            .ends_with("/0#insecure"));
+    }
+
+    #[test]
+    fn builds_tls_client_without_network_io() {
+        let mut profile = valid_profile();
+        profile.tls = true;
+
+        assert!(build_client(&profile, &ConnectionSecrets::default()).is_ok());
+    }
+
+    #[test]
+    fn rejects_incomplete_mtls_material_before_building_a_client() {
+        let mut profile = valid_profile();
+        profile.tls = true;
+        let secrets = ConnectionSecrets {
+            client_certificate: Some("certificate".into()),
+            ..ConnectionSecrets::default()
+        };
+
+        assert_eq!(
+            build_client(&profile, &secrets).unwrap_err(),
+            AppError::InvalidInput
+        );
     }
 
     #[test]
