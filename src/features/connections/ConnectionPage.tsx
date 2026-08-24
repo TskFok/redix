@@ -48,11 +48,12 @@ function downloadConnectionDocument(documentValue: ConnectionExportDocument) {
   link.href = objectUrl;
   link.download = "redix-connections.json";
   link.setAttribute("aria-hidden", "true");
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  if (objectUrl.startsWith("blob:") && typeof URL.revokeObjectURL === "function") {
-    URL.revokeObjectURL(objectUrl);
+  try {
+    link.click();
+  } finally {
+    if (objectUrl.startsWith("blob:") && typeof URL.revokeObjectURL === "function") {
+      URL.revokeObjectURL(objectUrl);
+    }
   }
 }
 

@@ -112,7 +112,7 @@ describe("Redis 连接管理页面", () => {
     fireEvent.click(screen.getByRole("button", { name: "导出连接" }));
 
     await waitFor(() => expect(exportConnectionsMock).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole("status")).toHaveTextContent("连接已导出");
+    expect(await screen.findByRole("status")).toHaveTextContent("连接已导出");
   });
 
   it("导入 JSON 后追加连接并显示部分成功及敏感字段忽略提示", async () => {
@@ -143,9 +143,10 @@ describe("Redis 连接管理页面", () => {
     expect(importConnectionsMock).toHaveBeenCalledWith({
       content: '{"connections":[]}',
     });
-    expect(screen.getByRole("status")).toHaveTextContent("部分导入");
-    expect(screen.getByRole("status")).toHaveTextContent("已忽略 1 个敏感字段");
-    expect(screen.getByRole("status")).toHaveTextContent("Broken");
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("部分导入");
+    expect(status).toHaveTextContent("已忽略 1 个敏感字段");
+    expect(status).toHaveTextContent("Broken");
   });
 
   it("拒绝超过 10 MiB 的连接导入文件", async () => {

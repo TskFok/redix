@@ -384,3 +384,32 @@ Phase 11：本地 Redis Stream Consumer Group（已完成）
 - [x] 运行 Rust domain/service/commands、前端页面、全量构建、非 Cloud、fmt、diff 验收
 - [x] 写入 final-fix-report.md，并创建一个简体中文修复提交
 - **Status:** complete
+
+## Phase 13：连接配置导入导出与 Standalone TLS/证书
+
+### Goal
+
+参照 `/Users/ushopal/workspace/myself/RedisInsight`，在当前 Redix 的本地 Redis Standalone 连接管理中补齐连接配置导入/导出，以及 CA/客户端证书/私钥和 TLS 连接能力；保持 Rust + Tauri + React、typed IPC、固定错误码和密码/私钥不落普通 JSON 的安全边界，不引入 Redis Cloud、SSH、Sentinel、Cluster 或 SQL。
+
+### Status
+
+已完成：按 TDD 实现领域/持久化/连接/IPC/UI，并完成全量验证与交付记录。
+
+### Initial checklist
+
+- [x] 精读目标项目连接导入导出、证书导入/校验和 Standalone TLS 连接链路
+- [x] 精读当前 profile、secret store、Redis client、Tauri command、typed bridge 和连接表单
+- [x] 明确导出文件的敏感字段、导入冲突/校验/路径策略和 TLS 证书持久化边界
+- [x] 与用户确认架构设计和验收范围
+- [x] 编写并自审设计文档，等待用户审阅
+- [x] 编写实现计划并按 TDD 实现领域/持久化/连接/IPC/UI
+- [x] 完成 Rust、前端、构建、非 Cloud、格式和差异检查
+- [x] 在无 TLS Redis 证书环境时明确保持真实 TLS 集成未声称通过
+- [x] 写入 `.superpowers/sdd/2026-08-24-connection-import-export-standalone-tls/final-report.md`
+- [x] 使用简体中文提交最终验证记录
+
+### Scope boundaries
+
+- 只支持 Standalone TCP/TLS；不实现 SSH 隧道、Sentinel、Cluster 拓扑或 Redis Cloud。
+- 连接导出默认只导出可迁移的 profile 元数据与 TLS 开关/校验配置，绝不写入密码、CA PEM、客户端证书或私钥；导入后敏感材料需在当前设备重新录入。
+- 不使用 SQL；任何后续遍历均不得在循环中查询 SQL。

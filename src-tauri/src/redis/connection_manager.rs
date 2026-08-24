@@ -1266,7 +1266,11 @@ fn build_client_with_database(
     secrets: &ConnectionSecrets,
     database: u8,
 ) -> Result<Client, AppError> {
-    let url = connection_url_with_database(profile, secrets.password.as_deref(), database)?;
+    let url = if database == profile.database {
+        connection_url(profile, secrets.password.as_deref())?
+    } else {
+        connection_url_with_database(profile, secrets.password.as_deref(), database)?
+    };
     if !profile.tls {
         return Client::open(url).map_err(|_| AppError::InvalidConnection);
     }

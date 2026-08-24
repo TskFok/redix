@@ -350,3 +350,58 @@
 - 根因核验：`DatabaseAnalysisPage.handleSubmit` 没有 loading early-return，按钮没有 disabled；现有“新提交后忽略前一次响应”测试明确触发了两次 IPC，需要替换为 loading 期间只调用一次，并保留连接切换 token 测试。
 - 最终实现核对：生产路径已显式发送 `INFO commandstats` 并可选降级；INFO optional parser 逐字段返回 `None`；SCAN 页计划以 scanned 限制非最终页并完整处理 cursor-zero 最终页；删除竞态在 accumulator 前过滤；loading 阶段只允许一个 IPC。
 - 完整矩阵通过，`REDIX_TEST_REDIS_URL` 未配置，因此 5 个真实 Redis 流程继续 ignored；详细证据见 `.superpowers/sdd/2026-08-24-database-analysis-instance-details/final-fix-report.md`。
+
+## Task 18：连接导入导出与 Standalone TLS 初步盘点（2026-08-24）
+
+- 当前 `redix` 在 `main` 分支且工作区干净；已有 `task_plan.md`、`findings.md`、`progress.md`，本轮在历史记录后追加 Phase 13，不覆盖先前任务。
+- 当前前端 `src/features/browser/BrowserImportExport.tsx` 是键数据导入导出，不是连接配置导入导出；连接管理入口集中在 `src/features/connections/ConnectionForm.tsx`、`ConnectionList.tsx`、`connectionState.ts`。
+- 当前 `ConnectionProfile` 只有 `id/name/host/port/database/username/has_password` 等 Standalone 元数据；密码通过 secret store/系统钥匙串保存，profile JSON 不保存密码。
+- 当前 `RedisService`/`ConnectionManager` 仍以普通 Redis URL + multiplexed async client 建立连接；TLS 参数尚未进入 profile、URL builder、Redis client 或命令层。
+- 目标 RedisInsight 的相关实现分散于 `api/src/modules/database-import`、`api/src/modules/database`、`api/src/common/utils/certificate-import.util.ts`、`ui/src/pages/` 连接表单及连接转换器；目标同时区分数据库导入 DTO、证书导入/校验和 Standalone client options，不能只复制一个 UI 字段。
+- 目标仓库存在 `database-import` API/测试、`certificate-import.service(.spec).ts`、`export.databases.dto.ts`、`import.database.dto.ts`、`certificates` mock 和连接类型迁移；后续需精读实际字段、导入冲突行为、证书命名/格式校验和 TLS client 配置。
+- 本轮初步范围：Standalone TCP/TLS、连接 profile 导入/导出、CA/客户端证书/私钥的本地安全保存与导入/校验；排除 SSH、Sentinel、Cluster、Cloud、Azure、AI、Telemetry、远程插件和 SQL。
+- 需要在设计阶段先决定：导出是否包含证书材料、私钥如何避免落普通文件、导入文件格式/版本/重复 ID 如何处理、证书材料使用钥匙串还是应用私有文件、导入是否允许路径引用以及删除/改名时的清理语义。
+
+### Task 18 设计确认记录
+
+- 用户已选择安全导出策略 1：普通连接导出只包含可迁移元数据和 TLS 配置，不包含密码、CA PEM、客户端证书或私钥；导入后由用户在本机重新录入敏感材料。
+
+### 当前 Redix 连接链路补充
+
+- `src-tauri/src/domain/profile.rs` 的 profile 字段只有 id/name/host/port/username/database/has_password，校验只覆盖 id、name、host、端口和 0–15 数据库。
+- `src-tauri/src/persistence/profile_store.rs` 使用 `ProfileDocument { profiles }` JSON 原子替换；新增 TLS 元数据若可序列化即可复用，但证书/私钥正文不应直接混入该文件。
+- `src-tauri/src/persistence/secret_store.rs` 的 trait 只有按 connection id 读写/删除密码；导入导出和证书材料需要明确是扩展 trait、增加独立安全存储，还是只保存应用私有引用。
+- `src-tauri/src/redis/connection_manager.rs` 的 `test_connection`、`open_connection` 和 `select_database` 都依赖 `connection_url`/重复的 `Client::open` 路径；active 表保存 `redis::Client`，Pub/Sub/Profiler 也从该 client 派生独立连接。
+- `src-tauri/src/commands/connections.rs` 当前保存流程会在 profile 与密码钥匙串更新失败时回滚；导入批量替换必须复用同样的原子/回滚语义，并处理重复 id 或重命名后的秘密键。
+
+### RedisInsight 参考实现补充
+
+- database-import.service.ts 会把 name/connectionName、password/auth、db、tls/ssl、tlsServername、CA/client cert 多种历史字段映射为统一数据库 DTO；导入 JSON 或 base64 JSON，单条处理并返回 success/partial/fail。
+- 目标 TLS profile 的最小字段包括 tls、tlsServername、verifyServerCert、caCert、clientCert；证书对象可用 { id } 引用已保存证书，也可在导入时提供内联证书/私钥。
+- 目标证书导入接受 PEM 正文；桌面 Electron 构建还允许把字段解释为文件路径并读取文件。CA 必须是 BEGIN CERTIFICATE，客户端私钥要求 BEGIN PRIVATE KEY，缺失正文/名称会得到专门错误。
+- 目标导出 DTO 以 ids 为选择范围，withSecrets 默认 false；只有显式开启才导出密码及证书正文。这一安全意图适合 Redix：默认导出可迁移 profile，敏感材料必须显式选择并采用独立保护/确认。
+- 目标数据库模型把证书作为独立实体并加密正文；Redix 没有 SQL/TypeORM，因此可用独立版本化安全材料仓储（钥匙串或应用数据目录权限控制）替代，但 profile JSON 只存材料引用和 TLS 元数据。
+
+### 参考 UI 与安全交互补充
+
+- 目标 TLS 表单将启用 TLS、SNI、验证服务端证书、CA 证书和客户端证书/私钥分层；验证服务端证书时要求 CA，启用客户端认证时要求证书+私钥对。
+- 目标连接导入通过文件选择器上传 JSON，单条结果按成功/部分/失败展示；导出先由用户选择是否携带 secrets，再下载 JSON。
+- Redix 当前没有 Tauri dialog/fs 依赖入口，连接页的文件导入/导出需要新增桌面文件 API 或先复用浏览器的 Blob/file input；如果证书材料走文件路径，也需要明确文件读取权限和路径不随 profile 迁移的问题。
+
+### Rust redis TLS 可行性
+
+- 本机缓存的 redis 1.5.0 提供 `tokio-rustls-comp` feature；启用后可用 `Client::build_with_tls(rediss_url, TlsCertificates)`，`TlsCertificates` 支持可选 root CA PEM 和 client cert/key PEM。
+- URL 使用 `rediss://` 时默认安全校验证书；`rediss://.../#insecure` 需要启用 `tls-rustls-insecure`，会关闭证书验证/主机名校验，属于高风险配置，应在 UI 和导入校验中显式标记。
+- redis crate 的 Rustls 实现把 `ConnectionAddr::TcpTls.host` 作为 ServerName/SNI；没有面向调用方的自定义 SNI 字段。若保留 `tls_servername`，需要另写底层连接实现，当前第一版可只用 host 作为 SNI 并明确不支持独立 servername。
+- `Client` 是可 Clone 的连接描述，active、Pub/Sub、Profiler 都从它派生连接；TLS client 构造必须集中在一个 helper，保证 test/open/select database 路径和独立 socket 一致。
+- 当前无 Tauri dialog/fs 插件；浏览器端可做 JSON file input 和 Blob 下载，但本地证书材料若允许文件路径读取，需要新增受控文件 API，不能把任意路径直接存进 profile 并在后台读取。
+
+## Task 18 实现与验收结论
+
+- 结构化 secret store 使用 JSON 作为钥匙串值的内部编码，同时对历史 raw password 值做向后兼容；证书正文只进入 secret store，不进入 profile repository 或导出 DTO。
+- TLS client builder 使用 `redis` 1.5 的 Rustls 能力：安全模式使用 `rediss://`，关闭服务端校验时追加 `#insecure`；CA 和 mTLS 材料交给 `TlsCertificates`，host 作为 SNI。
+- 导入协议选择 v1 可迁移元数据，兼容顶层数组、`connections`、`profiles` 和 RedisInsight 常见别名；每个有效条目都生成新的 UUID 并追加保存，敏感字段只计数不保留。
+- 页面导入采用原生 JSON file input，先检查 10 MiB 大小再调用 typed IPC；导出使用 Blob 下载，反馈明确说明密码、CA PEM、客户端证书和私钥不会被导出。
+- 连接卡片区分 TLS 开关、已保存证书和“需重新录入”的导入名称提示；表单仅接受证书/私钥 PEM 标记，客户端证书和私钥必须成对提交。
+- 全量 Rust/前端/构建/非 Cloud/格式/差异检查均通过。当前没有 `REDIX_TEST_REDIS_TLS_URL` 或证书环境变量，因此真实 TLS Redis 集成保持未执行，不把无网络 client 构造测试等同于网络验收。
+- 残余产品限制：不支持独立 `tlsServername`、证书文件路径、SSH、Sentinel、Cluster、Cloud 和 SQL；后续若需要这些能力应单独设计底层连接与安全边界。

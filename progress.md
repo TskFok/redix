@@ -297,3 +297,34 @@
 - 完整验收：Rust 47 lib + 5 commands + 7 database analysis + 21 domain + 15 persistence 通过，5 Redis integration ignored；前端 14 文件/118 测试、production build、non-cloud、cargo fmt/check 和 git diff check 通过。
 - `REDIX_TEST_REDIS_URL` 未配置，未运行真实 Redis；既有 dead-code warning 与 jsdom navigation 提示均未造成失败。
 - 详细报告已写入 `.superpowers/sdd/2026-08-24-database-analysis-instance-details/final-fix-report.md`；准备创建单个中文修复提交。
+
+## Session: 2026-08-24 — Task 18 连接导入导出与 Standalone TLS 初步盘点
+
+- **Status:** discovery
+- 已读取并遵循 `using-superpowers`、`brainstorming`、`planning-with-files`、TDD 和完成前验证规范；按架构型改动处理，并在实现前保留设计确认门槛。
+- 已确认当前工作区为 `main`，未创建分支；当前仓库已有历史计划/发现/进度文件，本轮追加 Phase 13 记录。
+- 已对照当前项目和 RedisInsight 的文件树及关键词，定位当前连接管理、profile/secret store、Redis client、Tauri bridge 和目标 `database-import`/certificate 相关模块。
+- 关键待查：目标导入导出实际 JSON DTO、证书材料的持久化方式、Standalone TLS client 选项和当前 Redix 采用的 `redis` crate TLS 特性。
+- 已确认安全边界：普通导出不携带密码、CA PEM、客户端证书或私钥；继续以本机安全存储保存 TLS 材料，导入后重新录入。
+- 设计文档 `docs/superpowers/specs/2026-08-24-connection-import-export-standalone-tls-design.md` 已获用户确认并提交为 `a460adc`；实现计划已写入 `docs/superpowers/plans/2026-08-24-connection-import-export-standalone-tls.md`。
+- 尚未修改业务源码，也未开始 TDD 实现；下一步等待执行方式确认后进入 Task 1。
+
+## Session: 2026-08-24 — Task 18 设计与实施计划
+
+- **Status:** complete
+- 用户确认按推荐方案实现：TLS 材料通过表单 PEM 录入并保存到系统钥匙串，普通导出不携带任何 secrets，第一版使用连接 host 作为 SNI，不支持独立 `tlsServername` 或证书文件路径。
+- 正式设计文档已自审、通过 `git diff --check` 并提交：`a460adc`（`设计连接导入导出与 Standalone TLS`）。
+- 已使用 writing-plans skill 编写 7 个任务的实施计划，覆盖 Rust 领域/钥匙串、TLS client、导入归一化、Tauri command、typed bridge、连接页 UI 和全量验证；实现遵循 TDD 先 RED 后 GREEN。
+- 已按用户选择在当前 `main` 分支直接执行，完成 Rust 领域/持久化/TLS/命令、typed bridge、连接页 UI 和全量验证。
+
+## Session: 2026-08-24 — Task 18 连接导入导出与 Standalone TLS 交付
+
+- **Status:** complete
+- 完成结构化连接 secret store：兼容旧版纯密码值，并安全保存密码、CA PEM、客户端证书和私钥；profile JSON 与普通导出均不包含敏感正文。
+- 完成 Standalone Rustls TLS：`rediss://`、自定义 CA、mTLS、服务端证书校验开关和 host-as-SNI；测试、打开、切换数据库及 active client 派生路径复用同一 client builder。
+- 完成 v1 连接导入导出：支持 RedisInsight 常见字段别名、数组/容器格式、10 MiB 上限、追加导入、fresh ID、逐条失败和敏感字段忽略计数；不支持 SSH、拓扑、Cloud 或 SQL。
+- 完成连接页文件导入/Blob 下载、部分成功反馈、TLS/证书状态卡片和 PEM 表单校验；导入的证书名称只作为重新录入提示。
+- TDD 定向验证：Rust 连接/TLS/导入导出与命令测试通过；连接页 19/19 通过；Tauri bridge 与全量前端回归通过。
+- 最终验收：Rust 60 lib + 5 commands + 7 database analysis + 21 domain + 15 persistence 通过，5 Redis integration ignored；前端 14 文件/124 测试、`npm run build`、`npm run check:non-cloud`、`cargo fmt --check`、`git diff --check` 均通过。
+- `REDIX_TEST_REDIS_URL`、`REDIX_TEST_REDIS_TLS_URL` 和证书环境变量均未配置，未声称真实 Redis/TLS 网络集成通过；详细报告见 `.superpowers/sdd/2026-08-24-connection-import-export-standalone-tls/final-report.md`。
+- 提交：`a460adc`、`4d76b34`、`30de509`、`1ff8f79`、`1c37416`、`bb5dc1d`、`faf635d`；最终验证记录随本轮收尾提交。
