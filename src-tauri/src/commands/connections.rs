@@ -1,6 +1,10 @@
 use crate::{
-    domain::{ConnectionInfo, ConnectionProfile, SaveConnectionInput, TestConnectionInput},
+    domain::{
+        validate_certificate_pem, validate_private_key_pem, ConnectionInfo, ConnectionProfile,
+        SaveConnectionInput, TestConnectionInput,
+    },
     error::AppError,
+    persistence::ConnectionSecrets,
     redis::RedisOperations,
     AppState,
 };
@@ -24,16 +28,26 @@ pub(crate) async fn save_connection_inner(
     state: &AppState,
     input: SaveConnectionInput,
 ) -> Result<ConnectionProfile, AppError> {
-    let mut profile = input.profile;
+    let mut profile = input.profile.clone();
     profile.validate()?;
 
     let connection_id = profile.id.clone();
     let old_profiles = state.profiles.load()?;
     let old_profile = old_profiles.iter().find(|item| item.id == connection_id);
     let old_secret = state.secrets.read(&connection_id)?;
-    let desired_secret =
-        resolve_secret(&profile, input.password, old_profile, old_secret.as_ref())?;
-    profile.has_password = desired_secret.is_some();
+    let desired_secret = resolve_secrets(&mut profile, &input, old_profile, old_secret.as_ref())?;
+    profile.has_password = desired_secret
+        .as_ref()
+        .and_then(|secrets| secrets.password.as_ref())
+        .is_some();
+    profile.has_ca_certificate = desired_secret
+        .as_ref()
+        .and_then(|secrets| secrets.ca_certificate.as_ref())
+        .is_some();
+    profile.has_client_certificate = desired_secret
+        .as_ref()
+        .map(ConnectionSecrets::has_client_certificate)
+        .unwrap_or(false);
 
     let mut profiles = old_profiles.clone();
     if let Some(existing) = profiles.iter_mut().find(|item| item.id == profile.id) {
@@ -43,19 +57,19 @@ pub(crate) async fn save_connection_inner(
     }
 
     if desired_secret != old_secret {
-        let result = match desired_secret.as_deref() {
-            Some(password) => state.secrets.write(&connection_id, password),
+        let result = match desired_secret.as_ref() {
+            Some(secrets) => state.secrets.write(&connection_id, secrets),
             None => state.secrets.delete(&connection_id),
         };
         if result.is_err() {
-            restore_profile_and_secret(state, &old_profiles, &connection_id, old_secret.as_deref())
+            restore_profile_and_secret(state, &old_profiles, &connection_id, old_secret.as_ref())
                 .map_err(|_| AppError::PersistenceFailed)?;
             return Err(AppError::PersistenceFailed);
         }
     }
 
     if state.profiles.save(&profiles).is_err() {
-        restore_profile_and_secret(state, &old_profiles, &connection_id, old_secret.as_deref())
+        restore_profile_and_secret(state, &old_profiles, &connection_id, old_secret.as_ref())
             .map_err(|_| AppError::PersistenceFailed)?;
         return Err(AppError::PersistenceFailed);
     }
@@ -87,19 +101,19 @@ pub(crate) async fn delete_connection_inner(
     let mut profiles = old_profiles.clone();
     profiles.retain(|profile| profile.id != connection_id);
     if state.profiles.save(&profiles).is_err() {
-        restore_profile_and_secret(state, &old_profiles, connection_id, old_secret.as_deref())
+        restore_profile_and_secret(state, &old_profiles, connection_id, old_secret.as_ref())
             .map_err(|_| AppError::PersistenceFailed)?;
         return Err(AppError::PersistenceFailed);
     }
 
     if state.secrets.delete(connection_id).is_err() {
-        restore_profile_and_secret(state, &old_profiles, connection_id, old_secret.as_deref())
+        restore_profile_and_secret(state, &old_profiles, connection_id, old_secret.as_ref())
             .map_err(|_| AppError::PersistenceFailed)?;
         return Err(AppError::PersistenceFailed);
     }
 
     if let Err(error) = state.redis.close_connection(connection_id).await {
-        restore_profile_and_secret(state, &old_profiles, connection_id, old_secret.as_deref())
+        restore_profile_and_secret(state, &old_profiles, connection_id, old_secret.as_ref())
             .map_err(|_| AppError::PersistenceFailed)?;
         return Err(error);
     }
@@ -107,25 +121,113 @@ pub(crate) async fn delete_connection_inner(
     Ok(())
 }
 
-fn resolve_secret(
-    profile: &ConnectionProfile,
-    password: Option<String>,
+fn resolve_secrets(
+    profile: &mut ConnectionProfile,
+    input: &SaveConnectionInput,
     old_profile: Option<&ConnectionProfile>,
-    old_secret: Option<&String>,
-) -> Result<Option<String>, AppError> {
-    if let Some(password) = password {
-        return Ok(Some(password));
-    }
+    old_secret: Option<&ConnectionSecrets>,
+) -> Result<Option<ConnectionSecrets>, AppError> {
+    let mut secrets = old_secret.cloned().unwrap_or_default();
 
-    if !profile.has_password {
-        return Ok(None);
-    }
-
-    match (old_profile, old_secret) {
-        (Some(old_profile), Some(old_secret)) if old_profile.has_password => {
-            Ok(Some(old_secret.clone()))
+    match input.password.as_deref() {
+        Some(password) if !password.is_empty() => secrets.password = Some(password.to_owned()),
+        Some(_) => return Err(AppError::InvalidInput),
+        None if profile.has_password => {
+            if !old_profile.map(|item| item.has_password).unwrap_or(false)
+                || secrets.password.is_none()
+            {
+                return Err(AppError::InvalidConnection);
+            }
         }
-        _ => Err(AppError::InvalidConnection),
+        None => secrets.password = None,
+    }
+
+    if input.clear_ca_certificate {
+        secrets.ca_certificate = None;
+        profile.ca_certificate_name = None;
+    } else if let Some(certificate) = input.ca_certificate.as_deref() {
+        validate_certificate_pem(certificate)?;
+        secrets.ca_certificate = Some(certificate.trim().to_owned());
+        if profile
+            .ca_certificate_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .is_none()
+        {
+            profile.ca_certificate_name =
+                old_profile.and_then(|item| item.ca_certificate_name.clone());
+        }
+        if profile
+            .ca_certificate_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .is_none()
+        {
+            return Err(AppError::InvalidInput);
+        }
+    } else if profile.has_ca_certificate {
+        if secrets.ca_certificate.is_none() {
+            return Err(AppError::InvalidConnection);
+        }
+    } else {
+        secrets.ca_certificate = None;
+        profile.ca_certificate_name = None;
+    }
+
+    if input.clear_client_certificate {
+        secrets.client_certificate = None;
+        secrets.client_key = None;
+        profile.client_certificate_name = None;
+    } else {
+        match (
+            input.client_certificate.as_deref(),
+            input.client_key.as_deref(),
+        ) {
+            (Some(certificate), Some(key)) => {
+                validate_certificate_pem(certificate)?;
+                validate_private_key_pem(key)?;
+                secrets.client_certificate = Some(certificate.trim().to_owned());
+                secrets.client_key = Some(key.trim().to_owned());
+                if profile
+                    .client_certificate_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .is_none()
+                {
+                    profile.client_certificate_name =
+                        old_profile.and_then(|item| item.client_certificate_name.clone());
+                }
+                if profile
+                    .client_certificate_name
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|name| !name.is_empty())
+                    .is_none()
+                {
+                    return Err(AppError::InvalidInput);
+                }
+            }
+            (None, None) if profile.has_client_certificate => {
+                if !secrets.has_client_certificate() {
+                    return Err(AppError::InvalidConnection);
+                }
+            }
+            (None, None) => {
+                secrets.client_certificate = None;
+                secrets.client_key = None;
+                profile.client_certificate_name = None;
+            }
+            _ => return Err(AppError::InvalidInput),
+        }
+    }
+
+    if secrets.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(secrets))
     }
 }
 
@@ -133,7 +235,7 @@ fn restore_profile_and_secret(
     state: &AppState,
     profiles: &[ConnectionProfile],
     connection_id: &str,
-    secret: Option<&str>,
+    secret: Option<&ConnectionSecrets>,
 ) -> Result<(), AppError> {
     let profile_result = state.profiles.save(profiles);
     let secret_result = match secret {
@@ -186,7 +288,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::persistence::{ProfileRepository, SecretStore};
+    use crate::persistence::{ConnectionSecrets, ProfileRepository, SecretStore};
 
     struct RecordingProfileRepository {
         profiles: Mutex<Vec<ConnectionProfile>>,
@@ -245,7 +347,7 @@ mod tests {
     }
 
     struct RecordingSecretStore {
-        secret: Mutex<Option<String>>,
+        secret: Mutex<Option<ConnectionSecrets>>,
         write_failures: Mutex<VecDeque<bool>>,
         delete_failures: Mutex<VecDeque<bool>>,
         mutate_failed_write: AtomicBool,
@@ -256,7 +358,10 @@ mod tests {
     impl RecordingSecretStore {
         fn new(secret: Option<&str>) -> Self {
             Self {
-                secret: Mutex::new(secret.map(str::to_owned)),
+                secret: Mutex::new(secret.map(|password| ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                })),
                 write_failures: Mutex::new(VecDeque::new()),
                 delete_failures: Mutex::new(VecDeque::new()),
                 mutate_failed_write: AtomicBool::new(false),
@@ -276,7 +381,11 @@ mod tests {
         }
 
         fn current(&self) -> Option<String> {
-            self.secret.lock().unwrap().clone()
+            self.secret
+                .lock()
+                .unwrap()
+                .as_ref()
+                .and_then(|secrets| secrets.password.clone())
         }
 
         fn operations(&self) -> Vec<SecretOperation> {
@@ -285,16 +394,15 @@ mod tests {
     }
 
     impl SecretStore for RecordingSecretStore {
-        fn read(&self, _connection_id: &str) -> Result<Option<String>, AppError> {
+        fn read(&self, _connection_id: &str) -> Result<Option<ConnectionSecrets>, AppError> {
             self.operations.lock().unwrap().push(SecretOperation::Read);
-            Ok(self.current())
+            Ok(self.secret.lock().unwrap().clone())
         }
 
-        fn write(&self, _connection_id: &str, password: &str) -> Result<(), AppError> {
-            self.operations
-                .lock()
-                .unwrap()
-                .push(SecretOperation::Write(password.to_owned()));
+        fn write(&self, _connection_id: &str, secrets: &ConnectionSecrets) -> Result<(), AppError> {
+            self.operations.lock().unwrap().push(SecretOperation::Write(
+                secrets.password.clone().unwrap_or_default(),
+            ));
             let failed = self
                 .write_failures
                 .lock()
@@ -303,11 +411,11 @@ mod tests {
                 .unwrap_or(false);
             if failed {
                 if self.mutate_failed_write.load(Ordering::SeqCst) {
-                    *self.secret.lock().unwrap() = Some(password.to_owned());
+                    *self.secret.lock().unwrap() = Some(secrets.clone());
                 }
                 return Err(AppError::PersistenceFailed);
             }
-            *self.secret.lock().unwrap() = Some(password.to_owned());
+            *self.secret.lock().unwrap() = Some(secrets.clone());
             Ok(())
         }
 
@@ -342,6 +450,12 @@ mod tests {
             username: None,
             database: 0,
             has_password,
+            tls: false,
+            verify_server_cert: true,
+            ca_certificate_name: None,
+            client_certificate_name: None,
+            has_ca_certificate: false,
+            has_client_certificate: false,
         }
     }
 
@@ -363,6 +477,11 @@ mod tests {
         SaveConnectionInput {
             profile,
             password: password.map(str::to_owned),
+            ca_certificate: None,
+            client_certificate: None,
+            client_key: None,
+            clear_ca_certificate: false,
+            clear_client_certificate: false,
         }
     }
 

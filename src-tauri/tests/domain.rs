@@ -43,6 +43,12 @@ fn rejects_empty_host_zero_port_and_database_above_fifteen() {
         username: None,
         database: 16,
         has_password: false,
+        tls: false,
+        verify_server_cert: true,
+        ca_certificate_name: None,
+        client_certificate_name: None,
+        has_ca_certificate: false,
+        has_client_certificate: false,
     };
 
     let error = profile.validate().expect_err("invalid profile must fail");

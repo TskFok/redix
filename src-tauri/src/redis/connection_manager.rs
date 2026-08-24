@@ -248,7 +248,9 @@ impl RedisOperations for RedisService {
             .ok_or(AppError::InvalidConnection)?;
         profile.validate()?;
         let password = if profile.has_password {
-            self.secrets.read(connection_id)?
+            self.secrets
+                .read(connection_id)?
+                .and_then(|secrets| secrets.password)
         } else {
             None
         };
@@ -756,7 +758,9 @@ impl RedisOperations for RedisService {
             .ok_or(AppError::InvalidConnection)?;
         old_profile.validate()?;
         let password = if old_profile.has_password {
-            self.secrets.read(&input.connection_id)?
+            self.secrets
+                .read(&input.connection_id)?
+                .and_then(|secrets| secrets.password)
         } else {
             None
         };
@@ -1363,7 +1367,7 @@ mod tests {
             GetStreamPendingEntriesInput, PublishPubSubInput, StopProfilerInput,
         },
         error::AppError,
-        persistence::{ProfileRepository, SecretStore},
+        persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
     };
 
     use super::{command_result, connection_url, validate_ttl, RedisOperations, RedisService};
@@ -1383,11 +1387,15 @@ mod tests {
     struct EmptySecrets;
 
     impl SecretStore for EmptySecrets {
-        fn read(&self, _connection_id: &str) -> Result<Option<String>, AppError> {
+        fn read(&self, _connection_id: &str) -> Result<Option<ConnectionSecrets>, AppError> {
             Ok(None)
         }
 
-        fn write(&self, _connection_id: &str, _password: &str) -> Result<(), AppError> {
+        fn write(
+            &self,
+            _connection_id: &str,
+            _secrets: &ConnectionSecrets,
+        ) -> Result<(), AppError> {
             Ok(())
         }
 
@@ -1405,6 +1413,12 @@ mod tests {
             username: None,
             database: 0,
             has_password: false,
+            tls: false,
+            verify_server_cert: true,
+            ca_certificate_name: None,
+            client_certificate_name: None,
+            has_ca_certificate: false,
+            has_client_certificate: false,
         }
     }
 

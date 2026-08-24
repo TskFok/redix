@@ -16,8 +16,8 @@ use redix_lib::{
     },
     error::AppError,
     persistence::{
-        JsonDocumentStore, JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring,
-        VersionedJsonDocument,
+        ConnectionSecrets, JsonDocumentStore, JsonProfileRepository, ProfileRepository,
+        SecretStore, SystemKeyring, VersionedJsonDocument,
     },
 };
 use support::valid_profile;
@@ -26,11 +26,11 @@ static CURRENT_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Default)]
 struct InMemorySecretStore {
-    values: Mutex<HashMap<String, String>>,
+    values: Mutex<HashMap<String, ConnectionSecrets>>,
 }
 
 impl SecretStore for InMemorySecretStore {
-    fn read(&self, connection_id: &str) -> Result<Option<String>, AppError> {
+    fn read(&self, connection_id: &str) -> Result<Option<ConnectionSecrets>, AppError> {
         Ok(self
             .values
             .lock()
@@ -39,11 +39,11 @@ impl SecretStore for InMemorySecretStore {
             .cloned())
     }
 
-    fn write(&self, connection_id: &str, password: &str) -> Result<(), AppError> {
+    fn write(&self, connection_id: &str, secrets: &ConnectionSecrets) -> Result<(), AppError> {
         self.values
             .lock()
             .expect("test secret store lock must not be poisoned")
-            .insert(connection_id.to_owned(), password.to_owned());
+            .insert(connection_id.to_owned(), secrets.clone());
         Ok(())
     }
 
@@ -331,8 +331,22 @@ fn repository_preserves_an_existing_directory_and_marker_when_save_fails() {
 fn in_memory_secret_store_supports_write_read_and_delete() {
     let secrets = InMemorySecretStore::default();
 
-    secrets.write("local", "secret").unwrap();
-    assert_eq!(secrets.read("local").unwrap().as_deref(), Some("secret"));
+    secrets
+        .write(
+            "local",
+            &ConnectionSecrets {
+                password: Some("secret".into()),
+                ..ConnectionSecrets::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        secrets
+            .read("local")
+            .unwrap()
+            .and_then(|value| value.password),
+        Some("secret".into())
+    );
     secrets.delete("local").unwrap();
     assert_eq!(secrets.read("local").unwrap(), None);
 }

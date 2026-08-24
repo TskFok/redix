@@ -16,7 +16,7 @@ use redix_lib::{
         StreamEntry, StreamField, UpdateSlowLogConfigInput,
     },
     error::AppError,
-    persistence::{ProfileRepository, SecretStore},
+    persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
     redis::{RedisOperations, RedisService},
 };
 
@@ -50,11 +50,11 @@ impl ProfileRepository for FailingSaveProfiles {
 
 #[derive(Default)]
 struct TestSecrets {
-    values: Mutex<HashMap<String, String>>,
+    values: Mutex<HashMap<String, ConnectionSecrets>>,
 }
 
 impl SecretStore for TestSecrets {
-    fn read(&self, connection_id: &str) -> Result<Option<String>, AppError> {
+    fn read(&self, connection_id: &str) -> Result<Option<ConnectionSecrets>, AppError> {
         Ok(self
             .values
             .lock()
@@ -63,11 +63,11 @@ impl SecretStore for TestSecrets {
             .cloned())
     }
 
-    fn write(&self, connection_id: &str, password: &str) -> Result<(), AppError> {
+    fn write(&self, connection_id: &str, secrets: &ConnectionSecrets) -> Result<(), AppError> {
         self.values
             .lock()
             .expect("test secret lock must not be poisoned")
-            .insert(connection_id.to_owned(), password.to_owned());
+            .insert(connection_id.to_owned(), secrets.clone());
         Ok(())
     }
 
@@ -96,6 +96,12 @@ fn integration_profile(url: &str) -> (ConnectionProfile, Option<String>) {
         username: info.redis_settings().username().map(str::to_owned),
         database: info.redis_settings().db() as u8,
         has_password: password.is_some(),
+        tls: false,
+        verify_server_cert: true,
+        ca_certificate_name: None,
+        client_certificate_name: None,
+        has_ca_certificate: false,
+        has_client_certificate: false,
     };
     (profile, password)
 }
@@ -758,7 +764,15 @@ async fn analyzes_database_details_and_metadata_batches_when_redis_is_available(
     let (profile, password) = integration_profile(&url);
     let secrets = TestSecrets::default();
     if let Some(password) = password.as_deref() {
-        secrets.write("integration", password).unwrap();
+        secrets
+            .write(
+                "integration",
+                &ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
     }
     let service = RedisService::new(
         std::sync::Arc::new(TestProfiles {
@@ -892,7 +906,15 @@ async fn exercises_standalone_redis_operations() {
     let (profile, password) = integration_profile(&url);
     let secrets = TestSecrets::default();
     if let Some(password) = password.as_deref() {
-        secrets.write("integration", password).unwrap();
+        secrets
+            .write(
+                "integration",
+                &ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
     }
     let service = RedisService::new(
         std::sync::Arc::new(TestProfiles {
@@ -925,7 +947,15 @@ async fn preserves_active_client_when_database_profile_save_fails() {
     });
     let secrets = TestSecrets::default();
     if let Some(password) = password.as_deref() {
-        secrets.write("integration", password).unwrap();
+        secrets
+            .write(
+                "integration",
+                &ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
     }
     let service = RedisService::new(profiles.clone(), std::sync::Arc::new(secrets));
 
@@ -959,7 +989,15 @@ async fn runs_slow_log_and_pubsub_flow_when_redis_is_available() {
     let (profile, password) = integration_profile(&url);
     let secrets = TestSecrets::default();
     if let Some(password) = password.as_deref() {
-        secrets.write("integration", password).unwrap();
+        secrets
+            .write(
+                "integration",
+                &ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
     }
     let service = RedisService::new(
         std::sync::Arc::new(TestProfiles {
@@ -1017,7 +1055,15 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
     let (profile, password) = integration_profile(&url);
     let secrets = TestSecrets::default();
     if let Some(password) = password.as_deref() {
-        secrets.write("integration", password).unwrap();
+        secrets
+            .write(
+                "integration",
+                &ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
     }
     let service = RedisService::new(
         std::sync::Arc::new(TestProfiles {

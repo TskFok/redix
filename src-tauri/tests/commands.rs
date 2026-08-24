@@ -9,7 +9,7 @@ use redix_lib::{
         SaveCommandHistoryInput,
     },
     error::AppError,
-    persistence::{ProfileRepository, SecretStore},
+    persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
     AppState,
 };
 
@@ -28,11 +28,11 @@ impl ProfileRepository for EmptyProfiles {
 struct EmptySecrets;
 
 impl SecretStore for EmptySecrets {
-    fn read(&self, _connection_id: &str) -> Result<Option<String>, AppError> {
+    fn read(&self, _connection_id: &str) -> Result<Option<ConnectionSecrets>, AppError> {
         Ok(None)
     }
 
-    fn write(&self, _connection_id: &str, _password: &str) -> Result<(), AppError> {
+    fn write(&self, _connection_id: &str, _secrets: &ConnectionSecrets) -> Result<(), AppError> {
         Ok(())
     }
 

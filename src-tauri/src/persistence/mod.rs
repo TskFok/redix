@@ -4,4 +4,4 @@ mod secret_store;
 
 pub use document_store::{JsonDocumentStore, VersionedJsonDocument};
 pub use profile_store::{JsonProfileRepository, ProfileRepository};
-pub use secret_store::{SecretStore, SystemKeyring};
+pub use secret_store::{ConnectionSecrets, SecretStore, SystemKeyring};
