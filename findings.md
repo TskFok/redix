@@ -269,6 +269,15 @@
 - 本批设计将 Pub/Sub 事件限制为普通 Standalone TCP、最多一个前端会话对应一个订阅任务、最大缓存消息数 5000；超出上限丢弃最旧消息并发出稳定的 overflow 事件，不把 Redis 底层错误文本传到前端。
 - 本批不实现 Profiler、Cluster/Sentinel fan-out、TLS/SSH、Streams Consumer Group、Redis Cloud/Azure、Telemetry/AI/远程插件；这些能力保留在差异清单中另立批次。
 
+## Task 15：本地 Profiler 实现复核（2026-08-24）
+
+- 目标项目 Profiler 的核心本地能力是独立 `MONITOR` 连接和实时命令流；本轮收敛为 Redix Standalone 的基础实时观察，不移植日志文件、历史持久化、拓扑 fan-out、TLS/SSH、模块或云能力。
+- Rust 使用 `Client::get_async_monitor()` 创建独立 socket，按 connection id 保存一个可取消任务；启动新会话、打开替换连接、关闭连接和切换数据库都会取消旧任务，停止缺失会话幂等成功。
+- MONITOR 行只解析时间、数据库、来源和 tokenizer 解析后的参数；malformed 行丢弃，错误只返回固定 `COMMAND_FAILED`，不把原始 Redis 行写入错误。
+- Tauri 事件固定为 `redix://profiler/event` 和 `redix://profiler/status`；前端按 connection/session 过滤，最多保留 10000 条事件，卸载页面时解除 listener 并停止会话。
+- UI 在启动按钮附近明确提示 MONITOR 会接收实例全部命令并可能影响性能；实时事件只保存在当前页面，不保存日志文件或历史记录。
+- 交付提交为 `413f8dc`、`056b31c`、`39aa81b`；前端全量测试 105/105、生产构建通过，Rust 定向测试和命令测试通过，最终回归结果以进度记录为准。
+
 ### Task 14 实施计划补充盘点
 
 - 当前前端 bridge 统一通过 `call<T>` 包装 `@tauri-apps/api/core` 的 `invoke`，新增 Slow Log 的 4 个 request-response wrapper 可直接复用；Pub/Sub listener 需要额外接入 `@tauri-apps/api/event` 的 `listen`/`UnlistenFn`。

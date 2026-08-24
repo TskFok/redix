@@ -215,3 +215,14 @@
 - 验证通过：前端全量 103/103、`npm run build`、`npm run check:non-cloud`、Rust 全量普通测试（31 库、5 commands、19 domain、15 persistence）和 `cargo fmt --check`；3 个 Redis 集成测试按设计保留 ignored。
 - 真实 Redis 集成测试未执行：该用例包含 `SLOWLOG RESET`，会清空现有实例慢日志，沙箱安全审查拒绝其外部执行；未将此结果误报为真实集成通过。
 - 提交：`137ddaf`、`ab4d9a7`、`7d0e26a`、`6094687`。
+
+## Session: 2026-08-24 — Task 15 Profiler 交付
+
+- **Status:** complete
+- 先写 Profiler 输入校验、MONITOR 行解析、缺失会话停止和前端事件缓存测试，再实现独立 `MONITOR` socket、ProfilerManager、Tauri commands 和 typed bridge。
+- Rust 任务按 connection id 管理，每个连接最多一个 Profiler 会话；打开/关闭/替换连接和切换数据库时取消旧任务，解析失败行丢弃且不泄露原始命令文本。
+- 运维观察页面新增 Profiler tab：启动前显示 MONITOR 性能警告，支持开始/停止/清空，展示时间、数据库、来源和带引号的命令参数；前端最多保留 10000 条事件。
+- 提交：`413f8dc`（领域模型与解析）、`056b31c`（Tauri 命令桥接）、`39aa81b`（前端工作区）。
+- 定向验证：Profiler 解析 6/6、连接管理 5/5、命令集成 5/5、前端页面/状态 7/7、Tauri bridge 12/12；前端全量 105/105，`npm run build` 通过。
+- 最终回归通过：Rust 全量测试（34 库、5 commands、20 domain、15 persistence，3 个 Redis 集成测试 ignored）、前端全量 105/105、`npm run build`、`npm run check:non-cloud`、`cargo fmt --check` 和 `git diff --check`。
+- 真实 MONITOR 集成保持 ignored，未自动连接或影响用户实例；现有 Redis 集成中包含清空型 Slow Log 流程，也未在未获授权时执行。

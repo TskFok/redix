@@ -263,7 +263,7 @@ Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
 
 ### Status
 
-进行中：Slow Log / Pub/Sub 的 Rust service、Tauri commands、typed bridge 和前端工作区已完成，当前进行全量回归与交付审查。
+已完成：Slow Log / Pub/Sub 的 Rust service、Tauri commands、typed bridge 和前端工作区已交付，并完成全量回归与交付审查。
 
 ### Artifacts
 
@@ -304,9 +304,23 @@ Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
 
 ### Status
 
-已完成 spec 与实施计划，准备按 TDD 执行。
+已完成基础 Profiler 实现、前端工作区、测试和范围文档；日志文件、历史持久化、拓扑 fan-out、TLS/SSH、模块和云能力仍明确排除。
 
 ### Artifacts
 
 - 设计：`docs/superpowers/specs/2026-08-24-profiler-design.md`
 - 计划：`docs/superpowers/plans/2026-08-24-profiler.md`
+
+### Checklist
+
+- [x] Profiler DTO、输入校验和 MONITOR 文本解析
+- [x] 独立 MONITOR socket、任务停止和连接生命周期清理
+- [x] Tauri commands、事件注册和 typed bridge
+- [x] 运维观察 Profiler tab、性能警告、事件列表和 10000 条缓存上限
+- [x] 前端/Rust/构建/非 Cloud/差异回归验证
+
+### Delivery
+
+- `413f8dc`：增加 Profiler 领域模型和 MONITOR 解析
+- `056b31c`：实现 Profiler Tauri 命令桥接
+- `39aa81b`：接入 Profiler 前端实时工作区
