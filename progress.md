@@ -189,3 +189,29 @@
 - 验证通过：`npm run test:frontend`（97/97）、`npm run build`、`npm run check:non-cloud`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`、`cargo test --manifest-path src-tauri/Cargo.toml -q`（63 个已执行测试，2 个 Redis 集成测试 ignored）和 `git diff --check`。
 - 文档已更新：README 与 `docs/non-cloud-scope.md` 记录 Database、Query Library 和 Settings 的当前能力；计划已标记第一批完成。
 - 后续未实现且不应误报为本轮完成的非 Cloud 能力：Slow Log、Pub/Sub、Profiler、TLS/SSH、Sentinel/Cluster、Vector/Array/Search 等模块专用能力；这些需要独立的事件流、连接拓扑或模块能力设计。
+
+## Session: 2026-08-24 — Task 14 非 Cloud 差异补全续作
+
+- **Status:** discovery
+- 已重新对照目标项目的实际 UI/API 目录与当前 Redix 的入口、bridge、命令注册和 Redis service；确认第一批已交付，后续缺口仍包括运维观察、连接安全/拓扑和模块专用能力。
+- 当前只读盘点重点确认：目标 Slow Log 是一次性读取/清空/配置；Pub/Sub 和 Profiler 需要可取消长连接事件流；目标 Browser 的 Vector Set、Array、Search/Query 属于独立模块能力；当前仍不应引入 Redis Cloud、Azure、AI、Telemetry 或远程插件。
+- 依据现有 Tauri 架构，暂将下一批候选范围收敛为本地 Redis Slow Log + Pub/Sub；待与用户确认设计后再编写新 spec/plan 并修改业务代码。
+
+## Session: 2026-08-24 — Task 14 Task 1 DTO 与解析
+
+- **Status:** complete
+- 先写 domain/Slow Log 解析 RED 测试；首次运行因 `parse_slow_log_reply` 未定义而失败，随后补齐固定错误码、Slow Log/Pub/Sub DTO、输入校验和 RESP 解析。
+- 追加 RESP3 `Value::Map` 配置解析测试，先因当前 parser 不支持 Map 失败，再补充 Map/Attribute/Array 兼容解析。
+- 已验证：Slow Log observability 单元测试 3/3、domain 集成测试 19/19 通过；`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 通过。
+- 变更文件：`src-tauri/src/domain/observability.rs`、`src-tauri/src/redis/observability.rs`、`src-tauri/src/error.rs`、domain/module 导出及领域测试；已提交为 `137ddaf`（`增加运维观察领域模型和解析`）。
+- 计划错误记录：首次 `cargo fmt --check` 发现 3 处格式差异，运行 cargo fmt 后复验通过。
+
+## Session: 2026-08-24 — Task 14 运维观察能力交付
+
+- **Status:** complete（Slow Log / Pub/Sub 批次）
+- 先写 RED 测试，再补齐 Slow Log/Pub/Sub DTO、固定错误码、RESP2/RESP3 解析、Redis 命令服务、独立 Pub/Sub socket、可取消任务以及 open/close/select database 生命周期清理。
+- 接入 Tauri commands：`get_slow_logs`、`clear_slow_logs`、`get_slow_log_config`、`update_slow_log_config`、`start_pub_sub`、`stop_pub_sub`、`publish_pub_sub`；Pub/Sub 通过 `redix://pubsub/message` 和 `redix://pubsub/status` 事件返回固定 DTO。
+- 前端新增“运维观察”工作区，包含 Slow Log 读取/清空/配置、Pub/Sub channel/pattern 订阅、发布、消息流和停止/卸载清理；前端消息缓存最多保留 5000 条并丢弃最旧消息。
+- 验证通过：前端全量 103/103、`npm run build`、`npm run check:non-cloud`、Rust 全量普通测试（31 库、5 commands、19 domain、15 persistence）和 `cargo fmt --check`；3 个 Redis 集成测试按设计保留 ignored。
+- 真实 Redis 集成测试未执行：该用例包含 `SLOWLOG RESET`，会清空现有实例慢日志，沙箱安全审查拒绝其外部执行；未将此结果误报为真实集成通过。
+- 提交：`137ddaf`、`ab4d9a7`、`7d0e26a`、`6094687`。

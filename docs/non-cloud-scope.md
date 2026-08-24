@@ -15,6 +15,8 @@
 - Database 工作区读取本地实例与数据库键空间概览，并支持安全的数据库切换；指标不可用时按字段降级，不暴露 Redis 原始错误。
 - Query Library 使用版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench；敏感命令不保存。
 - 设置使用版本化 `settings.json` 保存主题、结果格式、Browser 扫描数量和批量命令遇错策略，Rust 与前端均执行范围校验。
+- Slow Log 支持读取、清空和 `slowlog-max-len`/`slowlog-log-slower-than` 配置；Redis 回复解析兼容 RESP2 数组和 RESP3 Map。
+- Pub/Sub 支持 Standalone channel/pattern 订阅、发布、停止和实时 Tauri 事件；每个连接最多一个订阅会话，前端最多保留 5000 条消息，并在关闭/切库/卸载时清理任务。
 - React/Tauri 本地 UI、前端测试、Rust 单元测试和本地构建工具链。
 
 ## 明确排除项
@@ -23,9 +25,9 @@
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
 - Cluster、Sentinel、TLS、SSH、远程托管实例和云资源管理。
 - Redis 模块专用数据类型、模块查询和模块可视化（RedisJSON 根文档和 Stream 基础能力除外）。
-- Stream Consumer Group、实时订阅和超过 500 条记录的分页编辑。
+- Stream Consumer Group、Profiler 和超过 500 条记录的分页编辑。
 - Monaco、远程插件运行时和云端命令目录。
-- Profiler、Slow Log、Pub/Sub 等非 MVP 运营功能。
+- 其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub 已按本文件允许项实现。
 
 ## 人工审查清单
 

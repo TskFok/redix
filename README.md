@@ -1,6 +1,6 @@
 # Redix
 
-Redix 是一个面向本地 Redis Standalone 的桌面客户端 MVP，使用 Rust + Tauri + React 构建。当前版本提供连接管理、Browser 键浏览与编辑、基础 Stream/RedisJSON 根文档操作、数据库/实例概览、Query Library、本地设置，以及带本地命令目录、批量执行和安全历史的 Workbench，适合开发环境中的单机 Redis 实例。
+Redix 是一个面向本地 Redis Standalone 的桌面客户端 MVP，使用 Rust + Tauri + React 构建。当前版本提供连接管理、Browser 键浏览与编辑、基础 Stream/RedisJSON 根文档操作、数据库/实例概览、Query Library、本地设置、Slow Log、Pub/Sub，以及带本地命令目录、批量执行和安全历史的 Workbench，适合开发环境中的单机 Redis 实例。
 
 ## 前置条件
 
@@ -42,8 +42,10 @@ Workbench 支持本地内置命令目录、命令前缀提示、多行批量执�
 
 Database 工作区提供服务器版本、运行模式、连接数、内存、命令量、命中率和已加载模块等只读概览，并展示数据库键空间统计；数据库切换成功后才更新当前连接配置。Query Library 使用应用数据目录中的版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench，AUTH、HELLO、ACL、CONFIG 命令族不会保存。设置使用 `settings.json` 持久化主题、结果格式、Browser 扫描数量和批量命令错误策略。
 
+运维观察工作区提供 Slow Log 的读取、清空和 `slowlog-*` 配置，以及独立 Pub/Sub channel/pattern 订阅、发布和实时消息流。Pub/Sub 每个连接只保留一个可取消会话，前端最多缓存 5000 条消息；关闭连接、切换数据库或卸载页面时会清理订阅任务。
+
 ## 当前边界
 
-本版本明确只支持本地 Redis Standalone。当前不支持 Redis Cloud、Azure Managed Redis、Cluster、Sentinel、TLS、SSH、Consumer Group、实时订阅或其他 Redis 模块专用编辑器，也不包含云登录、云账户、云端点、云数据库发现和云 SDK 集成。
+本版本明确只支持本地 Redis Standalone。当前不支持 Redis Cloud、Azure Managed Redis、Cluster、Sentinel、TLS、SSH、Stream Consumer Group、Profiler 或其他 Redis 模块专用编辑器，也不包含云登录、云账户、云端点、云数据库发现和云 SDK 集成。
 
-Profiler、Slow Log、Pub/Sub、模块专用数据编辑器、Monaco/插件运行时和远程托管实例管理同样不在本 MVP 范围内。
+模块专用数据编辑器、Monaco/插件运行时和远程托管实例管理同样不在本 MVP 范围内。

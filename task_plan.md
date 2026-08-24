@@ -254,3 +254,44 @@ Phase 8：RedisInsight 非 Cloud 差异补全（第一批已完成）
 - 子计划 4：`docs/superpowers/plans/2026-08-18-query-library-settings.md`
 
 执行顺序固定为 Browser → Workbench → Database → Query Library/Settings；每个子计划结束后单独验证并提交，最终再执行总体验收矩阵。
+
+## Phase 9：本地 Redis 运维观察能力（2026-08-24）
+
+### Goal
+
+对照目标 RedisInsight 的非 Cloud Slow Log 与 Pub/Sub 能力，在当前 Redix 中实现本地 Standalone Redis 的慢命令读取/配置/清空，以及可取消的频道/模式订阅和发布消息；不引入 Profiler、MONITOR、Cluster、Sentinel、TLS、SSH、模块专用能力或任何云功能。
+
+### Status
+
+进行中：Slow Log / Pub/Sub 的 Rust service、Tauri commands、typed bridge 和前端工作区已完成，当前进行全量回归与交付审查。
+
+### Artifacts
+
+- 设计：`docs/superpowers/specs/2026-08-24-observability-design.md`
+- 计划：`docs/superpowers/plans/2026-08-24-observability.md`
+
+### Checklist
+
+- [x] DTO、校验、Slow Log RESP 解析和固定错误码
+- [x] Slow Log service 与 Pub/Sub 独立 socket 生命周期
+- [x] Tauri commands、事件注册和 typed bridge
+- [x] Slow Log React 工作区
+- [x] Pub/Sub React 工作区与 listener/session 清理
+- [x] 导航、响应式样式、Smoke 和边界文档
+- [x] 前端/Rust/非 Cloud/差异总体验收（真实清空型集成测试保留为 ignored）
+
+### Current Task
+
+- [x] Task 1：DTO、校验与 Redis reply 解析
+- [x] Task 2：Redis Slow Log 与 Pub/Sub service 生命周期
+- [x] Task 3：Tauri command 注册与 typed bridge
+- [x] Task 4：Slow Log React 状态与页面
+- [x] Task 5：Pub/Sub 状态、事件监听与页面
+- [x] Task 6：应用导航、样式、Smoke 与文档边界
+- [x] Task 7：总体验收、非 Cloud 验证与交付审查
+
+### Errors Encountered
+
+| Error | Attempt | Resolution |
+|---|---:|---|
+| 编排读取文件的 JS 字符串转义导致 `SyntaxError` | 1 | 将命令字符串拆分为简单字符串后重跑，未修改文件、未影响计划内容 |

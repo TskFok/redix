@@ -249,3 +249,38 @@
 - Settings 的 `theme`、`result_format`、`scan_count`、`continue_on_error` 同时由 Rust/前端校验；根节点主题、Browser SCAN COUNT 和 Workbench 默认显示/批量策略均已联动。
 - 交付前验证结果：前端 97/97、Rust 63 个已执行测试通过，Redis 集成测试 2 个按约定 ignored，非 Cloud 扫描、格式检查、构建和差异检查通过。
 - 仍待后续独立批次评估的本地 Redis 能力包括 Slow Log、Pub/Sub、Profiler、TLS/SSH、Sentinel/Cluster 和 Vector/Array/Search 等模块专用功能；本轮未将其伪装成已完成。
+
+## Task 14：当前项目与目标项目新一轮差异盘点（2026-08-24）
+
+- 当前 `redix` 与目标 `RedisInsight` 的 Git 工作区均干净；当前分支是 `main`，本轮不创建新分支。
+- 目标仓库的非 Cloud 页面/模块实际包括 `browser`、`workbench`、`analytics`、`database-analysis`、`instance`、`slow-log`、`pub-sub`、`settings`、`vector-search`、`redis-stack`，以及 `redis-sentinel`、SSH、证书等连接能力；Cloud、Azure、RDI、AI 和 Telemetry 需继续排除。
+- 目标 UI/ API 证据显示，Browser 仍有 Array、Vector Set、RedisSearch/Query、树视图、批量动作和模块能力探测；当前 Redix 已覆盖基础五类型、Stream/JSON 根文档、批量删除、导入导出、类型过滤和元数据，但没有模块专用编辑器/索引工作区。
+- 目标 `slow-log` 支持读取、清空、配置；`pub-sub` 和 `profiler` 是长连接/订阅模型，不能直接套用当前一次性 Tauri `invoke`，需要事件通道、取消和连接切换清理。
+- 目标 Workbench/CLI 还包含独立 CLI 生命周期、命令定义/补全、Raw/Text 输出格式化、复杂结果处理；当前 Redix 已有本地命令目录、多命令执行、Raw/Text/JSON 结果和持久化安全历史，仍缺少 CLI 流式/监控模式和复杂可视化。
+- 目标 API 还覆盖数据库分析、推荐、连接导入导出、多数据库管理、TLS/证书、SSH、Sentinel/Cluster；当前 Redix 只支持 Standalone TCP，已有只读实例/数据库概览和数据库切换。
+- 对当前架构而言，下一批最适合独立交付的是“本地 Redis 运维观察”：Slow Log request-response + Pub/Sub 可取消事件流；Profiler 可在同一事件协议稳定后再实现。TLS/SSH/Sentinel/Cluster 和模块专用能力应另立设计，不能与运维观察批次混杂。
+
+### Task 14 精确接口盘点
+
+- 目标 Slow Log 的数据模型为 `id`、Unix 秒级 `time`、微秒 `durationUs`、命令参数数组拼接后的 `args`、客户端地址 `source` 和可选客户端名 `client`。
+- 目标 Slow Log 的本地 Redis 操作对应 `SLOWLOG GET count`、`SLOWLOG RESET`、`CONFIG GET slowlog-*` 和 `CONFIG SET slowlog-log-slower-than/slowlog-max-len`；当前 Redix 可先限制为 Standalone，读取、清空、读取配置和更新配置均为 request-response。
+- 目标 Pub/Sub 支持普通 channel 与 pattern channel 订阅、取消订阅、发布消息，并通过独立 subscriber client 接收 `{channel, message, timestamp}`；目标实现还区分 subscriber 连接和发布连接。
+- 当前 Tauri 依赖已经包含 `@tauri-apps/api`，前端可使用 `listen`/`emit` 事件 API；Rust 端可用 `tauri::AppHandle::emit` 将后台订阅任务的消息发送到前端，但需要在 `AppState` 中保存按连接/订阅会话的取消句柄，并在停止、断开和连接切换时清理。
+- 本批设计将 Pub/Sub 事件限制为普通 Standalone TCP、最多一个前端会话对应一个订阅任务、最大缓存消息数 5000；超出上限丢弃最旧消息并发出稳定的 overflow 事件，不把 Redis 底层错误文本传到前端。
+- 本批不实现 Profiler、Cluster/Sentinel fan-out、TLS/SSH、Streams Consumer Group、Redis Cloud/Azure、Telemetry/AI/远程插件；这些能力保留在差异清单中另立批次。
+
+### Task 14 实施计划补充盘点
+
+- 当前前端 bridge 统一通过 `call<T>` 包装 `@tauri-apps/api/core` 的 `invoke`，新增 Slow Log 的 4 个 request-response wrapper 可直接复用；Pub/Sub listener 需要额外接入 `@tauri-apps/api/event` 的 `listen`/`UnlistenFn`。
+- 当前 AppState 只持有 `RedisService`、profile/secret repository 和 data_dir；Pub/Sub 生命周期应放在 `RedisService` 内部或其独立 manager 中，避免把 Redis Client 暴露到 command/UI 层。
+- 当前 Rust `Cargo.lock` 已包含 `futures-util 0.3.33`，新增 direct dependency 可离线解析；`redis 1.5.0` 提供 `Client::get_async_pubsub`、`PubSub::subscribe`/`psubscribe` 和 `on_message`。
+- 当前前端脚本为 `npm run test:frontend`、`npm run build`、`npm run check:non-cloud`；Rust 使用 `cargo test --manifest-path src-tauri/Cargo.toml` 和 `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`。
+- 规划读取时一次 JS 编排命令因字符串转义产生 SyntaxError，未触碰文件；随后拆分为简单字符串重跑成功。
+
+### Task 14 运维观察交付复核（2026-08-24）
+
+- Slow Log service 使用 `SLOWLOG GET/RESET` 和 `CONFIG GET slowlog-*`；配置 parser 同时覆盖 RESP2 pair array、RESP3 Map 和 Attribute 包装，前端不显示底层 Redis 错误文本。
+- Pub/Sub 使用 `Client::get_async_pubsub` 独立 socket，不复用业务 multiplexed connection；每个 connection id 只有一个 `JoinHandle`，新会话、关闭连接、打开替换连接和数据库切换均会 abort 旧任务。
+- Tauri 事件固定为 `redix://pubsub/message` 与 `redix://pubsub/status`；前端 listener 按 connection/session 过滤，组件卸载会解除 listener 并停止当前会话，消息缓存最多 5000 条。
+- 新增“运维观察”导航与 Slow Log/Pub/Sub 页面，沿用现有 RedisInsight 风格 token、响应式表格、可见焦点和 reduced-motion 规则；未新增云入口、模块编辑器或 SQL。
+- 安全验证：`cargo test`、`npm test`、`npm run build`、`npm run check:non-cloud`、`cargo fmt --check` 均通过；真实集成用例包含 `SLOWLOG RESET`，因破坏性副作用未在沙箱外执行。
