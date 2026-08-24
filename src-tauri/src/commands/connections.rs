@@ -1,7 +1,8 @@
 use crate::{
     domain::{
-        validate_certificate_pem, validate_private_key_pem, ConnectionInfo, ConnectionProfile,
-        SaveConnectionInput, TestConnectionInput,
+        validate_certificate_pem, validate_private_key_pem, ConnectionExportDocument,
+        ConnectionImportFailure, ConnectionInfo, ConnectionProfile, ImportConnectionsInput,
+        ImportConnectionsResult, SaveConnectionInput, TestConnectionInput,
     },
     error::AppError,
     persistence::ConnectionSecrets,
@@ -119,6 +120,99 @@ pub(crate) async fn delete_connection_inner(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub async fn export_connections(
+    state: tauri::State<'_, AppState>,
+) -> Result<ConnectionExportDocument, AppError> {
+    export_connections_inner(state.inner()).await
+}
+
+pub(crate) async fn export_connections_inner(
+    state: &AppState,
+) -> Result<ConnectionExportDocument, AppError> {
+    let profiles = state.profiles.load()?;
+    Ok(ConnectionExportDocument::from_profiles(&profiles))
+}
+
+#[tauri::command]
+pub async fn import_connections(
+    state: tauri::State<'_, AppState>,
+    input: ImportConnectionsInput,
+) -> Result<ImportConnectionsResult, AppError> {
+    import_connections_inner(state.inner(), input).await
+}
+
+pub(crate) async fn import_connections_inner(
+    state: &AppState,
+    input: ImportConnectionsInput,
+) -> Result<ImportConnectionsResult, AppError> {
+    const MAX_IMPORT_BYTES: usize = 10 * 1024 * 1024;
+    if input.content.len() > MAX_IMPORT_BYTES {
+        return Err(AppError::InvalidInput);
+    }
+
+    let normalized = crate::domain::normalize_import_document(&input.content)?;
+    let ignored_secret_fields = normalized.ignored_secret_fields;
+    let mut imported = Vec::new();
+    let mut failed = Vec::new();
+
+    for entry in normalized.entries {
+        if let Some(unsupported_type) = entry.unsupported_type.as_deref() {
+            failed.push(ConnectionImportFailure {
+                index: entry.source_index,
+                name: non_empty_name(&entry.name),
+                code: AppError::InvalidConnection.code().to_owned(),
+                message: format!("不支持的连接类型或拓扑：{unsupported_type}"),
+            });
+            continue;
+        }
+
+        let profile = ConnectionProfile {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: entry.name.clone(),
+            host: entry.host,
+            port: entry.port.unwrap_or_default(),
+            username: entry.username,
+            database: entry.database.unwrap_or_default(),
+            has_password: false,
+            tls: entry.tls,
+            verify_server_cert: entry.verify_server_cert,
+            ca_certificate_name: entry.ca_certificate_name,
+            client_certificate_name: entry.client_certificate_name,
+            has_ca_certificate: false,
+            has_client_certificate: false,
+        };
+
+        if let Err(error) = profile.validate() {
+            failed.push(ConnectionImportFailure {
+                index: entry.source_index,
+                name: non_empty_name(&profile.name),
+                code: error.code().to_owned(),
+                message: error.message().to_owned(),
+            });
+        } else {
+            imported.push(profile);
+        }
+    }
+
+    if !imported.is_empty() {
+        let mut profiles = state.profiles.load()?;
+        profiles.extend(imported.iter().cloned());
+        state.profiles.save(&profiles)?;
+    }
+
+    Ok(ImportConnectionsResult {
+        imported,
+        failed,
+        ignored_secret_fields,
+    })
+}
+
+fn non_empty_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 fn resolve_secrets(
@@ -492,6 +586,93 @@ mod tests {
             clear_ca_certificate: false,
             clear_client_certificate: false,
         }
+    }
+
+    #[tokio::test]
+    async fn export_connections_omits_password_and_certificate_material() {
+        let mut profile = profile("tls", "TLS Redis", true);
+        profile.tls = true;
+        profile.ca_certificate_name = Some("Root CA".into());
+        profile.client_certificate_name = Some("Client cert".into());
+        profile.has_ca_certificate = true;
+        profile.has_client_certificate = true;
+        let (state, _, _) = state_with(vec![profile], Some("password"));
+
+        let document = export_connections_inner(&state).await.unwrap();
+        let raw = serde_json::to_string(&document).unwrap();
+
+        assert_eq!(document.version, 1);
+        assert!(!raw.contains("password"));
+        assert!(!raw.contains("BEGIN CERTIFICATE"));
+        assert!(!raw.contains("BEGIN PRIVATE KEY"));
+    }
+
+    #[tokio::test]
+    async fn import_appends_valid_entries_with_fresh_ids_and_reports_invalid_entries() {
+        let (state, profiles, secrets) =
+            state_with(vec![profile("existing", "Existing", false)], None);
+        let result = import_connections_inner(
+            &state,
+            ImportConnectionsInput {
+                content: serde_json::json!({
+                    "connections": [
+                        {
+                            "id": "existing",
+                            "name": "Imported",
+                            "host": "127.0.0.1",
+                            "port": 6379
+                        },
+                        {"name": "Broken", "host": "", "port": 0},
+                        {
+                            "name": "With secret",
+                            "host": "127.0.0.1",
+                            "port": 6379,
+                            "password": "do-not-store"
+                        }
+                    ]
+                })
+                .to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.imported.len(), 2);
+        assert_ne!(result.imported[0].id, "existing");
+        assert_eq!(result.failed.len(), 1);
+        assert_eq!(result.failed[0].name.as_deref(), Some("Broken"));
+        assert_eq!(result.ignored_secret_fields, 1);
+        assert_eq!(profiles.current().len(), 3);
+        assert!(secrets
+            .operations()
+            .iter()
+            .all(|operation| !matches!(operation, SecretOperation::Write(_))));
+        assert!(result.imported.iter().all(|profile| !profile.has_password));
+    }
+
+    #[tokio::test]
+    async fn import_returns_persistence_error_without_partial_profile_save() {
+        let (state, profiles, _) = state_with(vec![profile("existing", "Existing", false)], None);
+        profiles.fail_next_saves(&[true]);
+
+        let error = import_connections_inner(
+            &state,
+            ImportConnectionsInput {
+                content: serde_json::json!({
+                    "connections": [{
+                        "name": "Imported",
+                        "host": "127.0.0.1",
+                        "port": 6379
+                    }]
+                })
+                .to_string(),
+            },
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, AppError::PersistenceFailed);
+        assert_eq!(profiles.current().len(), 1);
     }
 
     #[tokio::test]

@@ -64,6 +64,8 @@ fn exposes_all_tauri_command_adapters() {
     let _ = connections::list_connections;
     let _ = connections::save_connection;
     let _ = connections::delete_connection;
+    let _ = connections::export_connections;
+    let _ = connections::import_connections;
     let _ = connections::test_connection;
     let _ = connections::open_connection;
     let _ = connections::close_connection;

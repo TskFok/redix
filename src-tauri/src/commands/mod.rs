@@ -11,8 +11,8 @@ pub use browser::{
     rename_key, scan_keys, set_key, set_key_ttl,
 };
 pub use connections::{
-    close_connection, delete_connection, list_connections, open_connection, save_connection,
-    test_connection,
+    close_connection, delete_connection, export_connections, import_connections, list_connections,
+    open_connection, save_connection, test_connection,
 };
 pub use database::{
     analyze_database, get_database_overview, get_instance_details, get_instance_overview,
