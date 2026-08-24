@@ -6,13 +6,13 @@ use tokio::sync::RwLock;
 use crate::{
     domain::{
         normalize_key_type, parse_info_sections, parse_keyspace_line,
-        AcknowledgeStreamPendingEntriesInput, CommandDefinition, CommandExecutionItem,
-        CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
-        CreateStreamConsumerGroupInput, DatabaseOverview, DeleteKeysInput,
+        AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput, CommandDefinition,
+        CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
+        CreateStreamConsumerGroupInput, DatabaseAnalysisReport, DatabaseOverview, DeleteKeysInput,
         DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, ExecuteCommandsInput,
         ExportKeysInput, ExportedKey, GetSlowLogsInput, GetStreamConsumerGroupsInput,
         GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
-        InstanceOverview, KeyInfo, KeyInfoInput, KeySummary, KeyValue, ModuleSummary,
+        InstanceDetails, InstanceOverview, KeyInfo, KeyInfoInput, KeySummary, KeyValue,
         ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue, RenameKeyInput,
         ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput, SlowLogConfig,
         SlowLogEntry, SortedSetEntry, StartProfilerInput, StartPubSubInput, StopProfilerInput,
@@ -24,6 +24,7 @@ use crate::{
 };
 
 use super::{
+    database_analysis::{analyze_connection, load_instance_details, parse_module_list},
     key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
     observability::{
         parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager, PubSubManager,
@@ -94,6 +95,11 @@ pub trait RedisOperations: Send + Sync {
         &self,
         connection_id: &str,
     ) -> Result<InstanceOverview, AppError>;
+    async fn get_instance_details(&self, connection_id: &str) -> Result<InstanceDetails, AppError>;
+    async fn analyze_database(
+        &self,
+        input: AnalyzeDatabaseInput,
+    ) -> Result<DatabaseAnalysisReport, AppError>;
     async fn get_database_overview(
         &self,
         connection_id: &str,
@@ -681,6 +687,21 @@ impl RedisOperations for RedisService {
         InstanceOverview::from_info_and_modules(&sections, modules)
     }
 
+    async fn get_instance_details(&self, connection_id: &str) -> Result<InstanceDetails, AppError> {
+        let mut connection = self.connection(connection_id).await?;
+        load_instance_details(&mut connection).await
+    }
+
+    async fn analyze_database(
+        &self,
+        input: AnalyzeDatabaseInput,
+    ) -> Result<DatabaseAnalysisReport, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let profile = self.profile(&input.connection_id)?;
+        analyze_connection(&mut connection, profile.database, &input).await
+    }
+
     async fn get_database_overview(
         &self,
         connection_id: &str,
@@ -1259,57 +1280,6 @@ pub fn connection_url_with_database(
     ))
 }
 
-fn parse_module_list(value: Value) -> Vec<ModuleSummary> {
-    let entries = match value {
-        Value::Array(entries) | Value::Set(entries) => entries,
-        Value::Attribute { data, .. } => return parse_module_list(*data),
-        _ => return Vec::new(),
-    };
-
-    entries.into_iter().filter_map(parse_module_entry).collect()
-}
-
-fn parse_module_entry(value: Value) -> Option<ModuleSummary> {
-    let mut name = None;
-    let mut version = None;
-    match value {
-        Value::Map(entries) => {
-            for (key, value) in entries {
-                update_module_field(&key, &value, &mut name, &mut version);
-            }
-        }
-        Value::Array(entries) => {
-            let mut pairs = entries.chunks_exact(2);
-            for pair in &mut pairs {
-                update_module_field(&pair[0], &pair[1], &mut name, &mut version);
-            }
-        }
-        _ => return None,
-    }
-
-    name.filter(|name| !name.trim().is_empty())
-        .map(|name| ModuleSummary {
-            name,
-            version: version.filter(|version| !version.trim().is_empty()),
-        })
-}
-
-fn update_module_field(
-    key: &Value,
-    value: &Value,
-    name: &mut Option<String>,
-    version: &mut Option<String>,
-) {
-    let Some(key) = ::redis::from_redis_value_ref::<String>(key).ok() else {
-        return;
-    };
-    match key.as_str() {
-        "name" => *name = ::redis::from_redis_value_ref::<String>(value).ok(),
-        "ver" | "version" => *version = ::redis::from_redis_value_ref::<String>(value).ok(),
-        _ => {}
-    }
-}
-
 pub fn validate_ttl(ttl_ms: i64) -> Result<(), AppError> {
     if ttl_ms < 0 {
         Err(AppError::CommandFailed)
@@ -1361,7 +1331,7 @@ fn validate_connection_id(connection_id: &str) -> Result<(), AppError> {
     }
 }
 
-fn map_command_error(error: ::redis::RedisError) -> AppError {
+pub(crate) fn map_command_error(error: ::redis::RedisError) -> AppError {
     match error.kind() {
         ::redis::ErrorKind::AuthenticationFailed => AppError::AuthenticationFailed,
         ::redis::ErrorKind::Io => AppError::ConnectionFailed,

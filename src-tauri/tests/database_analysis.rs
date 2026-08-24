@@ -1,9 +1,79 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use redix_lib::domain::{
     parse_command_stats, AnalysisAccumulator, AnalysisKeyMetadata, AnalyzeDatabaseInput,
     InstanceDetails, ModuleSummary,
 };
+use redix_lib::{
+    error::AppError,
+    redis::{RedisOperations, RedisService},
+};
+
+mod fixtures {
+    use redix_lib::{
+        domain::ConnectionProfile,
+        error::AppError,
+        persistence::{ProfileRepository, SecretStore},
+    };
+
+    #[derive(Default)]
+    pub struct TestProfiles {
+        pub profiles: Vec<ConnectionProfile>,
+    }
+
+    impl ProfileRepository for TestProfiles {
+        fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
+            Ok(self.profiles.clone())
+        }
+
+        fn save(&self, _profiles: &[ConnectionProfile]) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    pub struct TestSecrets;
+
+    impl SecretStore for TestSecrets {
+        fn read(&self, _connection_id: &str) -> Result<Option<String>, AppError> {
+            Ok(None)
+        }
+
+        fn write(&self, _connection_id: &str, _password: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+
+        fn delete(&self, _connection_id: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+}
+
+use fixtures::{TestProfiles, TestSecrets};
+
+#[tokio::test]
+async fn analysis_and_details_require_an_open_connection() {
+    let service = RedisService::new(
+        Arc::new(TestProfiles::default()),
+        Arc::new(TestSecrets::default()),
+    );
+    assert_eq!(
+        service.get_instance_details("missing").await.unwrap_err(),
+        AppError::ConnectionFailed
+    );
+    assert_eq!(
+        service
+            .analyze_database(AnalyzeDatabaseInput {
+                connection_id: "missing".into(),
+                pattern: "*".into(),
+                delimiter: ":".into(),
+                max_keys: 1000,
+            })
+            .await
+            .unwrap_err(),
+        AppError::ConnectionFailed
+    );
+}
 
 #[test]
 fn validates_analysis_input_limits() {
