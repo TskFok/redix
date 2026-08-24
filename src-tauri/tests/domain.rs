@@ -5,8 +5,8 @@ use redix_lib::{
         command_catalog, is_sensitive_command, parse_info_sections, parse_keyspace_line,
         AppSettings, ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey,
         GetSlowLogsInput, ImportKeysInput, KeyInfoInput, PubSubTopic, QueryLibraryItemInput,
-        RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput, StartPubSubInput,
-        StreamEntry, StreamField,
+        RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput, StartProfilerInput,
+        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -344,4 +344,26 @@ fn normalizes_pubsub_topics_and_rejects_duplicates() {
         ],
     };
     assert_eq!(input.validate().unwrap_err().code(), "INVALID_INPUT");
+}
+
+#[test]
+fn validates_profiler_session_inputs() {
+    assert_eq!(
+        StartProfilerInput {
+            connection_id: "".into(),
+            session_id: "session".into(),
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidInput
+    );
+    assert_eq!(
+        StopProfilerInput {
+            connection_id: "local".into(),
+            session_id: "".into(),
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidInput
+    );
 }

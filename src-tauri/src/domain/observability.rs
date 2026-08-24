@@ -167,3 +167,66 @@ pub struct PubSubStatusEvent {
     pub state: String,
     pub error_code: Option<String>,
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StartProfilerInput {
+    pub connection_id: String,
+    pub session_id: String,
+}
+
+impl StartProfilerInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.connection_id.trim().is_empty() || self.session_id.trim().is_empty() {
+            return Err(AppError::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct StopProfilerInput {
+    pub connection_id: String,
+    pub session_id: String,
+}
+
+impl StopProfilerInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        if self.connection_id.trim().is_empty() || self.session_id.trim().is_empty() {
+            return Err(AppError::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ProfilerSession {
+    pub connection_id: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct MonitorEntry {
+    pub time: String,
+    pub database: u8,
+    pub source: String,
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ProfilerEvent {
+    pub connection_id: String,
+    pub session_id: String,
+    pub time: String,
+    pub database: u8,
+    pub source: String,
+    pub args: Vec<String>,
+    pub received_at_ms: u64,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ProfilerStatusEvent {
+    pub connection_id: String,
+    pub session_id: String,
+    pub state: String,
+    pub error_code: Option<String>,
+}

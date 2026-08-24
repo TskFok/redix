@@ -9,10 +9,11 @@ use crate::{
         CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateKeyInput,
         DatabaseOverview, DeleteKeysInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
         GetSlowLogsInput, HashEntry, ImportKeysInput, InstanceOverview, KeyInfo, KeyInfoInput,
-        KeySummary, KeyValue, ModuleSummary, PubSubSession, PublishPubSubInput, RedisValue,
-        RenameKeyInput, ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput,
-        SlowLogConfig, SlowLogEntry, SortedSetEntry, StartPubSubInput, StopPubSubInput,
-        StreamEntry, UpdateSlowLogConfigInput,
+        KeySummary, KeyValue, ModuleSummary, ProfilerSession, PubSubSession, PublishPubSubInput,
+        RedisValue, RenameKeyInput, ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput,
+        SetKeyTtlInput, SlowLogConfig, SlowLogEntry, SortedSetEntry, StartProfilerInput,
+        StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamEntry,
+        UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ProfileRepository, SecretStore},
@@ -20,7 +21,9 @@ use crate::{
 
 use super::{
     key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
-    observability::{parse_slow_log_config_reply, parse_slow_log_reply, PubSubManager},
+    observability::{
+        parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager, PubSubManager,
+    },
     tokenize_command,
 };
 
@@ -81,6 +84,7 @@ pub struct RedisService {
     secrets: Arc<dyn SecretStore>,
     active: Arc<RwLock<HashMap<String, Client>>>,
     pubsub: Arc<PubSubManager>,
+    profiler: Arc<ProfilerManager>,
 }
 
 impl RedisService {
@@ -90,6 +94,7 @@ impl RedisService {
             secrets,
             active: Arc::new(RwLock::new(HashMap::new())),
             pubsub: Arc::new(PubSubManager::new()),
+            profiler: Arc::new(ProfilerManager::new()),
         }
     }
 
@@ -105,6 +110,20 @@ impl RedisService {
 
     pub async fn stop_pub_sub(&self, input: StopPubSubInput) -> Result<(), AppError> {
         self.pubsub.stop(input)
+    }
+
+    pub async fn start_profiler(
+        &self,
+        app: tauri::AppHandle,
+        input: StartProfilerInput,
+    ) -> Result<ProfilerSession, AppError> {
+        input.validate()?;
+        let client = self.client(&input.connection_id).await?;
+        self.profiler.start(app, &client, input).await
+    }
+
+    pub async fn stop_profiler(&self, input: StopProfilerInput) -> Result<(), AppError> {
+        self.profiler.stop(input)
     }
 
     async fn client(&self, connection_id: &str) -> Result<Client, AppError> {
@@ -196,6 +215,7 @@ impl RedisOperations for RedisService {
             .map_err(|_| AppError::InvalidConnection)?;
         let info = Self::inspect_client(&client).await?;
         self.pubsub.cancel_connection(connection_id);
+        self.profiler.cancel_connection(connection_id);
         self.active
             .write()
             .await
@@ -205,6 +225,7 @@ impl RedisOperations for RedisService {
 
     async fn close_connection(&self, connection_id: &str) -> Result<(), AppError> {
         self.pubsub.cancel_connection(connection_id);
+        self.profiler.cancel_connection(connection_id);
         self.active.write().await.remove(connection_id);
         Ok(())
     }
@@ -585,6 +606,7 @@ impl RedisOperations for RedisService {
         }
 
         self.pubsub.cancel_connection(&input.connection_id);
+        self.profiler.cancel_connection(&input.connection_id);
         self.active
             .write()
             .await
@@ -1211,7 +1233,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        domain::{ConnectionProfile, GetSlowLogsInput, PublishPubSubInput},
+        domain::{ConnectionProfile, GetSlowLogsInput, PublishPubSubInput, StopProfilerInput},
         error::AppError,
         persistence::{ProfileRepository, SecretStore},
     };
@@ -1311,5 +1333,18 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error, AppError::ConnectionFailed);
+    }
+
+    #[tokio::test]
+    async fn stopping_a_missing_profiler_session_is_idempotent() {
+        let service = RedisService::new(Arc::new(EmptyProfiles), Arc::new(EmptySecrets));
+
+        service
+            .stop_profiler(StopProfilerInput {
+                connection_id: "local".into(),
+                session_id: "missing-session".into(),
+            })
+            .await
+            .unwrap();
     }
 }

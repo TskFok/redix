@@ -10,14 +10,60 @@ use tokio::task::JoinHandle;
 
 use crate::{
     domain::{
-        PubSubMessageEvent, PubSubSession, PubSubStatusEvent, SlowLogConfig, SlowLogEntry,
-        StartPubSubInput, StopPubSubInput,
+        MonitorEntry, ProfilerEvent, ProfilerSession, ProfilerStatusEvent, PubSubMessageEvent,
+        PubSubSession, PubSubStatusEvent, SlowLogConfig, SlowLogEntry, StartProfilerInput,
+        StartPubSubInput, StopProfilerInput, StopPubSubInput,
     },
     error::AppError,
 };
 
+use super::tokenize_command;
+
 pub const PUBSUB_MESSAGE_EVENT: &str = "redix://pubsub/message";
 pub const PUBSUB_STATUS_EVENT: &str = "redix://pubsub/status";
+pub const PROFILER_EVENT: &str = "redix://profiler/event";
+pub const PROFILER_STATUS_EVENT: &str = "redix://profiler/status";
+
+pub fn parse_monitor_line(value: &str) -> Result<MonitorEntry, AppError> {
+    let (raw_time, remainder) = value
+        .trim()
+        .split_once(' ')
+        .ok_or(AppError::CommandFailed)?;
+    let time = raw_time.trim_start_matches('[').trim();
+    if time.is_empty()
+        || time
+            .parse::<f64>()
+            .map_or(true, |timestamp| !timestamp.is_finite())
+    {
+        return Err(AppError::CommandFailed);
+    }
+
+    let metadata = remainder
+        .trim_start()
+        .strip_prefix('[')
+        .ok_or(AppError::CommandFailed)?;
+    let (metadata, command) = metadata.split_once(']').ok_or(AppError::CommandFailed)?;
+    let mut fields = metadata.split_whitespace();
+    let database = fields
+        .next()
+        .ok_or(AppError::CommandFailed)?
+        .parse::<u8>()
+        .map_err(|_| AppError::CommandFailed)?;
+    if database > 15 {
+        return Err(AppError::CommandFailed);
+    }
+    let source = fields.next().ok_or(AppError::CommandFailed)?;
+    if source.is_empty() || fields.next().is_some() {
+        return Err(AppError::CommandFailed);
+    }
+
+    Ok(MonitorEntry {
+        time: time.to_owned(),
+        database,
+        source: source.to_owned(),
+        args: tokenize_command(command.trim())?,
+    })
+}
 
 struct PubSubTask {
     connection_id: String,
@@ -28,6 +74,17 @@ struct PubSubTask {
 
 pub struct PubSubManager {
     tasks: Mutex<HashMap<String, PubSubTask>>,
+}
+
+struct ProfilerTask {
+    connection_id: String,
+    session_id: String,
+    app: tauri::AppHandle,
+    handle: JoinHandle<()>,
+}
+
+pub struct ProfilerManager {
+    tasks: Mutex<HashMap<String, ProfilerTask>>,
 }
 
 impl Default for PubSubManager {
@@ -167,6 +224,157 @@ impl PubSubManager {
     }
 }
 
+impl Default for ProfilerManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProfilerManager {
+    pub fn new() -> Self {
+        Self {
+            tasks: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub async fn start(
+        &self,
+        app: tauri::AppHandle,
+        client: &::redis::Client,
+        input: StartProfilerInput,
+    ) -> Result<ProfilerSession, AppError> {
+        input.validate()?;
+        let monitor = client
+            .get_async_monitor()
+            .await
+            .map_err(map_profiler_error)?;
+        self.cancel_connection(&input.connection_id);
+
+        let connection_id = input.connection_id.clone();
+        let session_id = input.session_id.clone();
+        let task_connection_id = connection_id.clone();
+        let task_session_id = session_id.clone();
+        let task_app = app.clone();
+        let handle = tokio::spawn(async move {
+            let mut stream = monitor.into_on_message::<String>();
+            while let Some(line) = stream.next().await {
+                let Ok(entry) = parse_monitor_line(&line) else {
+                    continue;
+                };
+                let event = ProfilerEvent {
+                    connection_id: task_connection_id.clone(),
+                    session_id: task_session_id.clone(),
+                    time: entry.time,
+                    database: entry.database,
+                    source: entry.source,
+                    args: entry.args,
+                    received_at_ms: current_unix_millis(),
+                };
+                let _ = task_app.emit(PROFILER_EVENT, event);
+            }
+
+            let _ = task_app.emit(
+                PROFILER_STATUS_EVENT,
+                ProfilerStatusEvent {
+                    connection_id: task_connection_id,
+                    session_id: task_session_id,
+                    state: "stopped".into(),
+                    error_code: None,
+                },
+            );
+        });
+
+        let task = ProfilerTask {
+            connection_id: connection_id.clone(),
+            session_id: session_id.clone(),
+            app: app.clone(),
+            handle,
+        };
+        let mut tasks = match self.tasks.lock() {
+            Ok(tasks) => tasks,
+            Err(_) => {
+                task.handle.abort();
+                return Err(AppError::CommandFailed);
+            }
+        };
+        tasks.insert(connection_id.clone(), task);
+        drop(tasks);
+
+        let session = ProfilerSession {
+            connection_id,
+            session_id,
+        };
+        let _ = app.emit(
+            PROFILER_STATUS_EVENT,
+            ProfilerStatusEvent {
+                connection_id: session.connection_id.clone(),
+                session_id: session.session_id.clone(),
+                state: "running".into(),
+                error_code: None,
+            },
+        );
+        Ok(session)
+    }
+
+    pub fn stop(&self, input: StopProfilerInput) -> Result<(), AppError> {
+        input.validate()?;
+        let task = {
+            let mut tasks = self.tasks.lock().map_err(|_| AppError::CommandFailed)?;
+            if tasks
+                .get(&input.connection_id)
+                .is_some_and(|task| task.session_id == input.session_id)
+            {
+                tasks.remove(&input.connection_id)
+            } else {
+                None
+            }
+        };
+        if let Some(task) = task {
+            stop_profiler_task(task);
+        }
+        Ok(())
+    }
+
+    pub fn cancel_connection(&self, connection_id: &str) {
+        let task = self
+            .tasks
+            .lock()
+            .ok()
+            .and_then(|mut tasks| tasks.remove(connection_id));
+        if let Some(task) = task {
+            stop_profiler_task(task);
+        }
+    }
+}
+
+fn stop_profiler_task(task: ProfilerTask) {
+    let _ = task.app.emit(
+        PROFILER_STATUS_EVENT,
+        ProfilerStatusEvent {
+            connection_id: task.connection_id,
+            session_id: task.session_id,
+            state: "stopped".into(),
+            error_code: None,
+        },
+    );
+    task.handle.abort();
+}
+
+fn map_profiler_error(error: ::redis::RedisError) -> AppError {
+    match error.kind() {
+        ::redis::ErrorKind::AuthenticationFailed => AppError::AuthenticationFailed,
+        ::redis::ErrorKind::Io => AppError::ConnectionFailed,
+        _ => AppError::CommandFailed,
+    }
+}
+
+fn current_unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
 fn stop_task(task: PubSubTask) {
     let _ = task.app.emit(
         PUBSUB_STATUS_EVENT,
@@ -297,7 +505,7 @@ fn value_to_u64(value: ::redis::Value) -> Result<u64, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_slow_log_reply;
+    use super::{parse_monitor_line, parse_slow_log_reply};
 
     #[test]
     fn parses_slow_log_entries_with_optional_client_name() {
@@ -351,5 +559,26 @@ mod tests {
         let config = super::parse_slow_log_config_reply(reply).unwrap();
         assert_eq!(config.slowlog_max_len, 128);
         assert_eq!(config.slowlog_log_slower_than, 10_000);
+    }
+
+    #[test]
+    fn parses_monitor_line_with_quoted_and_escaped_arguments() {
+        let entry = parse_monitor_line(
+            r#"1710000000.123456 [2 127.0.0.1:6379] "SET" "demo key" "hello \"redis\"""#,
+        )
+        .unwrap();
+
+        assert_eq!(entry.time, "1710000000.123456");
+        assert_eq!(entry.database, 2);
+        assert_eq!(entry.source, "127.0.0.1:6379");
+        assert_eq!(entry.args, vec!["SET", "demo key", "hello \"redis\""]);
+    }
+
+    #[test]
+    fn rejects_malformed_monitor_line_without_exposing_content() {
+        let error = parse_monitor_line("not a monitor line containing secret-value").unwrap_err();
+
+        assert_eq!(error, crate::error::AppError::CommandFailed);
+        assert_eq!(error.to_string(), "Redis 命令执行失败");
     }
 }
