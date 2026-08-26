@@ -115,3 +115,8 @@ test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ## Concern
 
 - 简报指定的聚焦命令使用 `cargo test ... json_path` 作为测试过滤条件，因此只匹配到了测试名包含 `json_path` 的 2 个新增测试；第三个新增测试 `json_payload_and_array_append_limits_are_enforced` 是通过完整 `domain` 回归验证通过的，而不是被该聚焦命令直接命中
+
+## 提交信息
+
+- 短 SHA：`2273751`
+- 提交信息：`补充 RedisJSON 模块与路径领域协议`
