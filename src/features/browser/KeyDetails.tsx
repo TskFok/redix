@@ -2,15 +2,32 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   deleteKey,
+  deleteJsonPath,
   getKeyInfo,
   getKey,
+  getJsonPath,
+  appendJsonArray,
   renameKey,
   setKey,
+  setJsonPath,
   setKeyTtl,
 } from "../../lib/tauri";
-import type { KeyInfo, KeyValue, RedisValue } from "../../lib/types";
-import { browserErrorMessage, keyTypeLabel } from "./browserState";
+import type {
+  JsonMutationResult,
+  JsonPathValue,
+  KeyInfo,
+  KeyValue,
+  RedisValue,
+} from "../../lib/types";
+import {
+  browserErrorMessage,
+  jsonPathErrorMessage,
+  jsonPathUnavailableMessage,
+  keyTypeLabel,
+  type ModuleProbeState,
+} from "./browserState";
 import KeyEditor from "./KeyEditor";
+import JsonPathEditor, { type JsonPathMutation } from "./JsonPathEditor";
 import StreamConsumerGroups from "./StreamConsumerGroups";
 
 interface KeyDetailsProps {
@@ -18,6 +35,7 @@ interface KeyDetailsProps {
   detail: KeyValue | null;
   metadata?: KeyInfo | null;
   loading: boolean;
+  moduleProbe?: ModuleProbeState;
   onDetailChange: (detail: KeyValue) => void;
   onMetadataChange?: (metadata: KeyInfo | null) => void;
   onRenamed?: (previousKey: string, detail: KeyValue) => void;
@@ -36,6 +54,7 @@ export function KeyDetails({
   detail,
   metadata,
   loading,
+  moduleProbe = { status: "loading", capabilities: null },
   onDetailChange,
   onMetadataChange,
   onRenamed,
@@ -44,6 +63,7 @@ export function KeyDetails({
 }: KeyDetailsProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [jsonPathError, setJsonPathError] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState(detail?.key ?? "");
   const [localInfo, setLocalInfo] = useState<KeyInfo | null>(null);
   const mountedRef = useRef(false);
@@ -65,6 +85,7 @@ export function KeyDetails({
     operationRef.current += 1;
     setBusy(false);
     setError(null);
+    setJsonPathError(null);
     setRenameDraft(detail?.key ?? "");
     setLocalInfo(null);
     onMetadataChange?.(null);
@@ -251,6 +272,90 @@ export function KeyDetails({
     }
   };
 
+  const handleJsonPathRead = async (path: string): Promise<JsonPathValue> => {
+    const operation = beginOperation(detail.key);
+    operationRef.current = operation.token;
+    setOperationBusy(operation, true);
+    setJsonPathError(null);
+    try {
+      const result = await getJsonPath({
+        connection_id: operation.connectionId,
+        key: operation.key,
+        path,
+      });
+      if (!isCurrent(operation)) {
+        throw new Error("stale-json-path-read");
+      }
+      return result;
+    } catch (caught) {
+      if (isCurrent(operation)) {
+        setJsonPathError(
+          jsonPathErrorMessage(caught, "读取 JSON Path 失败，请稍后重试。"),
+        );
+      }
+      throw caught;
+    } finally {
+      setOperationBusy(operation, false);
+    }
+  };
+
+  const handleJsonPathMutate = async (
+    mutation: JsonPathMutation,
+  ): Promise<JsonMutationResult> => {
+    const operation = beginOperation(detail.key);
+    operationRef.current = operation.token;
+    setOperationBusy(operation, true);
+    setJsonPathError(null);
+    try {
+      const result =
+        mutation.kind === "set"
+          ? await setJsonPath({
+              connection_id: operation.connectionId,
+              key: operation.key,
+              path: mutation.path,
+              value: mutation.value,
+            })
+          : mutation.kind === "append"
+            ? await appendJsonArray({
+                connection_id: operation.connectionId,
+                key: operation.key,
+                path: mutation.path,
+                values: mutation.values,
+              })
+            : await deleteJsonPath({
+                connection_id: operation.connectionId,
+                key: operation.key,
+                path: mutation.path,
+              });
+      if (!isCurrent(operation)) {
+        throw new Error("stale-json-path-mutation");
+      }
+      const refreshed = await refreshDetail(operation);
+      if (refreshed && isCurrent(operation)) {
+        onDetailChange(refreshed);
+      }
+      return result;
+    } catch (caught) {
+      if (isCurrent(operation)) {
+        setJsonPathError(
+          jsonPathErrorMessage(caught, "JSON Path 操作失败，请稍后重试。"),
+        );
+      }
+      throw caught;
+    } finally {
+      setOperationBusy(operation, false);
+    }
+  };
+
+  const isJsonDetail = "Json" in detail.value;
+  const jsonPathUnsupported = isJsonDetail
+    ? jsonPathUnavailableMessage(moduleProbe)
+    : null;
+  const showJsonPathEditor =
+    isJsonDetail &&
+    moduleProbe.status === "ready" &&
+    moduleProbe.capabilities.json_supported;
+
   return (
     <section
       className="browser-detail-panel"
@@ -333,6 +438,29 @@ export function KeyDetails({
         onDelete={handleDelete}
         onSetTtl={handleSetTtl}
       />
+      {jsonPathUnsupported ? (
+        <p className="json-path-unavailable" role="status">
+          {jsonPathUnsupported}
+        </p>
+      ) : null}
+      {showJsonPathEditor && "Json" in detail.value ? (
+        <JsonPathEditor
+          key={JSON.stringify([
+            connectionId,
+            detail.key,
+            detail.ttl_ms,
+            detail.value,
+            moduleProbe.status,
+            moduleProbe.capabilities.json_supported,
+            moduleProbe.capabilities.json_version,
+          ])}
+          value={detail.value.Json.value}
+          busy={busy}
+          error={jsonPathError}
+          onRead={handleJsonPathRead}
+          onMutate={handleJsonPathMutate}
+        />
+      ) : null}
       {detail.key_type.toLowerCase() === "stream" ? (
         <StreamConsumerGroups
           key={`${connectionId}:${detail.key}`}

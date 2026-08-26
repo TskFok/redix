@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { getKey, scanKeys } from "../../lib/tauri";
+import { getKey, getModuleCapabilities, scanKeys } from "../../lib/tauri";
 import type { KeyValue } from "../../lib/types";
 import KeyDetails from "./KeyDetails";
 import KeyList from "./KeyList";
@@ -12,6 +12,7 @@ import {
   browserErrorMessage,
   initialBrowserPageState,
   type BrowserPageState,
+  type ModuleProbeState,
 } from "./browserState";
 
 interface BrowserPageProps {
@@ -28,12 +29,17 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
   const [showAddKey, setShowAddKey] = useState(false);
+  const [moduleProbe, setModuleProbe] = useState<ModuleProbeState>({
+    status: "loading",
+    capabilities: null,
+  });
   const connectionIdRef = useRef(connectionId);
   connectionIdRef.current = connectionId;
   const mountedRef = useRef(false);
   const scanLoadingRef = useRef(false);
   const scanRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
+  const moduleProbeRequestRef = useRef(0);
   const debounceRef = useRef<number | null>(null);
   const skipDebounceForPatternRef = useRef<string | null>(null);
   const normalizedScanCount =
@@ -123,6 +129,37 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
       }
     };
   }, [connectionId, scanPage]);
+
+  useEffect(() => {
+    const requestId = moduleProbeRequestRef.current + 1;
+    moduleProbeRequestRef.current = requestId;
+    const requestedConnectionId = connectionId;
+    setModuleProbe({ status: "loading", capabilities: null });
+
+    void getModuleCapabilities(requestedConnectionId)
+      .then((capabilities) => {
+        if (
+          mountedRef.current &&
+          moduleProbeRequestRef.current === requestId &&
+          connectionIdRef.current === requestedConnectionId
+        ) {
+          setModuleProbe({ status: "ready", capabilities });
+        }
+      })
+      .catch(() => {
+        if (
+          mountedRef.current &&
+          moduleProbeRequestRef.current === requestId &&
+          connectionIdRef.current === requestedConnectionId
+        ) {
+          setModuleProbe({ status: "failed", capabilities: null });
+        }
+      });
+
+    return () => {
+      moduleProbeRequestRef.current += 1;
+    };
+  }, [connectionId]);
 
   useEffect(() => {
     if (skipDebounceForPatternRef.current === state.pattern) {
@@ -397,6 +434,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
           detail={state.detail}
           metadata={state.metadata}
           loading={detailLoading}
+          moduleProbe={moduleProbe}
           onDetailChange={handleDetailChange}
           onMetadataChange={(metadata) =>
             setState((current) => ({ ...current, metadata }))

@@ -14,6 +14,11 @@ const {
   acknowledgeStreamPendingEntriesMock,
   scanKeysMock,
   getKeyMock,
+  getModuleCapabilitiesMock,
+  getJsonPathMock,
+  setJsonPathMock,
+  appendJsonArrayMock,
+  deleteJsonPathMock,
   setKeyMock,
   deleteKeyMock,
   createKeyMock,
@@ -33,6 +38,11 @@ const {
   acknowledgeStreamPendingEntriesMock: vi.fn(),
   scanKeysMock: vi.fn(),
   getKeyMock: vi.fn(),
+  getModuleCapabilitiesMock: vi.fn(),
+  getJsonPathMock: vi.fn(),
+  setJsonPathMock: vi.fn(),
+  appendJsonArrayMock: vi.fn(),
+  deleteJsonPathMock: vi.fn(),
   setKeyMock: vi.fn(),
   deleteKeyMock: vi.fn(),
   createKeyMock: vi.fn(),
@@ -53,6 +63,11 @@ const {
 vi.mock("../../lib/tauri", () => ({
   scanKeys: scanKeysMock,
   getKey: getKeyMock,
+  getModuleCapabilities: getModuleCapabilitiesMock,
+  getJsonPath: getJsonPathMock,
+  setJsonPath: setJsonPathMock,
+  appendJsonArray: appendJsonArrayMock,
+  deleteJsonPath: deleteJsonPathMock,
   setKey: setKeyMock,
   deleteKey: deleteKeyMock,
   createKey: createKeyMock,
@@ -101,6 +116,38 @@ describe("Redis Browser", () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
     getKeyMock.mockResolvedValue(stringDetail);
+    getModuleCapabilitiesMock.mockResolvedValue({
+      modules: [{ name: "ReJSON", version: "20611" }],
+      json_supported: true,
+      json_version: "20611",
+    });
+    getJsonPathMock.mockResolvedValue({
+      key: "profile:1",
+      path: "$",
+      value: { name: "Alice" },
+      ttl_ms: -1,
+    });
+    setJsonPathMock.mockResolvedValue({
+      key: "profile:1",
+      path: "$.name",
+      affected: 1,
+      new_length: null,
+      ttl_ms: -1,
+    });
+    appendJsonArrayMock.mockResolvedValue({
+      key: "profile:1",
+      path: "$.tags",
+      affected: 1,
+      new_length: 2,
+      ttl_ms: -1,
+    });
+    deleteJsonPathMock.mockResolvedValue({
+      key: "profile:1",
+      path: "$.obsolete",
+      affected: 1,
+      new_length: null,
+      ttl_ms: -1,
+    });
     setKeyMock.mockResolvedValue(stringDetail);
     deleteKeyMock.mockResolvedValue(undefined);
     createKeyMock.mockResolvedValue(stringDetail);
@@ -164,6 +211,45 @@ describe("Redis Browser", () => {
       connection_id: "local",
       key: "user:1",
     });
+  });
+
+  it("加载页面时探测模块能力且不阻塞初始扫描", async () => {
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+
+    render(<BrowserPage connectionId="local" />);
+
+    expect(await screen.findByText("user:1")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(getModuleCapabilitiesMock).toHaveBeenCalledWith("local");
+    });
+    expect(scanKeysMock).toHaveBeenCalledWith({
+      connection_id: "local",
+      cursor: 0,
+      pattern: "*",
+      count: 100,
+      key_type: null,
+    });
+  });
+
+  it("模块探测失败时仍然扫描并保留普通 Browser", async () => {
+    getModuleCapabilitiesMock.mockRejectedValue({
+      code: "CONNECTION_FAILED",
+      message: "module probe failed",
+    });
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [stringSummary],
+      has_more: false,
+    });
+
+    render(<BrowserPage connectionId="local" />);
+
+    expect(await screen.findByText("user:1")).toBeInTheDocument();
+    expect(screen.queryByText("RedisJSON 路径编辑器暂不可用。")).not.toBeInTheDocument();
   });
 
   it("使用设置传入的 SCAN 数量", async () => {
@@ -1035,6 +1121,95 @@ describe("Redis Browser", () => {
       expect(onSave).toHaveBeenCalledWith({
         Json: { value: { name: "Bob", active: false } },
       });
+    });
+  });
+
+  it("模块不可用时 JSON key 保留根编辑器并显示稳定降级提示", async () => {
+    getModuleCapabilitiesMock.mockResolvedValue({
+      modules: [],
+      json_supported: false,
+      json_version: null,
+    });
+    const jsonSummary = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      size: 26,
+    };
+    const jsonDetail: KeyValue = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
+    };
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [jsonSummary],
+      has_more: false,
+    });
+    getKeyMock.mockResolvedValue(jsonDetail);
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "profile:1" }));
+
+    expect(await screen.findByLabelText("JSON 文档")).toBeInTheDocument();
+    expect(screen.getByText("RedisJSON 路径编辑器暂不可用。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "读取路径" })).not.toBeInTheDocument();
+  });
+
+  it("JSON key 渲染路径编辑器，并在 mutation 成功后刷新详情", async () => {
+    const jsonSummary = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      size: 26,
+    };
+    const jsonDetail: KeyValue = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
+    };
+    const refreshedDetail: KeyValue = {
+      ...jsonDetail,
+      value: { Json: { value: { name: "Bob", tags: ["redis"] } } },
+    };
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [jsonSummary],
+      has_more: false,
+    });
+    getKeyMock
+      .mockResolvedValueOnce(jsonDetail)
+      .mockResolvedValueOnce(refreshedDetail);
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "profile:1" }));
+
+    expect(await screen.findByRole("button", { name: "读取路径" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$.name" },
+    });
+    fireEvent.change(screen.getByLabelText("路径 JSON 值"), {
+      target: { value: '"Bob"' },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存路径" }));
+
+    await waitFor(() => {
+      expect(setJsonPathMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "profile:1",
+        path: "$.name",
+        value: "Bob",
+      });
+    });
+    await waitFor(() => {
+      expect(getKeyMock).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText("JSON 文档")).toHaveValue(
+        JSON.stringify({ name: "Bob", tags: ["redis"] }, null, 2),
+      );
     });
   });
 

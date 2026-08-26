@@ -2,9 +2,13 @@ import type {
   KeyInfo,
   KeySummary,
   KeyValue,
+  JsonValue,
+  ModuleCapabilities,
   RedisValue,
   ScanPage,
 } from "../../lib/types";
+
+export type { JsonValue };
 
 export interface BrowserPageState {
   pattern: string;
@@ -19,6 +23,11 @@ export interface BrowserPageState {
   error: string | null;
   hasMore: boolean;
 }
+
+export type ModuleProbeState =
+  | { status: "loading"; capabilities: null }
+  | { status: "ready"; capabilities: ModuleCapabilities }
+  | { status: "failed"; capabilities: null };
 
 export const initialBrowserPageState: BrowserPageState = {
   pattern: "*",
@@ -193,6 +202,38 @@ export function formatTtl(ttlMs: number): string {
 
 export function formatSize(size: number | null): string {
   return size === null ? "—" : String(size);
+}
+
+export function formatJsonValue(value: JsonValue | null): string {
+  return JSON.stringify(value, null, 2) ?? "null";
+}
+
+export function jsonPathUnavailableMessage(state: ModuleProbeState): string | null {
+  if (state.status === "failed") {
+    return "RedisJSON 路径编辑器暂不可用。";
+  }
+  if (state.status === "ready" && !state.capabilities.json_supported) {
+    return "RedisJSON 路径编辑器暂不可用。";
+  }
+  return null;
+}
+
+export function jsonPathErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { code?: unknown }).code;
+    switch (code) {
+      case "JSON_PATH_NOT_FOUND":
+        return "未找到匹配的 JSON Path。";
+      case "JSON_PATH_INVALID":
+        return "JSON Path 格式无效。";
+      case "JSON_VALUE_INVALID":
+        return "JSON 值格式无效。";
+      default:
+        return browserErrorMessage(error, fallback);
+    }
+  }
+
+  return fallback;
 }
 
 export function browserErrorMessage(

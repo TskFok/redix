@@ -1,0 +1,237 @@
+import { useEffect, useRef, useState } from "react";
+
+import type {
+  JsonMutationResult,
+  JsonPathValue,
+  JsonValue,
+} from "../../lib/types";
+import { formatJsonValue, formatTtl } from "./browserState";
+
+export type JsonPathMutation =
+  | { kind: "set"; path: string; value: JsonValue }
+  | { kind: "append"; path: string; values: JsonValue[] }
+  | { kind: "delete"; path: string };
+
+interface JsonPathEditorProps {
+  value: JsonValue;
+  busy: boolean;
+  error: string | null;
+  onRead(path: string): Promise<JsonPathValue>;
+  onMutate(mutation: JsonPathMutation): Promise<JsonMutationResult>;
+}
+
+function parseJsonDraft(draft: string): JsonValue | null {
+  if (draft.trim() === "") {
+    return null;
+  }
+  return JSON.parse(draft) as JsonValue;
+}
+
+export function JsonPathEditor({
+  value,
+  busy,
+  error,
+  onRead,
+  onMutate,
+}: JsonPathEditorProps) {
+  const [path, setPath] = useState("$");
+  const [jsonDraft, setJsonDraft] = useState(() => formatJsonValue(value));
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [readResult, setReadResult] = useState<JsonPathValue | null>(null);
+  const mountedRef = useRef(false);
+  const readRequestRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      readRequestRef.current += 1;
+    };
+  }, []);
+
+  useEffect(() => {
+    setJsonDraft(formatJsonValue(value));
+    setValidationError(null);
+    setReadResult(null);
+  }, [value]);
+
+  const validatePath = () => {
+    const trimmedPath = path.trim();
+    if (trimmedPath === "") {
+      setValidationError("JSON Path 不能为空。");
+      return null;
+    }
+    return trimmedPath;
+  };
+
+  const handleRead = async () => {
+    const trimmedPath = validatePath();
+    if (trimmedPath === null) {
+      return;
+    }
+
+    const requestId = readRequestRef.current + 1;
+    readRequestRef.current = requestId;
+    setValidationError(null);
+    setReadResult(null);
+    try {
+      const result = await onRead(trimmedPath);
+      if (mountedRef.current && readRequestRef.current === requestId) {
+        setReadResult(result);
+      }
+    } catch {
+      if (mountedRef.current && readRequestRef.current === requestId && !error) {
+        setValidationError("读取 JSON Path 失败，请稍后重试。");
+      }
+    }
+  };
+
+  const mutate = async (kind: JsonPathMutation["kind"]) => {
+    const trimmedPath = validatePath();
+    if (trimmedPath === null) {
+      return;
+    }
+
+    if (kind === "delete") {
+      setValidationError(null);
+      try {
+        await onMutate({ kind, path: trimmedPath });
+      } catch {
+        if (!error) {
+          setValidationError("JSON Path 操作失败，请稍后重试。");
+        }
+      }
+      return;
+    }
+
+    let parsed: JsonValue | null;
+    try {
+      parsed = parseJsonDraft(jsonDraft);
+    } catch {
+      setValidationError("JSON 格式无效。");
+      return;
+    }
+    if (parsed === null) {
+      setValidationError("JSON 值不能为空。");
+      return;
+    }
+    if (kind === "append") {
+      if (!Array.isArray(parsed)) {
+        setValidationError("数组追加需要 JSON 数组。");
+        return;
+      }
+      setValidationError(null);
+      try {
+        await onMutate({ kind, path: trimmedPath, values: parsed });
+      } catch {
+        if (!error) {
+          setValidationError("JSON Path 操作失败，请稍后重试。");
+        }
+      }
+      return;
+    }
+
+    setValidationError(null);
+    try {
+      await onMutate({ kind, path: trimmedPath, value: parsed });
+    } catch {
+      if (!error) {
+        setValidationError("JSON Path 操作失败，请稍后重试。");
+      }
+    }
+  };
+
+  const visibleError = validationError ?? error;
+
+  return (
+    <section className="json-path-editor" aria-labelledby="json-path-editor-title" aria-busy={busy}>
+      <div className="editor-heading">
+        <div>
+          <p className="eyebrow">JSON PATH</p>
+          <h3 id="json-path-editor-title">路径编辑器</h3>
+        </div>
+        <span className="editor-type">json</span>
+      </div>
+
+      <label className="field">
+        <span>JSON Path</span>
+        <input
+          aria-label="JSON Path"
+          value={path}
+          onChange={(event) => {
+            setPath(event.target.value);
+            setValidationError(null);
+            setReadResult(null);
+          }}
+          disabled={busy}
+          spellCheck={false}
+        />
+      </label>
+
+      <label className="field">
+        <span>路径 JSON 值</span>
+        <textarea
+          aria-label="路径 JSON 值"
+          value={jsonDraft}
+          onChange={(event) => {
+            setJsonDraft(event.target.value);
+            setValidationError(null);
+          }}
+          disabled={busy}
+          spellCheck={false}
+        />
+      </label>
+
+      {visibleError ? (
+        <p role="alert">{visibleError}</p>
+      ) : null}
+
+      {readResult ? (
+        <div className="json-path-result">
+          <div className="json-path-result-meta">
+            <span>路径：{readResult.path}</span>
+            <span>TTL：{formatTtl(readResult.ttl_ms)}</span>
+          </div>
+          <pre aria-label="路径读取结果">{formatJsonValue(readResult.value)}</pre>
+        </div>
+      ) : null}
+
+      <div className="editor-actions json-path-actions">
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => void handleRead()}
+          disabled={busy}
+        >
+          读取路径
+        </button>
+        <button
+          type="button"
+          className="button button-primary"
+          onClick={() => void mutate("set")}
+          disabled={busy}
+        >
+          保存路径
+        </button>
+        <button
+          type="button"
+          className="button button-secondary"
+          onClick={() => void mutate("append")}
+          disabled={busy}
+        >
+          数组追加
+        </button>
+        <button
+          type="button"
+          className="button button-danger"
+          onClick={() => void mutate("delete")}
+          disabled={busy}
+        >
+          删除路径
+        </button>
+      </div>
+    </section>
+  );
+}
+
+export default JsonPathEditor;
