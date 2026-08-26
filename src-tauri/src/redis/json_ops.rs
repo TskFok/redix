@@ -148,18 +148,7 @@ pub(crate) fn parse_json_get_reply(
 
     match value {
         serde_json::Value::Array(values) if values.is_empty() => Ok(None),
-        serde_json::Value::Array(mut values) if values.len() == 1 => {
-            let value = values.remove(0);
-            if path == "$" {
-                if let serde_json::Value::Array(mut nested) = value {
-                    if nested.len() == 1 {
-                        return Ok(Some(nested.remove(0)));
-                    }
-                    return Ok(Some(serde_json::Value::Array(nested)));
-                }
-            }
-            Ok(Some(value))
-        }
+        serde_json::Value::Array(mut values) if values.len() == 1 => Ok(Some(values.remove(0))),
         value => Ok(Some(value)),
     }
 }
@@ -271,10 +260,17 @@ mod tests {
 
     #[test]
     fn normalizes_json_get_root_reply_without_unwrapping_nested_arrays() {
-        let reply = Some(r#"[[{"name":"redix"}]]"#.to_owned());
-        let value = parse_json_get_reply(reply, "$", false).unwrap().unwrap();
+        let object_reply = Some(r#"[{"name":"redix"}]"#.to_owned());
+        let object = parse_json_get_reply(object_reply, "$", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(object, serde_json::json!({"name": "redix"}));
 
-        assert_eq!(value, serde_json::json!({"name": "redix"}));
+        let array_reply = Some(r#"[[{"name":"redix"}]]"#.to_owned());
+        let array = parse_json_get_reply(array_reply, "$", false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(array, serde_json::json!([{"name": "redix"}]));
     }
 
     #[test]
