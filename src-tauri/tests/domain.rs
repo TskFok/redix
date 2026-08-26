@@ -3,11 +3,13 @@ mod support;
 use redix_lib::{
     domain::{
         command_catalog, is_sensitive_command, parse_info_sections, parse_keyspace_line,
+        normalize_json_path, validate_json_array_append, validate_json_path,
         AcknowledgeStreamPendingEntriesInput, AppSettings, ConnectionProfile, CreateKeyInput,
-        DeleteKeysInput, ExportedKey, GetSlowLogsInput, GetStreamConsumerGroupsInput,
-        GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput, PubSubTopic,
-        QueryLibraryItemInput, RedisValue, RenameKeyInput, ScanKeysInput, SelectDatabaseInput,
-        StartProfilerInput, StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
+        DeleteKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
+        GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput, ImportKeysInput,
+        KeyInfoInput, PubSubTopic, QueryLibraryItemInput, RedisValue, RenameKeyInput,
+        ScanKeysInput, SelectDatabaseInput, SetJsonPathInput, StartProfilerInput,
+        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -232,6 +234,40 @@ fn accepts_json_root_documents_as_browser_values() {
     };
 
     assert_eq!(input.validate(), Ok(()));
+}
+
+#[test]
+fn json_path_inputs_reject_empty_or_unsafe_paths() {
+    let input = GetJsonPathInput {
+        connection_id: "local".into(),
+        key: "doc".into(),
+        path: "$.items[*]".into(),
+    };
+
+    assert_eq!(input.validate().unwrap_err(), AppError::InvalidInput);
+    assert_eq!(validate_json_path("", false), Err(AppError::InvalidInput));
+    assert_eq!(validate_json_path("$.user.name", false), Ok(()));
+}
+
+#[test]
+fn json_path_supports_legacy_and_modern_root_forms() {
+    assert_eq!(normalize_json_path("$", true).unwrap(), ".");
+    assert_eq!(normalize_json_path("$.user", true).unwrap(), ".user");
+    assert_eq!(normalize_json_path("$.user", false).unwrap(), "$.user");
+}
+
+#[test]
+fn json_payload_and_array_append_limits_are_enforced() {
+    let oversized = serde_json::Value::String("x".repeat(5 * 1024 * 1024));
+    let input = SetJsonPathInput {
+        connection_id: "local".into(),
+        key: "doc".into(),
+        path: "$".into(),
+        value: oversized,
+    };
+
+    assert_eq!(input.validate().unwrap_err(), AppError::InvalidInput);
+    assert_eq!(validate_json_array_append(&[]), Err(AppError::InvalidInput));
 }
 
 #[test]
