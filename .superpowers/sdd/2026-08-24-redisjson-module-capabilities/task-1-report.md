@@ -118,5 +118,5 @@ test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 ## 提交信息
 
-- 短 SHA：`2273751`
-- 提交信息：`补充 RedisJSON 模块与路径领域协议`
+- 短 SHA：`9f3fe0b`
+- 提交信息：`补充任务一报告提交信息`
