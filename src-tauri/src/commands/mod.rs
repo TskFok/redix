@@ -1,6 +1,7 @@
 pub mod browser;
 pub mod connections;
 pub mod database;
+pub mod json;
 pub mod observability;
 pub mod query_library;
 pub mod settings;
@@ -17,6 +18,9 @@ pub use connections::{
 pub use database::{
     analyze_database, get_database_overview, get_instance_details, get_instance_overview,
     select_database,
+};
+pub use json::{
+    append_json_array, delete_json_path, get_json_path, get_module_capabilities, set_json_path,
 };
 pub use query_library::{delete_query_library_item, list_query_library, save_query_library_item};
 pub use settings::{get_app_settings, save_app_settings};

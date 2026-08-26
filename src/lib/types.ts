@@ -76,6 +76,12 @@ export interface ModuleSummary {
   version: string | null;
 }
 
+export interface ModuleCapabilities {
+  modules: ModuleSummary[];
+  json_supported: boolean;
+  json_version: string | null;
+}
+
 export interface InstanceOverview {
   server_version: string | null;
   redis_mode: string | null;
@@ -393,6 +399,35 @@ export type JsonValue =
   | string
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+export interface JsonPathInput {
+  connection_id: string;
+  key: string;
+  path: string;
+}
+
+export interface SetJsonPathInput extends JsonPathInput {
+  value: JsonValue;
+}
+
+export interface AppendJsonArrayInput extends JsonPathInput {
+  values: JsonValue[];
+}
+
+export interface JsonPathValue {
+  key: string;
+  path: string;
+  value: JsonValue | null;
+  ttl_ms: number;
+}
+
+export interface JsonMutationResult {
+  key: string;
+  path: string;
+  affected: number;
+  new_length: number | null;
+  ttl_ms: number;
+}
 
 export interface StreamField {
   field: string;

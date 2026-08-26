@@ -3,7 +3,9 @@ use std::sync::Arc;
 use tauri::Manager;
 
 use redix_lib::{
-    commands::{browser, connections, database, observability, query_library, settings, workbench},
+    commands::{
+        browser, connections, database, json, observability, query_library, settings, workbench,
+    },
     domain::{
         AppSettings, CommandHistoryEntry, CommandResult, QueryLibraryItemInput,
         SaveCommandHistoryInput,
@@ -74,6 +76,11 @@ fn exposes_all_tauri_command_adapters() {
     let _ = database::get_database_overview;
     let _ = database::analyze_database;
     let _ = database::select_database;
+    let _ = json::get_module_capabilities;
+    let _ = json::get_json_path;
+    let _ = json::set_json_path;
+    let _ = json::append_json_array;
+    let _ = json::delete_json_path;
     let _ = observability::get_slow_logs;
     let _ = observability::clear_slow_logs;
     let _ = observability::get_slow_log_config;

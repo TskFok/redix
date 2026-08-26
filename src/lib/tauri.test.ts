@@ -4,18 +4,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearSlowLogs,
   acknowledgeStreamPendingEntries,
+  appendJsonArray,
   closeConnection,
   createKey,
   createStreamConsumerGroup,
   deleteKeys,
   deleteConnection,
   deleteKey,
+  deleteJsonPath,
   deleteStreamConsumer,
   exportConnections,
   deleteStreamConsumerGroup,
   executeCommands,
   executeCommand,
   exportKeys,
+  getJsonPath,
+  getModuleCapabilities,
   getSlowLogConfig,
   getSlowLogs,
   getDatabaseOverview,
@@ -44,6 +48,7 @@ import {
   saveAppSettings,
   saveQueryLibraryItem,
   selectDatabase,
+  setJsonPath,
   startPubSub,
   stopPubSub,
   stopProfiler,
@@ -69,7 +74,10 @@ import type {
   ConnectionProfile,
   ConnectionExportDocument,
   ExportedKey,
+  JsonMutationResult,
+  JsonPathValue,
   KeyValue,
+  ModuleCapabilities,
   RedisValue,
   SaveConnectionInput,
   ImportConnectionsResult,
@@ -186,6 +194,72 @@ describe("Tauri IPC bridge", () => {
     await expect(importConnections({ content: "{}" })).resolves.toEqual(result);
     expect(invokeMock).toHaveBeenLastCalledWith("import_connections", {
       input: { content: "{}" },
+    });
+  });
+
+  it("为 RedisJSON 模块与路径操作传递稳定 IPC 合同", async () => {
+    const capabilities: ModuleCapabilities = {
+      modules: [{ name: "ReJSON", version: "2.8.4" }],
+      json_supported: true,
+      json_version: "2.8.4",
+    };
+    const pathValue: JsonPathValue = {
+      key: "doc",
+      path: "$.user",
+      value: { name: "redix" },
+      ttl_ms: -1,
+    };
+    const mutation: JsonMutationResult = {
+      key: "doc",
+      path: "$.items",
+      affected: 1,
+      new_length: 3,
+      ttl_ms: -1,
+    };
+    invokeMock
+      .mockResolvedValueOnce(capabilities)
+      .mockResolvedValueOnce(pathValue)
+      .mockResolvedValueOnce(mutation)
+      .mockResolvedValueOnce(mutation)
+      .mockResolvedValueOnce(mutation);
+
+    await expect(getModuleCapabilities("local")).resolves.toEqual(capabilities);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_module_capabilities", {
+      connection_id: "local",
+    });
+
+    const getInput = { connection_id: "local", key: "doc", path: "$.user" };
+    await expect(getJsonPath(getInput)).resolves.toEqual(pathValue);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_json_path", {
+      input: getInput,
+    });
+
+    const setInput = {
+      connection_id: "local",
+      key: "doc",
+      path: "$.user",
+      value: { name: "redix" },
+    };
+    await expect(setJsonPath(setInput)).resolves.toEqual(mutation);
+    expect(invokeMock).toHaveBeenLastCalledWith("set_json_path", {
+      input: setInput,
+    });
+
+    const appendInput = {
+      connection_id: "local",
+      key: "doc",
+      path: "$.items",
+      values: ["a", "b"],
+    };
+    await expect(appendJsonArray(appendInput)).resolves.toEqual(mutation);
+    expect(invokeMock).toHaveBeenLastCalledWith("append_json_array", {
+      input: appendInput,
+    });
+
+    const deleteInput = { connection_id: "local", key: "doc", path: "$.items[0]" };
+    await expect(deleteJsonPath(deleteInput)).resolves.toEqual(mutation);
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_json_path", {
+      input: deleteInput,
     });
   });
 

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AppendJsonArrayInput,
   CommandDefinition,
   CommandExecutionItem,
   CommandHistoryEntry,
@@ -25,6 +26,9 @@ import type {
   ExportKeysInput,
   GetSlowLogsInput,
   GetKeyInput,
+  JsonMutationResult,
+  JsonPathInput,
+  JsonPathValue,
   GetStreamConsumerGroupsInput,
   GetStreamConsumersInput,
   GetStreamPendingEntriesInput,
@@ -37,6 +41,7 @@ import type {
   KeyInfo,
   KeyInfoInput,
   KeyValue,
+  ModuleCapabilities,
   RenameKeyInput,
   SaveConnectionInput,
   SaveCommandHistoryInput,
@@ -48,6 +53,7 @@ import type {
   ScanKeysInput,
   ScanPage,
   SelectDatabaseInput,
+  SetJsonPathInput,
   SetKeyInput,
   SetKeyTtlInput,
   SlowLogConfig,
@@ -154,6 +160,14 @@ export function getInstanceDetails(connectionId: string): Promise<InstanceDetail
   });
 }
 
+export function getModuleCapabilities(
+  connectionId: string,
+): Promise<ModuleCapabilities> {
+  return call<ModuleCapabilities>("get_module_capabilities", {
+    connection_id: connectionId,
+  });
+}
+
 export function analyzeDatabase(
   input: AnalyzeDatabaseInput,
 ): Promise<DatabaseAnalysisReport> {
@@ -236,8 +250,18 @@ export function getKey(input: GetKeyInput): Promise<KeyValue> {
   return call<KeyValue>("get_key", { input });
 }
 
+export function getJsonPath(input: JsonPathInput): Promise<JsonPathValue> {
+  return call<JsonPathValue>("get_json_path", { input });
+}
+
 export function setKey(input: SetKeyInput): Promise<KeyValue> {
   return call<KeyValue>("set_key", { input });
+}
+
+export function setJsonPath(
+  input: SetJsonPathInput,
+): Promise<JsonMutationResult> {
+  return call<JsonMutationResult>("set_json_path", { input });
 }
 
 export function createKey(input: CreateKeyInput): Promise<KeyValue> {
@@ -258,6 +282,18 @@ export function deleteKeys(input: DeleteKeysInput): Promise<number> {
 
 export function setKeyTtl(input: SetKeyTtlInput): Promise<number> {
   return call<number>("set_key_ttl", { input });
+}
+
+export function appendJsonArray(
+  input: AppendJsonArrayInput,
+): Promise<JsonMutationResult> {
+  return call<JsonMutationResult>("append_json_array", { input });
+}
+
+export function deleteJsonPath(
+  input: JsonPathInput,
+): Promise<JsonMutationResult> {
+  return call<JsonMutationResult>("delete_json_path", { input });
 }
 
 export function getKeyInfo(input: KeyInfoInput): Promise<KeyInfo> {
