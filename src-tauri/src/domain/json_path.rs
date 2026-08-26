@@ -81,17 +81,13 @@ pub struct JsonMutationResult {
     pub ttl_ms: i64,
 }
 
-pub fn validate_json_path(path: &str, allow_legacy_root: bool) -> Result<(), AppError> {
+pub fn validate_json_path(path: &str, _allow_legacy_root: bool) -> Result<(), AppError> {
     let path_bytes = path.len();
     if !(1..=MAX_JSON_PATH_BYTES).contains(&path_bytes) {
         return Err(AppError::InvalidInput);
     }
 
     if !path.starts_with('$') && !path.starts_with('.') {
-        return Err(AppError::InvalidInput);
-    }
-
-    if !allow_legacy_root && path.starts_with('.') && path != "." {
         return Err(AppError::InvalidInput);
     }
 

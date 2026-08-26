@@ -120,3 +120,100 @@ test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 
 - 短 SHA：`9f3fe0b`
 - 提交信息：`补充任务一报告提交信息`
+
+## Review Fix Report
+
+### 背景
+
+- Review 指出 `src-tauri/src/domain/json_path.rs` 的 `validate_json_path()` 与 `task-1-brief.md` 不一致
+- 具体问题是：domain 合同要求 path 只需以 `$` 或 `.` 开头，但当前实现会在 `allow_legacy_root=false` 时拒绝诸如 `.user` 这样的合法点路径
+- 同时，Rust domain 测试尚未固定以下边界合同：
+  - 512 UTF-8 字节路径上限
+  - 500 项数组追加上限
+  - `connection_id` / `key` trim 后非空
+  - `ModuleCapabilities::from_modules()` 的大小写不敏感识别与首个非空版本选择
+
+### 本次改动
+
+- 修改 `src-tauri/src/domain/json_path.rs`
+  - 修正 `validate_json_path()`，允许合法的点路径（如 `.user.name`）
+  - 保持路径必须以 `$` 或 `.` 开头、控制字符和 `*` / `..` / `?` / `;` 拒绝、UTF-8 字节长度限制、legacy normalize 语义不变
+- 修改 `src-tauri/tests/domain.rs`
+  - 为 `.user.name` 添加合法路径覆盖
+  - 固定 `connection_id` / `key` trim 后非空
+  - 固定 512 UTF-8 字节路径上限
+  - 固定 500 项数组追加上限与 501 项拒绝
+  - 固定 `AppendJsonArrayInput` 边界行为
+  - 固定 `ModuleCapabilities::from_modules()` 的大小写识别与首个非空版本选择
+
+### TDD RED
+
+命令：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --test domain json_path -- --nocapture
+```
+
+关键输出：
+
+```text
+running 3 tests
+thread 'json_path_inputs_reject_empty_or_unsafe_paths' ... assertion `left == right` failed
+  left: Err(InvalidInput)
+ right: Ok(())
+test result: FAILED. 2 passed; 1 failed
+```
+
+结论：
+
+- RED 成立，失败点准确落在 `.user.name` 被错误拒绝，和 review finding 一致
+
+### 覆盖测试 GREEN
+
+命令：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --test domain json_path -- --nocapture
+cargo test --manifest-path src-tauri/Cargo.toml --test domain module_capabilities_detects_json_modules_case_insensitively -- --nocapture
+```
+
+关键输出：
+
+```text
+running 3 tests
+test json_path_supports_legacy_and_modern_root_forms ... ok
+test json_path_contract_enforces_trimmed_identifiers_and_utf8_byte_limit ... ok
+test json_path_inputs_reject_empty_or_unsafe_paths ... ok
+test result: ok. 3 passed; 0 failed
+```
+
+```text
+running 1 test
+test module_capabilities_detects_json_modules_case_insensitively ... ok
+test result: ok. 1 passed; 0 failed
+```
+
+### Domain 回归
+
+命令：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --test domain
+```
+
+关键输出：
+
+```text
+running 27 tests
+test append_json_array_input_accepts_boundary_and_rejects_limit_overflow ... ok
+test json_path_contract_enforces_trimmed_identifiers_and_utf8_byte_limit ... ok
+test module_capabilities_detects_json_modules_case_insensitively ... ok
+test json_payload_and_array_append_limits_are_enforced ... ok
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+```
+
+### 自审
+
+- 修复后 `validate_json_path()` 与 brief 对齐：允许以 `.` 开头的合规路径
+- legacy normalize 仍只在 `normalize_json_path(..., true)` 中把 `$` / `$.field` 转成 legacy 形式
+- 生产改动仍限制在 Task 1 文件内，没有扩展到 Redis service、Tauri command、前端或 cloud 逻辑

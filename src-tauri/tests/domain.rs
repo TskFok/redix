@@ -4,12 +4,13 @@ use redix_lib::{
     domain::{
         command_catalog, is_sensitive_command, parse_info_sections, parse_keyspace_line,
         normalize_json_path, validate_json_array_append, validate_json_path,
-        AcknowledgeStreamPendingEntriesInput, AppSettings, ConnectionProfile, CreateKeyInput,
-        DeleteKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
-        GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput, ImportKeysInput,
-        KeyInfoInput, PubSubTopic, QueryLibraryItemInput, RedisValue, RenameKeyInput,
-        ScanKeysInput, SelectDatabaseInput, SetJsonPathInput, StartProfilerInput,
-        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
+        AcknowledgeStreamPendingEntriesInput, AppendJsonArrayInput, AppSettings,
+        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey, GetJsonPathInput,
+        GetSlowLogsInput, GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput,
+        ImportKeysInput, KeyInfoInput, ModuleCapabilities, ModuleSummary, PubSubTopic,
+        QueryLibraryItemInput, RedisValue, RenameKeyInput, ScanKeysInput,
+        SelectDatabaseInput, SetJsonPathInput, StartProfilerInput, StartPubSubInput,
+        StopProfilerInput, StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -247,6 +248,7 @@ fn json_path_inputs_reject_empty_or_unsafe_paths() {
     assert_eq!(input.validate().unwrap_err(), AppError::InvalidInput);
     assert_eq!(validate_json_path("", false), Err(AppError::InvalidInput));
     assert_eq!(validate_json_path("$.user.name", false), Ok(()));
+    assert_eq!(validate_json_path(".user.name", false), Ok(()));
 }
 
 #[test]
@@ -268,6 +270,77 @@ fn json_payload_and_array_append_limits_are_enforced() {
 
     assert_eq!(input.validate().unwrap_err(), AppError::InvalidInput);
     assert_eq!(validate_json_array_append(&[]), Err(AppError::InvalidInput));
+    assert_eq!(
+        validate_json_array_append(&vec![serde_json::Value::Null; 501]),
+        Err(AppError::InvalidInput)
+    );
+}
+
+#[test]
+fn json_path_contract_enforces_trimmed_identifiers_and_utf8_byte_limit() {
+    let input = GetJsonPathInput {
+        connection_id: "  ".into(),
+        key: "doc".into(),
+        path: "$".into(),
+    };
+    assert_eq!(input.validate().unwrap_err(), AppError::InvalidInput);
+
+    let input = GetJsonPathInput {
+        connection_id: "local".into(),
+        key: "  ".into(),
+        path: "$".into(),
+    };
+    assert_eq!(input.validate().unwrap_err(), AppError::InvalidInput);
+
+    let max_path = format!("$.{}", "你".repeat(170));
+    assert_eq!(max_path.len(), 512);
+    assert_eq!(validate_json_path(&max_path, false), Ok(()));
+
+    let oversized_path = format!("$.{}", "你".repeat(171));
+    assert!(oversized_path.len() > 512);
+    assert_eq!(validate_json_path(&oversized_path, false), Err(AppError::InvalidInput));
+}
+
+#[test]
+fn append_json_array_input_accepts_boundary_and_rejects_limit_overflow() {
+    let ok = AppendJsonArrayInput {
+        connection_id: "local".into(),
+        key: "doc".into(),
+        path: ".items".into(),
+        values: vec![serde_json::Value::Null; 500],
+    };
+    assert_eq!(ok.validate(), Ok(()));
+
+    let too_many = AppendJsonArrayInput {
+        values: vec![serde_json::Value::Null; 501],
+        ..ok
+    };
+    assert_eq!(too_many.validate().unwrap_err(), AppError::InvalidInput);
+}
+
+#[test]
+fn module_capabilities_detects_json_modules_case_insensitively() {
+    let capabilities = ModuleCapabilities::from_modules(vec![
+        ModuleSummary {
+            name: "bf".into(),
+            version: Some("1.0.0".into()),
+        },
+        ModuleSummary {
+            name: "ReJSON".into(),
+            version: Some("".into()),
+        },
+        ModuleSummary {
+            name: "redisjson".into(),
+            version: Some("2.6.8".into()),
+        },
+        ModuleSummary {
+            name: "RedisJSON".into(),
+            version: Some("2.8.0".into()),
+        },
+    ]);
+
+    assert!(capabilities.json_supported);
+    assert_eq!(capabilities.json_version.as_deref(), Some("2.6.8"));
 }
 
 #[test]
