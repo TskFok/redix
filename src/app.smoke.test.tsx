@@ -7,6 +7,7 @@ const {
   openConnectionMock,
   closeConnectionMock,
   scanKeysMock,
+  getModuleCapabilitiesMock,
   executeCommandMock,
   executeCommandsMock,
   getCommandCatalogMock,
@@ -27,6 +28,7 @@ const {
   openConnectionMock: vi.fn(),
   closeConnectionMock: vi.fn(),
   scanKeysMock: vi.fn(),
+  getModuleCapabilitiesMock: vi.fn(),
   executeCommandMock: vi.fn(),
   executeCommandsMock: vi.fn(),
   getCommandCatalogMock: vi.fn(),
@@ -49,6 +51,7 @@ vi.mock("./lib/tauri", () => ({
   openConnection: openConnectionMock,
   closeConnection: closeConnectionMock,
   scanKeys: scanKeysMock,
+  getModuleCapabilities: getModuleCapabilitiesMock,
   executeCommand: executeCommandMock,
   executeCommands: executeCommandsMock,
   getCommandCatalog: getCommandCatalogMock,
@@ -101,6 +104,11 @@ beforeEach(() => {
   openConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
   closeConnectionMock.mockResolvedValue(undefined);
   scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+  getModuleCapabilitiesMock.mockResolvedValue({
+    modules: [],
+    json_supported: false,
+    json_version: null,
+  });
   executeCommandMock.mockResolvedValue({ kind: "string", value: "PONG" });
   executeCommandsMock.mockResolvedValue([]);
   getCommandCatalogMock.mockResolvedValue([

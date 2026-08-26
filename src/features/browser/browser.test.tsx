@@ -1213,6 +1213,44 @@ describe("Redis Browser", () => {
     });
   });
 
+  it("JSON Path 读取失败时展示稳定映射文案", async () => {
+    const jsonSummary = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      size: 26,
+    };
+    const jsonDetail: KeyValue = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      value: { Json: { value: { name: "Alice" } } },
+    };
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [jsonSummary],
+      has_more: false,
+    });
+    getKeyMock.mockResolvedValue(jsonDetail);
+    getJsonPathMock.mockRejectedValue({
+      code: "JSON_PATH_NOT_FOUND",
+      message: "path not found",
+    });
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "profile:1" }));
+    await screen.findByRole("button", { name: "读取路径" });
+
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$.missing" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "读取路径" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "未找到匹配的 JSON Path。",
+    );
+  });
+
   it("Stream 编辑器允许编辑字段并拒绝空字段名", async () => {
     const streamValue: RedisValue = {
       Stream: {

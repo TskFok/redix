@@ -151,6 +151,78 @@ describe("JsonPathEditor", () => {
     ]);
   });
 
+  it("允许 JSON null 作为 set 值，并允许数组追加 null 元素", async () => {
+    const onMutate = vi.fn().mockResolvedValue(mutationResult);
+
+    render(
+      <JsonPathEditor
+        value={rootValue}
+        busy={false}
+        error={null}
+        onRead={vi.fn()}
+        onMutate={onMutate}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$.optional" },
+    });
+    fireEvent.change(screen.getByLabelText("路径 JSON 值"), {
+      target: { value: "null" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存路径" }));
+
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$.items" },
+    });
+    fireEvent.change(screen.getByLabelText("路径 JSON 值"), {
+      target: { value: "[null]" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "数组追加" }));
+
+    await waitFor(() => {
+      expect(onMutate).toHaveBeenCalledTimes(2);
+    });
+    expect(onMutate).toHaveBeenNthCalledWith(1, {
+      kind: "set",
+      path: "$.optional",
+      value: null,
+    });
+    expect(onMutate).toHaveBeenNthCalledWith(2, {
+      kind: "append",
+      path: "$.items",
+      values: [null],
+    });
+  });
+
+  it("父级传入的异步错误优先于本地 fallback 显示", async () => {
+    const onRead = vi.fn().mockRejectedValue(new Error("read failed"));
+    const { rerender } = render(
+      <JsonPathEditor
+        value={rootValue}
+        busy={false}
+        error={null}
+        onRead={onRead}
+        onMutate={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "读取路径" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("读取 JSON Path 失败");
+
+    rerender(
+      <JsonPathEditor
+        value={rootValue}
+        busy={false}
+        error="未找到匹配的 JSON Path。"
+        onRead={onRead}
+        onMutate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("alert")).toHaveTextContent("未找到匹配的 JSON Path。");
+  });
+
   it("busy 时禁用输入和按钮，异步错误显示在编辑器内", () => {
     render(
       <JsonPathEditor

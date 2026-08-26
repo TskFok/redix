@@ -20,10 +20,7 @@ interface JsonPathEditorProps {
   onMutate(mutation: JsonPathMutation): Promise<JsonMutationResult>;
 }
 
-function parseJsonDraft(draft: string): JsonValue | null {
-  if (draft.trim() === "") {
-    return null;
-  }
+function parseJsonDraft(draft: string): JsonValue {
   return JSON.parse(draft) as JsonValue;
 }
 
@@ -37,6 +34,7 @@ export function JsonPathEditor({
   const [path, setPath] = useState("$");
   const [jsonDraft, setJsonDraft] = useState(() => formatJsonValue(value));
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const [readResult, setReadResult] = useState<JsonPathValue | null>(null);
   const mountedRef = useRef(false);
   const readRequestRef = useRef(0);
@@ -52,6 +50,7 @@ export function JsonPathEditor({
   useEffect(() => {
     setJsonDraft(formatJsonValue(value));
     setValidationError(null);
+    setOperationError(null);
     setReadResult(null);
   }, [value]);
 
@@ -59,6 +58,7 @@ export function JsonPathEditor({
     const trimmedPath = path.trim();
     if (trimmedPath === "") {
       setValidationError("JSON Path 不能为空。");
+      setOperationError(null);
       return null;
     }
     return trimmedPath;
@@ -73,6 +73,7 @@ export function JsonPathEditor({
     const requestId = readRequestRef.current + 1;
     readRequestRef.current = requestId;
     setValidationError(null);
+    setOperationError(null);
     setReadResult(null);
     try {
       const result = await onRead(trimmedPath);
@@ -81,7 +82,7 @@ export function JsonPathEditor({
       }
     } catch {
       if (mountedRef.current && readRequestRef.current === requestId && !error) {
-        setValidationError("读取 JSON Path 失败，请稍后重试。");
+        setOperationError("读取 JSON Path 失败，请稍后重试。");
       }
     }
   };
@@ -94,54 +95,61 @@ export function JsonPathEditor({
 
     if (kind === "delete") {
       setValidationError(null);
+      setOperationError(null);
       try {
         await onMutate({ kind, path: trimmedPath });
       } catch {
         if (!error) {
-          setValidationError("JSON Path 操作失败，请稍后重试。");
+          setOperationError("JSON Path 操作失败，请稍后重试。");
         }
       }
       return;
     }
 
-    let parsed: JsonValue | null;
+    if (jsonDraft.trim() === "") {
+      setValidationError("JSON 值不能为空。");
+      setOperationError(null);
+      return;
+    }
+
+    let parsed: JsonValue;
     try {
       parsed = parseJsonDraft(jsonDraft);
     } catch {
       setValidationError("JSON 格式无效。");
-      return;
-    }
-    if (parsed === null) {
-      setValidationError("JSON 值不能为空。");
+      setOperationError(null);
       return;
     }
     if (kind === "append") {
       if (!Array.isArray(parsed)) {
         setValidationError("数组追加需要 JSON 数组。");
+        setOperationError(null);
         return;
       }
       setValidationError(null);
+      setOperationError(null);
       try {
         await onMutate({ kind, path: trimmedPath, values: parsed });
       } catch {
         if (!error) {
-          setValidationError("JSON Path 操作失败，请稍后重试。");
+          setOperationError("JSON Path 操作失败，请稍后重试。");
         }
       }
       return;
     }
 
     setValidationError(null);
+    setOperationError(null);
     try {
       await onMutate({ kind, path: trimmedPath, value: parsed });
     } catch {
       if (!error) {
-        setValidationError("JSON Path 操作失败，请稍后重试。");
+        setOperationError("JSON Path 操作失败，请稍后重试。");
       }
     }
   };
 
-  const visibleError = validationError ?? error;
+  const visibleError = error ?? validationError ?? operationError;
 
   return (
     <section className="json-path-editor" aria-labelledby="json-path-editor-title" aria-busy={busy}>
@@ -161,6 +169,7 @@ export function JsonPathEditor({
           onChange={(event) => {
             setPath(event.target.value);
             setValidationError(null);
+            setOperationError(null);
             setReadResult(null);
           }}
           disabled={busy}
@@ -176,6 +185,7 @@ export function JsonPathEditor({
           onChange={(event) => {
             setJsonDraft(event.target.value);
             setValidationError(null);
+            setOperationError(null);
           }}
           disabled={busy}
           spellCheck={false}

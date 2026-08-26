@@ -19,6 +19,7 @@ const {
   deleteConnectionMock,
   testConnectionMock,
   scanKeysMock,
+  getModuleCapabilitiesMock,
   getKeyMock,
   setKeyMock,
   deleteKeyMock,
@@ -37,6 +38,7 @@ const {
   deleteConnectionMock: vi.fn(),
   testConnectionMock: vi.fn(),
   scanKeysMock: vi.fn(),
+  getModuleCapabilitiesMock: vi.fn(),
   getKeyMock: vi.fn(),
   setKeyMock: vi.fn(),
   deleteKeyMock: vi.fn(),
@@ -57,6 +59,7 @@ vi.mock("../../lib/tauri", () => ({
   deleteConnection: deleteConnectionMock,
   testConnection: testConnectionMock,
   scanKeys: scanKeysMock,
+  getModuleCapabilities: getModuleCapabilitiesMock,
   getKey: getKeyMock,
   setKey: setKeyMock,
   deleteKey: deleteKeyMock,
@@ -95,6 +98,11 @@ describe("Redis Workbench 工作区", () => {
     deleteConnectionMock.mockResolvedValue(undefined);
     testConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
     scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    getModuleCapabilitiesMock.mockResolvedValue({
+      modules: [],
+      json_supported: false,
+      json_version: null,
+    });
     getKeyMock.mockRejectedValue({ code: "KEY_NOT_FOUND", message: "键不存在" });
     setKeyMock.mockResolvedValue(undefined);
     deleteKeyMock.mockResolvedValue(undefined);
