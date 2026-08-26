@@ -366,3 +366,11 @@
   - `git diff --check`：通过。
 - 额外环境检查：`REDIX_TEST_REDIS_STACK_URL` 未设置，因此 Redis Stack ignored 流程明确保持未执行，没有声称真实 Redis Stack 网络通过。
 - 详细证据已写入 `.superpowers/sdd/2026-08-24-redisjson-module-capabilities/task-5-report.md`；本轮最终提交为单个简体中文 commit。
+
+## Session: 2026-08-26 — Task 5 格式修复与第一批收口
+
+- **Status:** complete
+- Task 5 review 将 `cargo fmt --check` 失败判定为可修复的 Important；按 ruling 仅对 `src-tauri/src/domain/json_path.rs` 和 `src-tauri/tests/domain.rs` 做纯机械 rustfmt，没有改变语义、接口或断言。
+- 修复后验证：`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`、domain 27/27、前端 15 文件/136 测试、`npm run build`、`npm run check:non-cloud`、`git diff --check` 全部通过。
+- `REDIX_TEST_REDIS_STACK_URL` 仍未配置，真实 Redis Stack ignored 流程保持未执行；前端仅有既有 jsdom navigation 噪音。
+- Task 5 fix commit：`ba531e4`（`修复 RedisJSON 路径文件格式`）。

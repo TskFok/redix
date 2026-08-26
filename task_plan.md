@@ -434,8 +434,8 @@ discovery：正在按连接拓扑、模块能力、Workbench/CLI 高级体验和
 - [x] 编写并自审设计文档
 - [x] 用户审阅设计文档
 - [x] 编写并自审第一批实现计划
-- [ ] 选择执行方式
-- [ ] 按 TDD 分批实现并验证
+- [x] 选择执行方式（Subagent-Driven）
+- [x] 按 TDD 分批实现并验证
 
 ### Scope boundaries
 
@@ -450,7 +450,7 @@ discovery：正在按连接拓扑、模块能力、Workbench/CLI 高级体验和
 
 ### Current status
 
-plan_ready：设计文档已获用户确认并提交；第一批 RedisJSON/模块能力实施计划已完成自审，等待用户选择执行方式。
+complete：设计文档和第一批实施计划已获用户确认；RedisJSON/模块能力第一批五项任务已按 TDD、逐项审查和 scoped re-review 完成。
 
 ### Discovery errors
 
@@ -467,4 +467,4 @@ plan_ready：设计文档已获用户确认并提交；第一批 RedisJSON/模�
 - [x] 明确记录 `REDIX_TEST_REDIS_STACK_URL` 未配置，因此 Redis Stack ignored 流程保持未执行，不声称真实网络通过
 - [x] 写入 `.superpowers/sdd/2026-08-24-redisjson-module-capabilities/task-5-report.md`
 - [x] 创建简体中文提交
-- **Status:** complete（本任务只更新范围/记录文档与验证证据；未修改业务实现文件。`cargo fmt --check` 因既有业务文件格式差异失败，已如实记录）
+- **Status:** complete（文档/记录提交后，纯格式修复提交已使 `cargo fmt --check` 通过；业务语义未改变）

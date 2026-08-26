@@ -436,3 +436,9 @@
 - `REDIX_TEST_REDIS_STACK_URL` 在 2026-08-26 的本机环境中未设置，因此 Redis Stack ignored 集成流程只能记为未执行；这属于环境缺口，不得外推为真实 Redis Stack 网络通过。
 - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 失败点位于 `src-tauri/src/domain/json_path.rs` 与 `src-tauri/tests/domain.rs` 的格式化差异，属于既有业务文件格式问题，不是文档改动或环境错误；按本任务边界未直接修复。
 - `npm run test:frontend` 的输出仍包含两条 jsdom `Not implemented: navigation to another Document`，但退出码为 0、测试全绿，应归类为既有测试环境噪音而非回归。
+
+## 2026-08-26 Task 5 格式修复补充
+
+- Task 5 review 确认 `cargo fmt --check` 的失败是 `src-tauri/src/domain/json_path.rs` 与 `src-tauri/tests/domain.rs` 的纯格式差异；已只对这两个文件运行 rustfmt。
+- 格式修复后 `cargo fmt --check`、domain 27/27、前端 136/136、build、non-cloud 和 diff check 均通过；未配置 `REDIX_TEST_REDIS_STACK_URL` 的环境事实保持不变。
+- Task 5 fix commit：`ba531e4`。
