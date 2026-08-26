@@ -91,9 +91,10 @@ pub fn validate_json_path(path: &str, _allow_legacy_root: bool) -> Result<(), Ap
         return Err(AppError::InvalidInput);
     }
 
-    if path.chars().any(|character| {
-        character.is_control() || matches!(character, '*' | '?' | ';')
-    }) || path.contains("..")
+    if path
+        .chars()
+        .any(|character| character.is_control() || matches!(character, '*' | '?' | ';'))
+        || path.contains("..")
     {
         return Err(AppError::InvalidInput);
     }

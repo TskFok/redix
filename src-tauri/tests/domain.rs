@@ -2,15 +2,14 @@ mod support;
 
 use redix_lib::{
     domain::{
-        command_catalog, is_sensitive_command, parse_info_sections, parse_keyspace_line,
-        normalize_json_path, validate_json_array_append, validate_json_path,
-        AcknowledgeStreamPendingEntriesInput, AppendJsonArrayInput, AppSettings,
-        ConnectionProfile, CreateKeyInput, DeleteKeysInput, ExportedKey, GetJsonPathInput,
-        GetSlowLogsInput, GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput,
-        ImportKeysInput, KeyInfoInput, ModuleCapabilities, ModuleSummary, PubSubTopic,
-        QueryLibraryItemInput, RedisValue, RenameKeyInput, ScanKeysInput,
-        SelectDatabaseInput, SetJsonPathInput, StartProfilerInput, StartPubSubInput,
-        StopProfilerInput, StreamEntry, StreamField,
+        command_catalog, is_sensitive_command, normalize_json_path, parse_info_sections,
+        parse_keyspace_line, validate_json_array_append, validate_json_path,
+        AcknowledgeStreamPendingEntriesInput, AppSettings, AppendJsonArrayInput, ConnectionProfile,
+        CreateKeyInput, DeleteKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
+        GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput,
+        ModuleCapabilities, ModuleSummary, PubSubTopic, QueryLibraryItemInput, RedisValue,
+        RenameKeyInput, ScanKeysInput, SelectDatabaseInput, SetJsonPathInput, StartProfilerInput,
+        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -298,7 +297,10 @@ fn json_path_contract_enforces_trimmed_identifiers_and_utf8_byte_limit() {
 
     let oversized_path = format!("$.{}", "你".repeat(171));
     assert!(oversized_path.len() > 512);
-    assert_eq!(validate_json_path(&oversized_path, false), Err(AppError::InvalidInput));
+    assert_eq!(
+        validate_json_path(&oversized_path, false),
+        Err(AppError::InvalidInput)
+    );
 }
 
 #[test]
