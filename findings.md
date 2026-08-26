@@ -405,3 +405,34 @@
 - 连接卡片区分 TLS 开关、已保存证书和“需重新录入”的导入名称提示；表单仅接受证书/私钥 PEM 标记，客户端证书和私钥必须成对提交。
 - 全量 Rust/前端/构建/非 Cloud/格式/差异检查均通过。当前没有 `REDIX_TEST_REDIS_TLS_URL` 或证书环境变量，因此真实 TLS Redis 集成保持未执行，不把无网络 client 构造测试等同于网络验收。
 - 残余产品限制：不支持独立 `tlsServername`、证书文件路径、SSH、Sentinel、Cluster、Cloud 和 SQL；后续若需要这些能力应单独设计底层连接与安全边界。
+
+## 2026-08-24 当前会话补充勘察
+
+- 当前仓库为 `/Users/ushopal/workspace/myself/redix` 的 `main` 分支，工作区干净；参考仓库 `/Users/ushopal/workspace/myself/RedisInsight` 也处于 `main`，本轮默认继续在当前分支工作，不创建分支。
+- 当前 Redix 已有连接管理、Browser（SCAN 分页、五类基础类型、批量操作、导入导出、Stream/JSON/Consumer Group）、Workbench、Database/Instance、Database Analysis、Slow Log、Pub/Sub、Profiler、Query Library、Settings、连接配置导入导出和 Standalone TLS。
+- 当前 `README.md` 仍写着“不支持 TLS”，与最近实现和 `progress.md` 的交付记录矛盾，属于需要同步修正文档的已知缺口。
+- 目标 RedisInsight 的本地能力面仍包含 SSH 隧道、Sentinel 自动发现、Cluster 拓扑/分片路由、RedisJSON 深度编辑、RedisSearch 索引与查询、Vector Search、Array、TimeSeries/Geo/Bloom 等模块专用界面、CLI 独立会话，以及更丰富的 Workbench 编辑器/结果视图。
+- 本轮总体目标应按依赖拆分为：连接与拓扑（TLS/SSH/Sentinel/Cluster）、模块能力（Search/Query/JSON/Vector/Array/其他模块）、Workbench/CLI 高级体验、文档与范围回归；Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry、远程插件和 SQL 永久排除。
+- 由于 SSH、Sentinel、Cluster 会改变 profile、连接生命周期、命令路由和错误模型，模块编辑器依赖模块探测/版本兼容，不能把所有差异一次性塞进现有 Standalone service；推荐按批次设计和验收，每批坚持 typed IPC、TDD、固定错误码、真实 Redis 流程默认 ignored。
+- 目标 UI 页面顶层仍有 `autodiscover-sentinel`、`redis-cluster`、`cluster-details`、`redis-stack`、`vector-search`、`analytics`、`cli`/Workbench 相关入口；目标 API 顶层包含 `cli`、`bulk-actions`、`redis-sentinel`、`ssh`、`cluster-monitor`、`database-analysis`、`database-import`、`workbench` 等模块。
+- 目标 README 的本地核心亮点明确包含 JSON、Vector Set、Array、Search/Query 索引与结果可视化、Bulk actions、Profiler、Slow Log、Pub/Sub、Workbench 智能补全/复杂结果；其中 Cloud/Azure、RDI、AI、Telemetry、插件属于排除项，不能仅按 README 总功能字面照搬。
+- 当前 Redix 的 Rust 连接 profile 已包含 TLS 元数据，Tauri 注册了连接导入导出、TLS、Database Analysis、Observability、Workbench 等命令；当前缺口不是“所有已有功能从零实现”，而是剩余本地能力的优先级与依赖落地。
+- 当前 Redix 前端特性目录仍只有 `browser`、`connections`、`database`、`database-analysis`、`observability`、`query-library`、`settings`、`workbench`；没有独立的 module capability、Search/Query、Vector/Array、CLI、拓扑或 SSH feature。
+- 当前 Rust 业务目录只有基础 key/stream/workbench/database/observability/connection manager；没有 Sentinel/Cluster/SSH manager、模块探测服务或模块命令领域模型。
+- 目标 Browser key-details 目录对 Array、JSON、Vector Set、Search/Query 等拥有独立的详情组件与动作；目标 UI 还有 `vector-search`、`redis-stack`、`redis-cluster`、`autodiscover-sentinel`、`cluster-details` 页面，说明这些能力不是单一按钮可补齐，而是独立工作区/连接模型。
+
+## 2026-08-24 第一批实现计划勘察
+
+- 当前 JSON 已被当作 `RedisValue::Json { value: JsonValue }` 通过普通 `get_key`/`set_key` 根文档读写；`KeyEditor` 只有整份 JSON textarea，不支持 path 级读取、设置、删除或数组追加。
+- 当前 `RedisOperations` trait 和 `commands/browser.rs` 没有模块能力或 JSON path command；`RedisService` 可复用已有 multiplexed connection，但模块命令应在独立 `redis/json_ops.rs` 中封装并通过 typed IPC 暴露。
+- 当前前端 Browser 的连接/键竞态保护集中在 `BrowserPage` 与 `KeyDetails` 的 request token；第一批 JSON path UI 应复用 connection/key token，不直接改写全局 `browserState`。
+- 参考 RedisInsight 的 ReJSON service 主要使用 `JSON.GET`、`JSON.SET`、`JSON.ARRAPPEND`、`JSON.DEL`，并根据 JSON 版本处理 legacy path；第一版 Redix 可先以 RedisJSON 2.x `$`/`.` 兼容路径为主，未安装模块时稳定返回 `UNSUPPORTED_DATA_TYPE`，不复制目标项目的 Electron/NestJS/Monaco 实现。
+- 第一批计划应独立覆盖：模块 capability snapshot/parser、JSON path DTO/校验、Redis service/command/bridge、Browser JSON path editor，以及 ignored Redis Stack 集成流程和 README/范围同步；Search/Vector/Array/拓扑后续另立实现计划。
+
+## 2026-08-26 Task 5 文档与验证补充
+
+- `README.md` 已与当前实现对齐：明确当前支持 Standalone TCP/TLS，补充 RedisJSON path 级读取、保存、删除、数组追加，以及基于 `MODULE LIST` 的连接级能力探测和 session 缓存。
+- `docs/non-cloud-scope.md` 已补齐当前允许项：连接导入导出、Standalone TLS、自定义 CA/mTLS、RedisJSON path 第一批和模块能力降级；排除项继续明确 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry、远程插件、云登录/账户和 SQL。
+- `REDIX_TEST_REDIS_STACK_URL` 在 2026-08-26 的本机环境中未设置，因此 Redis Stack ignored 集成流程只能记为未执行；这属于环境缺口，不得外推为真实 Redis Stack 网络通过。
+- `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 失败点位于 `src-tauri/src/domain/json_path.rs` 与 `src-tauri/tests/domain.rs` 的格式化差异，属于既有业务文件格式问题，不是文档改动或环境错误；按本任务边界未直接修复。
+- `npm run test:frontend` 的输出仍包含两条 jsdom `Not implemented: navigation to another Document`，但退出码为 0、测试全绿，应归类为既有测试环境噪音而非回归。

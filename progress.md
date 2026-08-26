@@ -328,3 +328,41 @@
 - 最终验收：Rust 60 lib + 5 commands + 7 database analysis + 21 domain + 15 persistence 通过，5 Redis integration ignored；前端 14 文件/124 测试、`npm run build`、`npm run check:non-cloud`、`cargo fmt --check`、`git diff --check` 均通过。
 - `REDIX_TEST_REDIS_URL`、`REDIX_TEST_REDIS_TLS_URL` 和证书环境变量均未配置，未声称真实 Redis/TLS 网络集成通过；详细报告见 `.superpowers/sdd/2026-08-24-connection-import-export-standalone-tls/final-report.md`。
 - 提交：`a460adc`、`4d76b34`、`30de509`、`1ff8f79`、`1c37416`、`bb5dc1d`、`faf635d`；最终验证记录随本轮收尾提交。
+
+## Session: 2026-08-24 — 当前项目与 RedisInsight 全量差异续作
+
+- **Status:** discovery
+- 已确认当前仓库与参考仓库均在 `main`，当前工作区干净；本轮不创建分支。
+- 已恢复既有 `task_plan.md`、`findings.md`、`progress.md`，确认此前批次已交付至连接导入导出和 Standalone TLS。
+- 已发现当前 `README.md` 的 TLS 边界描述落后于代码，需要在本轮功能补齐后同步文档。
+- 初步差异仍集中在 SSH、Sentinel/Cluster 拓扑、Redis 模块专用编辑器、Search/Query、Vector/Array、CLI/Workbench 高级体验；Redis Cloud 及其相关云/AI/Telemetry/远程插件能力继续排除。
+- 记录：首次追加规划补丁因旧 findings 末尾上下文不匹配而失败，随后先读取真实文件尾部，再用精确上下文成功追加；未改动业务源码。
+- 记录：一次只读命令引用了不存在的 `src/features/browser/Browser.tsx`，仅返回路径错误；后续改用 `rg --files src/features/browser` 定位真实入口，未改动业务源码。
+- 用户已确认按“模块基础 → JSON 深层编辑 → Search/Query → Vector/Array → Workbench/CLI → SSH/Sentinel/Cluster”顺序推进。
+- 已写入并自审设计文档 `docs/superpowers/specs/2026-08-24-redisinsight-non-cloud-parity-modules-topology-design.md`，明确 capability snapshot、typed IPC、RESP2/RESP3、固定上限、错误降级、TDD 和 Cloud/SQL 排除边界。
+- 设计文档已以简体中文提交：`b005515`（`设计 RedisInsight 非 Cloud 功能补全方案`）。
+- 当前等待用户审阅设计文档；尚未编写实现计划，也尚未修改业务源码。
+
+## Session: 2026-08-24 — RedisJSON 第一批实施计划
+
+- **Status:** plan_ready
+- 用户确认设计方向后，已使用 writing-plans skill 将第一批拆为领域协议、RedisJSON 能力服务、typed IPC、Browser 路径编辑器和完整验证五个任务。
+- 实施计划已写入 `docs/superpowers/plans/2026-08-24-redisjson-module-capabilities.md`，并完成占位项扫描、类型/边界自审和 `git diff --check`。
+- 计划第二段追加补丁第一次因代码块中两行未带补丁前缀失败，文件保持第一段；随后按尾部上下文分段追加成功，未改动业务源码。
+- 尚未开始 TDD 实现，等待用户选择 Subagent-Driven 或 Inline Execution。
+
+## Session: 2026-08-26 — Task 5 范围文档与第一批完整验证
+
+- **Status:** complete
+- 已按简报只更新 `README.md`、`docs/non-cloud-scope.md`、`task_plan.md`、`findings.md`、`progress.md` 和任务报告；未改业务实现文件，也未改 `.superpowers/sdd` ledger。
+- 已修正 README 的 TLS 过时描述，补充 Standalone TCP/TLS、RedisJSON path 级读取/保存/删除/数组追加、`MODULE LIST` 模块能力探测、session 缓存和降级行为。
+- 已补齐 `docs/non-cloud-scope.md` 的允许项与排除项，并写明 Redis Stack ignored 集成使用 `REDIX_TEST_REDIS_STACK_URL`；未配置时必须记录为 skip。
+- 验证结果：
+  - `npm run test:frontend`：15 个测试文件、136 个测试通过；输出两条 jsdom `Not implemented: navigation to another Document`，未导致失败。
+  - `npm run build`：TypeScript 构建与 Vite 生产打包通过，输出 `63 modules transformed`。
+  - `npm run check:non-cloud`：通过，确认仅扫描 `src/`、`src-tauri/src/` 和 `package.json`。
+  - `npm run test:rust`：66 lib + 5 commands + 7 database_analysis + 27 domain + 15 persistence 通过；6 个 Redis integration 仍为 ignored。
+  - `cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`：失败，差异位于 `src-tauri/src/domain/json_path.rs` 与 `src-tauri/tests/domain.rs` 的格式化。
+  - `git diff --check`：通过。
+- 额外环境检查：`REDIX_TEST_REDIS_STACK_URL` 未设置，因此 Redis Stack ignored 流程明确保持未执行，没有声称真实 Redis Stack 网络通过。
+- 详细证据已写入 `.superpowers/sdd/2026-08-24-redisjson-module-capabilities/task-5-report.md`；本轮最终提交为单个简体中文 commit。

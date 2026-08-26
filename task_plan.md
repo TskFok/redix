@@ -413,3 +413,58 @@ Phase 11：本地 Redis Stream Consumer Group（已完成）
 - 只支持 Standalone TCP/TLS；不实现 SSH 隧道、Sentinel、Cluster 拓扑或 Redis Cloud。
 - 连接导出默认只导出可迁移的 profile 元数据与 TLS 开关/校验配置，绝不写入密码、CA PEM、客户端证书或私钥；导入后敏感材料需在当前设备重新录入。
 - 不使用 SQL；任何后续遍历均不得在循环中查询 SQL。
+
+## Phase 14：当前项目与 RedisInsight 的剩余非 Cloud 差异补全（2026-08-24）
+
+### Goal
+
+在已有 Standalone、观察、分析、连接导入导出和 TLS 能力之上，继续对照 `/Users/ushopal/workspace/myself/RedisInsight` 补齐可归属于本地 Redis 的缺失功能；Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry、远程插件和 SQL 不进入实现范围。
+
+### Status
+
+discovery：正在按连接拓扑、模块能力、Workbench/CLI 高级体验和文档一致性盘点剩余差异，待设计确认后进入分批实现。
+
+### Initial checklist
+
+- [x] 恢复既有计划、发现、进度和已交付功能清单
+- [x] 读取当前/目标仓库状态、入口、页面和 API 模块分布
+- [x] 记录 README 与当前 TLS 实现不一致的问题
+- [x] 精读剩余本地能力的目标数据流、命令和 UI 验收边界
+- [x] 与用户确认本轮分批设计和优先级
+- [x] 编写并自审设计文档
+- [x] 用户审阅设计文档
+- [x] 编写并自审第一批实现计划
+- [ ] 选择执行方式
+- [ ] 按 TDD 分批实现并验证
+
+### Scope boundaries
+
+- 不实现 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry、远程插件、云登录/云账户/云端点/云数据库发现和 SQL。
+- 默认继续在当前 `main` 分支修改，不创建分支；提交信息使用简体中文。
+- 保持 Redis 访问为 typed IPC 和固定错误映射；不在循环遍历中查询 SQL，不引入 SQL 持久化。
+
+### Artifacts
+
+- 设计文档：`docs/superpowers/specs/2026-08-24-redisinsight-non-cloud-parity-modules-topology-design.md`
+- 第一批实施计划：`docs/superpowers/plans/2026-08-24-redisjson-module-capabilities.md`
+
+### Current status
+
+plan_ready：设计文档已获用户确认并提交；第一批 RedisJSON/模块能力实施计划已完成自审，等待用户选择执行方式。
+
+### Discovery errors
+
+| Error | Attempt | Resolution |
+|-------|---------|------------|
+| 首次追加规划补丁的旧 findings 上下文不匹配 | 1 | 先读取真实文件尾部，再用精确上下文追加，未改动业务源码 |
+| 只读命令引用不存在的 `src/features/browser/Browser.tsx` | 1 | 后续按实际文件清单定位 Browser 入口，未改动业务源码 |
+
+### Task 5：范围文档与第一批完整验证（2026-08-26）
+
+- [x] 修正 `README.md` 中过时的 TLS 排除描述，补充 Standalone TCP/TLS、RedisJSON path 读写/删除/数组追加、`MODULE LIST` 能力探测与降级说明
+- [x] 补齐 `docs/non-cloud-scope.md` 的允许项/排除项，记录 Redis Stack ignored 集成环境变量 `REDIX_TEST_REDIS_STACK_URL` 与未配置时必须记为 skip
+- [x] 运行 `npm run test:frontend`、`npm run build`、`npm run check:non-cloud`、`npm run test:rust`、`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`、`git diff --check`
+- [x] 明确记录 `REDIX_TEST_REDIS_STACK_URL` 未配置，因此 Redis Stack ignored 流程保持未执行，不声称真实网络通过
+- [x] 写入 `.superpowers/sdd/2026-08-24-redisjson-module-capabilities/task-5-report.md`
+- [x] 创建简体中文提交
+- **Status:** complete（本任务只更新范围/记录文档与验证证据；未修改业务实现文件。`cargo fmt --check` 因既有业务文件格式差异失败，已如实记录）

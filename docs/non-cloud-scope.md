@@ -4,13 +4,16 @@
 
 ## 允许项
 
-- 本地 Redis Standalone TCP 连接和连接配置管理。
+- 本地 Redis Standalone TCP/TLS 连接和连接配置管理。
+- 连接配置导入导出；普通导出只包含可迁移 profile 元数据，不包含密码、CA PEM、客户端证书或私钥。
 - 使用系统钥匙串保存本地连接密码；前端 DTO 和连接列表不暴露密码。
+- Standalone TLS 的启用/关闭、服务端证书校验、自定义 CA 和 mTLS；TLS 材料继续保存在本机安全存储，不写普通 JSON 文档。
 - Browser 使用 `SCAN`、`MATCH`、`COUNT` 分页列出键，并读取键类型、TTL 和值。
 - Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新和校验后的本地 JSON 导入导出。
 - String、Hash、List、Set、Sorted Set、Stream 的基础读取、编辑、删除和 TTL 操作；Stream 单次读取最多 500 条记录。
 - Stream Consumer Group 支持创建/删除 Group、读取消费者与 Pending 列表、确认 Pending 条目和删除消费者；Pending 单次最多读取 500 条。
-- RedisJSON 根文档的读取和编辑；未安装 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE` 错误。
+- RedisJSON 根文档的读取和编辑，以及路径级 `JSON.GET`/`JSON.SET`/`JSON.DEL`/`JSON.ARRAPPEND`；未安装 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE` 错误。
+- 连接级 `MODULE LIST` 模块能力探测与 session 级缓存；探测失败或未检测到 RedisJSON 时，不阻断普通 Browser 流程，RedisJSON 路径编辑器稳定降级为不可用提示。
 - Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
 - Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
 - Database 工作区读取本地实例与数据库键空间概览，并支持安全的数据库切换；指标不可用时按字段降级，不暴露 Redis 原始错误。
@@ -25,13 +28,13 @@
 
 ## 明确排除项
 
-- Redis Cloud、Azure Managed Redis、RDI、AI、Telemetry 及其他云托管 Redis 产品。
+- Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry 及其他云托管 Redis 产品。
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
-- Cluster、Sentinel、拓扑发现或拓扑 fan-out、TLS、SSH、远程托管实例和云资源管理。
-- Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档和 Stream 基础能力除外）。
+- Cluster、Sentinel、拓扑发现或拓扑 fan-out、SSH、远程托管实例和云资源管理。
+- Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档/路径第一批与 Stream 基础能力除外）。
 - Stream 实时消费、阻塞式 `XREADGROUP`、`XCLAIM`/`XAUTOCLAIM`、Claim 流程、Profiler 日志文件/历史持久化/拓扑 fan-out 和超过 500 条记录的分页编辑。
-- Monaco、远程插件运行时和云端命令目录。
-- 其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
+- Monaco、远程插件、远程插件运行时、云端命令目录和 SQL。
+- Search/Query、Vector、Array、CLI 独立会话，以及其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
 
 ## 人工审查清单
 
@@ -51,9 +54,15 @@ npm run test:frontend
 npm run build
 npm run test:rust
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-CARGO_NET_OFFLINE=true cargo test --manifest-path src-tauri/Cargo.toml
-npm run tauri:build
 git diff --check
 ```
 
-带真实 Redis 的集成测试需要显式设置 `REDIX_TEST_REDIS_URL`，并使用测试文件要求的 ignored 参数；未启动 Redis 时不能把 ignored 或未执行写成通过。
+### Redis Stack 集成补充
+
+- RedisJSON 路径 ignored 集成测试使用可选环境变量 `REDIX_TEST_REDIS_STACK_URL`。
+- 若未配置该环境变量，必须把 Redis Stack 流程记录为 skip/未执行，不能写成真实网络通过。
+- 若已配置，执行：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration redis_stack_json_path_flow_when_redis_stack_is_available -- --ignored --nocapture
+```
