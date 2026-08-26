@@ -7,17 +7,19 @@ use crate::{
     domain::{
         normalize_key_type, parse_info_sections, parse_keyspace_line, validate_certificate_pem,
         validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput,
-        CommandDefinition, CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile,
-        CreateKeyInput, CreateStreamConsumerGroupInput, DatabaseAnalysisReport, DatabaseOverview,
-        DeleteKeysInput, DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput,
-        ExecuteCommandsInput, ExportKeysInput, ExportedKey, GetSlowLogsInput,
+        AppendJsonArrayInput, CommandDefinition, CommandExecutionItem, CommandResult,
+        ConnectionInfo, ConnectionProfile, CreateKeyInput, CreateStreamConsumerGroupInput,
+        DatabaseAnalysisReport, DatabaseOverview, DeleteJsonPathInput, DeleteKeysInput,
+        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, ExecuteCommandsInput,
+        ExportKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
         GetStreamConsumerGroupsInput, GetStreamConsumersInput, GetStreamPendingEntriesInput,
-        HashEntry, ImportKeysInput, InstanceDetails, InstanceOverview, KeyInfo, KeyInfoInput,
-        KeySummary, KeyValue, ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue,
-        RenameKeyInput, ScanKeysInput, ScanPage, SelectDatabaseInput, SetKeyInput, SetKeyTtlInput,
-        SlowLogConfig, SlowLogEntry, SortedSetEntry, StartProfilerInput, StartPubSubInput,
-        StopProfilerInput, StopPubSubInput, StreamConsumer, StreamConsumerGroup, StreamEntry,
-        StreamPendingEntry, UpdateSlowLogConfigInput,
+        HashEntry, ImportKeysInput, InstanceDetails, InstanceOverview, JsonMutationResult,
+        JsonPathValue, KeyInfo, KeyInfoInput, KeySummary, KeyValue, ModuleCapabilities,
+        ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue, RenameKeyInput,
+        ScanKeysInput, ScanPage, SelectDatabaseInput, SetJsonPathInput, SetKeyInput,
+        SetKeyTtlInput, SlowLogConfig, SlowLogEntry, SortedSetEntry, StartProfilerInput,
+        StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamConsumer, StreamConsumerGroup,
+        StreamEntry, StreamPendingEntry, UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -25,6 +27,10 @@ use crate::{
 
 use super::{
     database_analysis::{analyze_connection, load_instance_details, parse_module_list},
+    json_ops::{
+        append_json_array_path, delete_json_path_value, json_path_uses_legacy_syntax,
+        parse_module_capabilities, read_json_path, write_json_path,
+    },
     key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
     observability::{
         parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager, PubSubManager,
@@ -54,6 +60,20 @@ pub trait RedisOperations: Send + Sync {
     async fn publish_pub_sub(&self, input: PublishPubSubInput) -> Result<u64, AppError>;
     async fn scan_keys(&self, input: crate::domain::ScanKeysInput) -> Result<ScanPage, AppError>;
     async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError>;
+    async fn get_module_capabilities(
+        &self,
+        connection_id: &str,
+    ) -> Result<ModuleCapabilities, AppError>;
+    async fn get_json_path(&self, input: GetJsonPathInput) -> Result<JsonPathValue, AppError>;
+    async fn set_json_path(&self, input: SetJsonPathInput) -> Result<JsonMutationResult, AppError>;
+    async fn append_json_array(
+        &self,
+        input: AppendJsonArrayInput,
+    ) -> Result<JsonMutationResult, AppError>;
+    async fn delete_json_path(
+        &self,
+        input: DeleteJsonPathInput,
+    ) -> Result<JsonMutationResult, AppError>;
     async fn set_key(&self, input: SetKeyInput) -> Result<KeyValue, AppError>;
     async fn create_key(&self, input: CreateKeyInput) -> Result<KeyValue, AppError>;
     async fn rename_key(&self, input: RenameKeyInput) -> Result<KeyValue, AppError>;
@@ -124,6 +144,7 @@ pub struct RedisService {
     profiles: Arc<dyn ProfileRepository>,
     secrets: Arc<dyn SecretStore>,
     active: Arc<RwLock<HashMap<String, Client>>>,
+    capabilities: Arc<RwLock<HashMap<String, ModuleCapabilities>>>,
     pubsub: Arc<PubSubManager>,
     profiler: Arc<ProfilerManager>,
 }
@@ -134,6 +155,7 @@ impl RedisService {
             profiles,
             secrets,
             active: Arc::new(RwLock::new(HashMap::new())),
+            capabilities: Arc::new(RwLock::new(HashMap::new())),
             pubsub: Arc::new(PubSubManager::new()),
             profiler: Arc::new(ProfilerManager::new()),
         }
@@ -257,6 +279,7 @@ impl RedisOperations for RedisService {
         let info = Self::inspect_client(&client).await?;
         self.pubsub.cancel_connection(connection_id);
         self.profiler.cancel_connection(connection_id);
+        self.capabilities.write().await.remove(connection_id);
         self.active
             .write()
             .await
@@ -267,6 +290,7 @@ impl RedisOperations for RedisService {
     async fn close_connection(&self, connection_id: &str) -> Result<(), AppError> {
         self.pubsub.cancel_connection(connection_id);
         self.profiler.cancel_connection(connection_id);
+        self.capabilities.write().await.remove(connection_id);
         self.active.write().await.remove(connection_id);
         Ok(())
     }
@@ -420,6 +444,79 @@ impl RedisOperations for RedisService {
     async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError> {
         let mut connection = self.connection(connection_id).await?;
         read_key(&mut connection, key).await
+    }
+
+    async fn get_module_capabilities(
+        &self,
+        connection_id: &str,
+    ) -> Result<ModuleCapabilities, AppError> {
+        validate_connection_id(connection_id)?;
+        if let Some(capabilities) = self.capabilities.read().await.get(connection_id).cloned() {
+            return Ok(capabilities);
+        }
+
+        let mut connection = self.connection(connection_id).await?;
+        let reply = ::redis::cmd("MODULE")
+            .arg("LIST")
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(|_| AppError::CommandFailed)?;
+        let capabilities = parse_module_capabilities(reply);
+        self.capabilities
+            .write()
+            .await
+            .insert(connection_id.to_owned(), capabilities.clone());
+        Ok(capabilities)
+    }
+
+    async fn get_json_path(&self, input: GetJsonPathInput) -> Result<JsonPathValue, AppError> {
+        input.validate()?;
+        let capabilities = self.get_module_capabilities(&input.connection_id).await?;
+        if !capabilities.json_supported {
+            return Err(AppError::UnsupportedDataType);
+        }
+        let legacy = json_path_uses_legacy_syntax(&capabilities);
+        let mut connection = self.connection(&input.connection_id).await?;
+        read_json_path(&mut connection, input, legacy).await
+    }
+
+    async fn set_json_path(&self, input: SetJsonPathInput) -> Result<JsonMutationResult, AppError> {
+        input.validate()?;
+        let capabilities = self.get_module_capabilities(&input.connection_id).await?;
+        if !capabilities.json_supported {
+            return Err(AppError::UnsupportedDataType);
+        }
+        let legacy = json_path_uses_legacy_syntax(&capabilities);
+        let mut connection = self.connection(&input.connection_id).await?;
+        write_json_path(&mut connection, input, legacy).await
+    }
+
+    async fn append_json_array(
+        &self,
+        input: AppendJsonArrayInput,
+    ) -> Result<JsonMutationResult, AppError> {
+        input.validate()?;
+        let capabilities = self.get_module_capabilities(&input.connection_id).await?;
+        if !capabilities.json_supported {
+            return Err(AppError::UnsupportedDataType);
+        }
+        let legacy = json_path_uses_legacy_syntax(&capabilities);
+        let mut connection = self.connection(&input.connection_id).await?;
+        append_json_array_path(&mut connection, input, legacy).await
+    }
+
+    async fn delete_json_path(
+        &self,
+        input: DeleteJsonPathInput,
+    ) -> Result<JsonMutationResult, AppError> {
+        input.validate()?;
+        let capabilities = self.get_module_capabilities(&input.connection_id).await?;
+        if !capabilities.json_supported {
+            return Err(AppError::UnsupportedDataType);
+        }
+        let legacy = json_path_uses_legacy_syntax(&capabilities);
+        let mut connection = self.connection(&input.connection_id).await?;
+        delete_json_path_value(&mut connection, input, legacy).await
     }
 
     async fn set_key(&self, input: SetKeyInput) -> Result<KeyValue, AppError> {
@@ -781,6 +878,7 @@ impl RedisOperations for RedisService {
 
         self.pubsub.cancel_connection(&input.connection_id);
         self.profiler.cancel_connection(&input.connection_id);
+        self.capabilities.write().await.remove(&input.connection_id);
         self.active
             .write()
             .await
@@ -1396,7 +1494,7 @@ pub(crate) fn map_command_error(error: ::redis::RedisError) -> AppError {
     }
 }
 
-fn map_json_command_error(error: ::redis::RedisError) -> AppError {
+pub(crate) fn map_json_command_error(error: ::redis::RedisError) -> AppError {
     let unsupported = error.detail().is_some_and(|detail| {
         let detail = detail.to_ascii_lowercase();
         detail.contains("unknown command")
@@ -1417,7 +1515,8 @@ mod tests {
     use crate::{
         domain::{
             ConnectionProfile, GetSlowLogsInput, GetStreamConsumerGroupsInput,
-            GetStreamPendingEntriesInput, PublishPubSubInput, StopProfilerInput,
+            GetStreamPendingEntriesInput, ModuleCapabilities, ModuleSummary, PublishPubSubInput,
+            StopProfilerInput,
         },
         error::AppError,
         persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -1614,5 +1713,21 @@ mod tests {
             })
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn close_connection_removes_cached_module_capabilities() {
+        let service = RedisService::new(Arc::new(EmptyProfiles), Arc::new(EmptySecrets));
+        service.capabilities.write().await.insert(
+            "cached".into(),
+            ModuleCapabilities::from_modules(vec![ModuleSummary {
+                name: "RedisJSON".into(),
+                version: Some("2.0.0".into()),
+            }]),
+        );
+
+        service.close_connection("cached").await.unwrap();
+
+        assert!(!service.capabilities.read().await.contains_key("cached"));
     }
 }

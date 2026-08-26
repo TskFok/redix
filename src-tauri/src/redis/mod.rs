@@ -1,5 +1,6 @@
 mod connection_manager;
 mod database_analysis;
+mod json_ops;
 mod key_ops;
 mod observability;
 mod stream_groups;

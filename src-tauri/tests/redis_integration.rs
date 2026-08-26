@@ -6,14 +6,15 @@ use std::{
 
 use redix_lib::{
     domain::{
-        AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput, ConnectionProfile,
-        CreateKeyInput, CreateStreamConsumerGroupInput, DeleteKeysInput,
-        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, ExecuteCommandsInput,
-        ExportKeysInput, ExportedKey, GetSlowLogsInput, GetStreamConsumerGroupsInput,
-        GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
-        KeyInfoInput, KeyValue, PublishPubSubInput, RedisValue, RenameKeyInput, ScanKeysInput,
-        SelectDatabaseInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry, StopPubSubInput,
-        StreamEntry, StreamField, UpdateSlowLogConfigInput,
+        AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput, AppendJsonArrayInput,
+        ConnectionProfile, CreateKeyInput, CreateStreamConsumerGroupInput, DeleteJsonPathInput,
+        DeleteKeysInput, DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput,
+        ExecuteCommandsInput, ExportKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
+        GetStreamConsumerGroupsInput, GetStreamConsumersInput, GetStreamPendingEntriesInput,
+        HashEntry, ImportKeysInput, KeyInfoInput, KeyValue, PublishPubSubInput, RedisValue,
+        RenameKeyInput, ScanKeysInput, SelectDatabaseInput, SetJsonPathInput, SetKeyInput,
+        SetKeyTtlInput, SortedSetEntry, StopPubSubInput, StreamEntry, StreamField,
+        UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -22,6 +23,164 @@ use redix_lib::{
 
 struct TestProfiles {
     profiles: Vec<ConnectionProfile>,
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "设置 REDIX_TEST_REDIS_STACK_URL 后用 cargo test -- --ignored --nocapture 运行"]
+async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
+    let Ok(url) = std::env::var("REDIX_TEST_REDIS_STACK_URL") else {
+        eprintln!("skipped: REDIX_TEST_REDIS_STACK_URL is not set");
+        return;
+    };
+    let (profile, password) = integration_profile(&url);
+    let secrets = TestSecrets::default();
+    if let Some(password) = password.as_deref() {
+        secrets
+            .write(
+                "integration",
+                &ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
+    }
+    let service = RedisService::new(
+        std::sync::Arc::new(TestProfiles {
+            profiles: vec![profile],
+        }),
+        std::sync::Arc::new(secrets),
+    );
+    service.open_connection("integration").await.unwrap();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after Unix epoch")
+        .as_nanos();
+    let key = format!("redix:json-path:{}:{timestamp}", std::process::id());
+
+    let flow = async {
+        let capabilities = service
+            .get_module_capabilities("integration")
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if !capabilities.json_supported {
+            eprintln!("skipped: RedisJSON module is not installed");
+            return Ok(());
+        }
+
+        let created = service
+            .set_json_path(SetJsonPathInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+                path: "$".into(),
+                value: serde_json::json!({
+                    "profile": {
+                        "name": "redix",
+                        "active": true
+                    },
+                    "items": [1, 2]
+                }),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if created.affected != 1 || created.key != key || created.ttl_ms != -1 {
+            return Err("JSON.SET root did not report the expected mutation".into());
+        }
+
+        let name = service
+            .get_json_path(GetJsonPathInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+                path: "$.profile.name".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if name.value != Some(serde_json::json!("redix")) {
+            return Err("JSON.GET nested path returned an unexpected value".into());
+        }
+
+        service
+            .set_json_path(SetJsonPathInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+                path: "$.profile.name".into(),
+                value: serde_json::json!("codex"),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        let appended = service
+            .append_json_array(AppendJsonArrayInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+                path: "$.items".into(),
+                values: vec![serde_json::json!(3), serde_json::json!(4)],
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if appended.new_length != Some(4) {
+            return Err("JSON.ARRAPPEND did not report the new array length".into());
+        }
+
+        let items = service
+            .get_json_path(GetJsonPathInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+                path: "$.items".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if items.value != Some(serde_json::json!([1, 2, 3, 4])) {
+            return Err("JSON.GET array path returned an unexpected value".into());
+        }
+
+        let deleted = service
+            .delete_json_path(DeleteJsonPathInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+                path: "$.profile.active".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if deleted.affected != 1 {
+            return Err("JSON.DEL did not report one deleted path".into());
+        }
+        let missing = service
+            .get_json_path(GetJsonPathInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+                path: "$.profile.active".into(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if missing.value.is_some() {
+            return Err("deleted JSON path is still readable".into());
+        }
+
+        Ok::<(), String>(())
+    }
+    .await;
+
+    let cleanup = async {
+        service
+            .delete_key("integration", &key)
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        service
+            .close_connection("integration")
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        Ok::<(), String>(())
+    }
+    .await;
+
+    match (flow, cleanup) {
+        (Ok(()), Ok(())) => {}
+        (Err(flow), Ok(())) => panic!("Redis Stack JSON path flow failed: {flow}"),
+        (Ok(()), Err(cleanup)) => panic!("Redis Stack JSON path cleanup failed: {cleanup}"),
+        (Err(flow), Err(cleanup)) => {
+            panic!("Redis Stack JSON path flow failed: {flow}; cleanup also failed: {cleanup}")
+        }
+    }
 }
 
 impl ProfileRepository for TestProfiles {
