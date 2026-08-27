@@ -338,7 +338,7 @@ export function KeyDetails({
       if (
         mutation.kind === "delete" &&
         isRootJsonPath(mutation.path) &&
-        result.affected > 0
+        (result.affected > 0 || result.ttl_ms === -2)
       ) {
         onDeleted(operation.key);
         return result;

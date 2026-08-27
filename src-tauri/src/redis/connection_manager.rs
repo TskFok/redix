@@ -265,7 +265,8 @@ impl RedisService {
         token: u64,
         capabilities: ModuleCapabilities,
     ) -> bool {
-        if self.capture_capability_token(connection_id).await != token {
+        let generations = self.generations.write().await;
+        if generations.get(connection_id).copied().unwrap_or(0) != token {
             return false;
         }
 
@@ -1554,6 +1555,8 @@ pub(crate) fn map_json_command_error(error: ::redis::RedisError) -> AppError {
 mod tests {
     use std::sync::Arc;
 
+    use tokio::sync::oneshot;
+
     use crate::{
         domain::{
             ConnectionProfile, GetSlowLogsInput, GetStreamConsumerGroupsInput,
@@ -1810,5 +1813,56 @@ mod tests {
             service.capabilities.read().await.get("cached"),
             Some(&capabilities)
         );
+    }
+
+    #[tokio::test]
+    async fn capability_session_bump_cannot_pass_a_blocked_cache_write() {
+        let service = Arc::new(RedisService::new(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+        ));
+        let capabilities = ModuleCapabilities::from_modules(vec![ModuleSummary {
+            name: "RedisJSON".into(),
+            version: Some("2.0.0".into()),
+        }]);
+        let token = service.capture_capability_token("cached").await;
+        let capabilities_guard = service.capabilities.write().await;
+        let initial_generation_guard = service.generations.write().await;
+
+        let cache_service = Arc::clone(&service);
+        let cache_capabilities = capabilities.clone();
+        let cache_task = tokio::spawn(async move {
+            cache_service
+                .cache_capabilities_if_current("cached", token, cache_capabilities)
+                .await
+        });
+
+        drop(initial_generation_guard);
+        tokio::task::yield_now().await;
+
+        let (bump_started_tx, mut bump_started_rx) = oneshot::channel();
+        let bump_service = Arc::clone(&service);
+        let bump_task = tokio::spawn(async move {
+            let next = bump_service.bump_connection_generation("cached").await;
+            let _ = bump_started_tx.send(());
+            next
+        });
+
+        tokio::task::yield_now().await;
+        tokio::task::yield_now().await;
+        assert!(
+            matches!(
+                bump_started_rx.try_recv(),
+                Err(oneshot::error::TryRecvError::Empty)
+            ),
+            "generation bump must wait until the pending capability cache write finishes"
+        );
+
+        drop(capabilities_guard);
+
+        assert!(cache_task.await.unwrap());
+        assert_eq!(bump_task.await.unwrap(), 1);
+        service.capabilities.write().await.remove("cached");
+        assert!(!service.capabilities.read().await.contains_key("cached"));
     }
 }

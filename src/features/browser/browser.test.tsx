@@ -1270,7 +1270,7 @@ describe("Redis Browser", () => {
     deleteJsonPathMock.mockResolvedValue({
       key: "profile:1",
       path: "$",
-      affected: 1,
+      affected: 0,
       new_length: null,
       ttl_ms: -2,
     });
@@ -1292,6 +1292,70 @@ describe("Redis Browser", () => {
     });
     expect(screen.queryByRole("button", { name: "profile:1" })).not.toBeInTheDocument();
     expect(screen.getByText("请选择一个键查看详情")).toBeInTheDocument();
+  });
+
+  it("根路径删除 affected 为 0 且 key 仍存在时刷新详情而不调用 onDeleted", async () => {
+    const jsonDetail: KeyValue = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
+    };
+    const refreshedDetail: KeyValue = {
+      ...jsonDetail,
+      ttl_ms: 5000,
+      value: { Json: { value: { name: "Alice", tags: ["redis", "json"] } } },
+    };
+    const onDeleted = vi.fn();
+    const onDetailChange = vi.fn();
+    getKeyMock.mockResolvedValue(refreshedDetail);
+    deleteJsonPathMock.mockResolvedValue({
+      key: "profile:1",
+      path: "$",
+      affected: 0,
+      new_length: null,
+      ttl_ms: 5000,
+    });
+
+    render(
+      <KeyDetails
+        connectionId="local"
+        detail={jsonDetail}
+        loading={false}
+        moduleProbe={{
+          status: "ready",
+          capabilities: {
+            modules: [{ name: "RedisJSON", version: "2.0.0" }],
+            json_supported: true,
+            json_version: "2.0.0",
+          },
+        }}
+        onDetailChange={onDetailChange}
+        onDeleted={onDeleted}
+      />,
+    );
+
+    await screen.findByRole("button", { name: "读取路径" });
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
+
+    await waitFor(() => {
+      expect(deleteJsonPathMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "profile:1",
+        path: "$",
+      });
+    });
+    await waitFor(() => {
+      expect(getKeyMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "profile:1",
+      });
+    });
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(onDetailChange).toHaveBeenCalledWith(refreshedDetail);
   });
 
   it("JSON mutation 已提交后 detail refresh 失败不显示失败态", async () => {
