@@ -180,20 +180,19 @@
 
 ## Session: 2026-08-27 — RedisJSON 最终审查修复波次
 
-- **Status:** in_review
+- **Status:** complete
 - 已读取 2026-08-24 的总设计、RedisJSON 实施计划、SDD 进度和最终 review diff，并按当前 `main` 分支直接修复，不创建分支、不派生子代理。
 - 已将 `src-tauri/src/domain/json_path.rs` 的路径校验改为白名单，允许根路径、对象成员链、单个非负整数下标及带转义的 bracket key，拒绝 union/slice/filter/recursive/function/operator 等多目标表达式；补齐 5 MiB、5 MiB+1、500、501 等边界测试。
 - 已在 `src-tauri/src/redis/json_ops.rs` 增加严格 `MODULE LIST` parser、`JsonPathValue.found` 合同、4 MiB/4 MiB+1 JSON.GET 边界、mutation 后 `PTTL` 失败降级为未知 TTL；保持 `database_analysis` 原 parser 不变。
-- 已在 `src-tauri/src/redis/connection_manager.rs` 增加 capability generation/token 保护并补充缓存测试；范围复审指出检查与写回之间仍有 TOCTOU 窗口，不能宣称竞态已完全关闭。
-- 已在 Browser 链路修复真实 JSON `null` 与 missing path 区分、根路径 delete 明确确认和 mutation 成功后 refresh 失败不覆写成功态；范围复审指出已不存在根键的 `affected = 0` 路径仍可能保留旧详情。
+- 已在 `src-tauri/src/redis/connection_manager.rs` 增加 capability generation/token 保护并补充真实锁交错测试，缓存写回持有 generation 写锁直到完成，关闭 TOCTOU 窗口。
+- 已在 Browser 链路修复真实 JSON `null` 与 missing path 区分、根路径 delete 明确确认、已不存在 key 的 `ttl_ms = -2` 清理详情，以及 mutation 成功后 refresh 失败不覆写成功态。
 - 本轮本地验收已完成：`cargo fmt --check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml --test domain`、`cargo test --manifest-path src-tauri/Cargo.toml --test commands`、`cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture`、`pnpm exec vitest run --config vitest.config.ts`、`pnpm run build`、`pnpm run check:non-cloud`、`git diff --check` 均通过；`REDIX_TEST_REDIS_STACK_URL` 未设置时 Redis Stack live 流程显式 skipped。
 
 ## Session: 2026-08-27 — RedisJSON 最终修复范围复审
 
-- **Status:** in_review
-- `dc4559c` 的统一修复波次已通过独立 Rust/前端/build/fmt/non-Cloud/diff 门禁，但范围复审判定原最终审查的 Finding 1、4、5、6、7、8 已关闭。
-- 仍有两个高优先级问题未关闭：根路径 delete 对已经不存在的 key（`affected = 0` / `ttl_ms = -2`）未必触发 `onDeleted` 清理详情；capability generation 检查与 cache 写回分属两次锁操作，close/reopen/select 可能在中间发生并污染新 session cache。
-- 因此第一批当前不可称为 merge-ready；Redis Stack live 流程仍因 `REDIX_TEST_REDIS_STACK_URL` 未配置而显式 skipped。
+- **Status:** complete
+- `a0484ea` 已关闭剩余两个高优先级问题：根路径 delete 在 `affected = 0` 且 `ttl_ms = -2` 时触发 `onDeleted`；capability cache 写回与 generation bump 通过锁序列化，避免旧 probe 污染新 session。
+- 专门代码复审 verdict 为 Ready，未发现新的 Critical/Important/Minor breakage；Redis Stack live 流程仍因 `REDIX_TEST_REDIS_STACK_URL` 未配置而显式 skipped。
 
 ## Session: 2026-08-24 — Task 13 第一批非 Cloud 能力交付
 
