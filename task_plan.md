@@ -186,7 +186,8 @@ Phase 11：本地 Redis Stream Consumer Group（已完成）
 - [x] 实现路径白名单、mutation TTL unknown、会话 token 缓存保护、前端根删除确认与删除清理
 - [x] 运行完整 Rust/前端/build/fmt/non-Cloud/SQL/diff 验收；Redis Stack 环境缺失时明确记为 skipped
 - [x] 提交中文 commit，并把修复/测试摘要写入内部 final fix report
-- **Status:** complete
+- [ ] 通过最终范围复审，关闭所有 Critical/Important finding
+- **Status:** in_review（根删除清理和 capability cache TOCTOU 仍有两个高优先级问题）
 - 计划、发现和进度文件持续记录本轮工作，不覆盖上一轮 MVP 记录。
 
 ## Phase 7：Browser 能力扩展（2026-08-18）
