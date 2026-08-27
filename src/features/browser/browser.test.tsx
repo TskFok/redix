@@ -124,6 +124,7 @@ describe("Redis Browser", () => {
     getJsonPathMock.mockResolvedValue({
       key: "profile:1",
       path: "$",
+      found: true,
       value: { name: "Alice" },
       ttl_ms: -1,
     });
@@ -1211,6 +1212,134 @@ describe("Redis Browser", () => {
         JSON.stringify({ name: "Bob", tags: ["redis"] }, null, 2),
       );
     });
+  });
+
+  it("根路径删除需要单独确认，取消时不调用 deleteJsonPath", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    const jsonSummary = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      size: 26,
+    };
+    const jsonDetail: KeyValue = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
+    };
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [jsonSummary],
+      has_more: false,
+    });
+    getKeyMock.mockResolvedValue(jsonDetail);
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "profile:1" }));
+    await screen.findByRole("button", { name: "读取路径" });
+
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
+
+    expect(confirm).toHaveBeenCalledWith("确定删除整个 JSON 键“profile:1”吗？");
+    expect(deleteJsonPathMock).not.toHaveBeenCalled();
+  });
+
+  it("根路径删除成功且键已不存在时清理详情而不是保留旧 key", async () => {
+    const jsonSummary = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      size: 26,
+    };
+    const jsonDetail: KeyValue = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
+    };
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [jsonSummary],
+      has_more: false,
+    });
+    getKeyMock.mockResolvedValueOnce(jsonDetail);
+    deleteJsonPathMock.mockResolvedValue({
+      key: "profile:1",
+      path: "$",
+      affected: 1,
+      new_length: null,
+      ttl_ms: -2,
+    });
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "profile:1" }));
+    await screen.findByRole("button", { name: "读取路径" });
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
+
+    await waitFor(() => {
+      expect(deleteJsonPathMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "profile:1",
+        path: "$",
+      });
+    });
+    expect(screen.queryByRole("button", { name: "profile:1" })).not.toBeInTheDocument();
+    expect(screen.getByText("请选择一个键查看详情")).toBeInTheDocument();
+  });
+
+  it("JSON mutation 已提交后 detail refresh 失败不显示失败态", async () => {
+    const jsonSummary = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      size: 26,
+    };
+    const jsonDetail: KeyValue = {
+      key: "profile:1",
+      key_type: "ReJSON-RL",
+      ttl_ms: -1,
+      value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
+    };
+    scanKeysMock.mockResolvedValue({
+      cursor: 0,
+      keys: [jsonSummary],
+      has_more: false,
+    });
+    getKeyMock
+      .mockResolvedValueOnce(jsonDetail)
+      .mockRejectedValueOnce({ code: "COMMAND_FAILED", message: "refresh failed" });
+
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "profile:1" }));
+    await screen.findByRole("button", { name: "读取路径" });
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$.name" },
+    });
+    fireEvent.change(screen.getByLabelText("路径 JSON 值"), {
+      target: { value: "\"Bob\"" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "保存路径" }));
+
+    await waitFor(() => {
+      expect(setJsonPathMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "profile:1",
+        path: "$.name",
+        value: "Bob",
+      });
+    });
+    await waitFor(() => {
+      expect(getKeyMock).toHaveBeenCalledTimes(2);
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存路径" })).toBeEnabled();
   });
 
   it("JSON Path 读取失败时展示稳定映射文案", async () => {

@@ -178,6 +178,16 @@
 - 计划覆盖 typed DTO/IPC、固定错误码、SCAN 游标语义、原生 file input/Blob 导入导出、数据库切换回滚、敏感命令过滤、设置迁移、导航和回归测试。
 - 已完成跨计划自审：四个子计划的文件地图、任务依赖、RED/GREEN/验证命令、中文提交信息和 Cloud 排除边界已对齐；待提交计划文档后交接执行。
 
+## Session: 2026-08-27 — RedisJSON 最终审查修复波次
+
+- **Status:** complete
+- 已读取 2026-08-24 的总设计、RedisJSON 实施计划、SDD 进度和最终 review diff，并按当前 `main` 分支直接修复，不创建分支、不派生子代理。
+- 已将 `src-tauri/src/domain/json_path.rs` 的路径校验改为白名单，允许根路径、对象成员链、单个非负整数下标及带转义的 bracket key，拒绝 union/slice/filter/recursive/function/operator 等多目标表达式；补齐 5 MiB、5 MiB+1、500、501 等边界测试。
+- 已在 `src-tauri/src/redis/json_ops.rs` 增加严格 `MODULE LIST` parser、`JsonPathValue.found` 合同、4 MiB/4 MiB+1 JSON.GET 边界、mutation 后 `PTTL` 失败降级为未知 TTL；保持 `database_analysis` 原 parser 不变。
+- 已在 `src-tauri/src/redis/connection_manager.rs` 增加 capability generation/token 保护，并补充竞态缓存测试，确保 close/reopen/select 后旧 probe 不污染新会话。
+- 已在 Browser 链路修复：真实 JSON `null` 与 missing path 区分、根路径 delete 明确确认、根删除成功后立即清理详情、mutation 成功后 refresh 失败不覆写成功态。
+- 本轮本地验收已完成：`cargo fmt --check --manifest-path src-tauri/Cargo.toml`、`cargo test --manifest-path src-tauri/Cargo.toml --test domain`、`cargo test --manifest-path src-tauri/Cargo.toml --test commands`、`cargo test --manifest-path src-tauri/Cargo.toml --lib -- --nocapture`、`pnpm exec vitest run --config vitest.config.ts`、`pnpm run build`、`pnpm run check:non-cloud`、`git diff --check` 均通过；`REDIX_TEST_REDIS_STACK_URL` 未设置时 Redis Stack live 流程显式 skipped。
+
 ## Session: 2026-08-24 — Task 13 第一批非 Cloud 能力交付
 
 - **Status:** complete（第一批）
@@ -374,3 +384,10 @@
 - 修复后验证：`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check`、domain 27/27、前端 15 文件/136 测试、`npm run build`、`npm run check:non-cloud`、`git diff --check` 全部通过。
 - `REDIX_TEST_REDIS_STACK_URL` 仍未配置，真实 Redis Stack ignored 流程保持未执行；前端仅有既有 jsdom navigation 噪音。
 - Task 5 fix commit：`ba531e4`（`修复 RedisJSON 路径文件格式`）。
+
+## Session: 2026-08-26 — RedisJSON 第一批最终审查收口
+
+- **Status:** in_progress
+- 已确认当前工作区为干净的 `main`，HEAD `00acdd7`，不创建分支、不派生代理；`.superpowers/sdd` 仍由目录级规则忽略。
+- 已恢复并完整读取根目录规划文件、设计文档和 520 行实施计划；计划原有 JSON path 黑名单合同将按最终审查升级为可证明单目标的白名单合同。
+- 当前正在逐段完整阅读 4852 行最终审查差异包并追踪现有 Rust/TypeScript 数据流；尚未修改生产代码。

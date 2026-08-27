@@ -145,6 +145,7 @@ pub struct RedisService {
     secrets: Arc<dyn SecretStore>,
     active: Arc<RwLock<HashMap<String, Client>>>,
     capabilities: Arc<RwLock<HashMap<String, ModuleCapabilities>>>,
+    generations: Arc<RwLock<HashMap<String, u64>>>,
     pubsub: Arc<PubSubManager>,
     profiler: Arc<ProfilerManager>,
 }
@@ -156,6 +157,7 @@ impl RedisService {
             secrets,
             active: Arc::new(RwLock::new(HashMap::new())),
             capabilities: Arc::new(RwLock::new(HashMap::new())),
+            generations: Arc::new(RwLock::new(HashMap::new())),
             pubsub: Arc::new(PubSubManager::new()),
             profiler: Arc::new(ProfilerManager::new()),
         }
@@ -247,6 +249,43 @@ impl RedisService {
             .find(|profile| profile.id == connection_id)
             .ok_or(AppError::InvalidConnection)
     }
+
+    async fn capture_capability_token(&self, connection_id: &str) -> u64 {
+        self.generations
+            .read()
+            .await
+            .get(connection_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    async fn cache_capabilities_if_current(
+        &self,
+        connection_id: &str,
+        token: u64,
+        capabilities: ModuleCapabilities,
+    ) -> bool {
+        if self.capture_capability_token(connection_id).await != token {
+            return false;
+        }
+
+        self.capabilities
+            .write()
+            .await
+            .insert(connection_id.to_owned(), capabilities);
+        true
+    }
+
+    async fn bump_connection_generation(&self, connection_id: &str) -> u64 {
+        let mut generations = self.generations.write().await;
+        let next = generations
+            .get(connection_id)
+            .copied()
+            .unwrap_or(0)
+            .wrapping_add(1);
+        generations.insert(connection_id.to_owned(), next);
+        next
+    }
 }
 
 impl RedisOperations for RedisService {
@@ -279,6 +318,7 @@ impl RedisOperations for RedisService {
         let info = Self::inspect_client(&client).await?;
         self.pubsub.cancel_connection(connection_id);
         self.profiler.cancel_connection(connection_id);
+        self.bump_connection_generation(connection_id).await;
         self.capabilities.write().await.remove(connection_id);
         self.active
             .write()
@@ -290,6 +330,7 @@ impl RedisOperations for RedisService {
     async fn close_connection(&self, connection_id: &str) -> Result<(), AppError> {
         self.pubsub.cancel_connection(connection_id);
         self.profiler.cancel_connection(connection_id);
+        self.bump_connection_generation(connection_id).await;
         self.capabilities.write().await.remove(connection_id);
         self.active.write().await.remove(connection_id);
         Ok(())
@@ -455,17 +496,17 @@ impl RedisOperations for RedisService {
             return Ok(capabilities);
         }
 
+        let token = self.capture_capability_token(connection_id).await;
         let mut connection = self.connection(connection_id).await?;
         let reply = ::redis::cmd("MODULE")
             .arg("LIST")
             .query_async::<Value>(&mut connection)
             .await
             .map_err(|_| AppError::CommandFailed)?;
-        let capabilities = parse_module_capabilities(reply);
-        self.capabilities
-            .write()
-            .await
-            .insert(connection_id.to_owned(), capabilities.clone());
+        let capabilities = parse_module_capabilities(reply)?;
+        let _ = self
+            .cache_capabilities_if_current(connection_id, token, capabilities.clone())
+            .await;
         Ok(capabilities)
     }
 
@@ -878,6 +919,7 @@ impl RedisOperations for RedisService {
 
         self.pubsub.cancel_connection(&input.connection_id);
         self.profiler.cancel_connection(&input.connection_id);
+        self.bump_connection_generation(&input.connection_id).await;
         self.capabilities.write().await.remove(&input.connection_id);
         self.active
             .write()
@@ -1729,5 +1771,44 @@ mod tests {
         service.close_connection("cached").await.unwrap();
 
         assert!(!service.capabilities.read().await.contains_key("cached"));
+    }
+
+    #[tokio::test]
+    async fn capability_cache_ignores_stale_probe_results_after_session_bump() {
+        let service = RedisService::new(Arc::new(EmptyProfiles), Arc::new(EmptySecrets));
+        let capabilities = ModuleCapabilities::from_modules(vec![ModuleSummary {
+            name: "RedisJSON".into(),
+            version: Some("2.0.0".into()),
+        }]);
+
+        let token = service.capture_capability_token("cached").await;
+        service.bump_connection_generation("cached").await;
+
+        assert!(
+            !service
+                .cache_capabilities_if_current("cached", token, capabilities.clone())
+                .await
+        );
+        assert!(!service.capabilities.read().await.contains_key("cached"));
+    }
+
+    #[tokio::test]
+    async fn capability_cache_reuses_snapshot_when_generation_is_unchanged() {
+        let service = RedisService::new(Arc::new(EmptyProfiles), Arc::new(EmptySecrets));
+        let capabilities = ModuleCapabilities::from_modules(vec![ModuleSummary {
+            name: "RedisJSON".into(),
+            version: Some("2.0.0".into()),
+        }]);
+
+        let token = service.capture_capability_token("cached").await;
+        assert!(
+            service
+                .cache_capabilities_if_current("cached", token, capabilities.clone())
+                .await
+        );
+        assert_eq!(
+            service.capabilities.read().await.get("cached"),
+            Some(&capabilities)
+        );
     }
 }

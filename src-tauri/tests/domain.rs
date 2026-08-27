@@ -248,6 +248,43 @@ fn json_path_inputs_reject_empty_or_unsafe_paths() {
     assert_eq!(validate_json_path("", false), Err(AppError::InvalidInput));
     assert_eq!(validate_json_path("$.user.name", false), Ok(()));
     assert_eq!(validate_json_path(".user.name", false), Ok(()));
+    assert_eq!(validate_json_path("$[0]", false), Ok(()));
+    assert_eq!(
+        validate_json_path("$.items[0]['display.name']", false),
+        Ok(())
+    );
+    assert_eq!(
+        validate_json_path("$.items[0]['quote\\'and\\\\slash']", false),
+        Ok(())
+    );
+    assert_eq!(
+        validate_json_path("$[0:2]", false),
+        Err(AppError::InvalidInput)
+    );
+    assert_eq!(
+        validate_json_path("$['a','b']", false),
+        Err(AppError::InvalidInput)
+    );
+    assert_eq!(
+        validate_json_path("$.items[*]", false),
+        Err(AppError::InvalidInput)
+    );
+    assert_eq!(
+        validate_json_path("$.items[?(@.active)]", false),
+        Err(AppError::InvalidInput)
+    );
+    assert_eq!(
+        validate_json_path("$..items", false),
+        Err(AppError::InvalidInput)
+    );
+    assert_eq!(
+        validate_json_path("$.items.length()", false),
+        Err(AppError::InvalidInput)
+    );
+    assert_eq!(
+        validate_json_path("$.items[-1]", false),
+        Err(AppError::InvalidInput)
+    );
 }
 
 #[test]
@@ -273,6 +310,23 @@ fn json_payload_and_array_append_limits_are_enforced() {
         validate_json_array_append(&vec![serde_json::Value::Null; 501]),
         Err(AppError::InvalidInput)
     );
+}
+
+#[test]
+fn json_payload_and_response_limits_accept_exact_boundary_and_reject_overflow() {
+    let exact_limit = SetJsonPathInput {
+        connection_id: "local".into(),
+        key: "doc".into(),
+        path: "$".into(),
+        value: serde_json::Value::String("x".repeat((5 * 1024 * 1024) - 2)),
+    };
+    assert_eq!(exact_limit.validate(), Ok(()));
+
+    let over_limit = SetJsonPathInput {
+        value: serde_json::Value::String("x".repeat((5 * 1024 * 1024) - 1)),
+        ..exact_limit
+    };
+    assert_eq!(over_limit.validate().unwrap_err(), AppError::InvalidInput);
 }
 
 #[test]
@@ -318,6 +372,24 @@ fn append_json_array_input_accepts_boundary_and_rejects_limit_overflow() {
         ..ok
     };
     assert_eq!(too_many.validate().unwrap_err(), AppError::InvalidInput);
+}
+
+#[test]
+fn append_json_array_enforces_aggregate_payload_boundary() {
+    let exact_limit = vec![
+        serde_json::Value::String("x".repeat((5 * 1024 * 1024) - 4)),
+        serde_json::Value::String(String::new()),
+    ];
+    assert_eq!(validate_json_array_append(&exact_limit), Ok(()));
+
+    let over_limit = vec![
+        serde_json::Value::String("x".repeat((5 * 1024 * 1024) - 3)),
+        serde_json::Value::String(String::new()),
+    ];
+    assert_eq!(
+        validate_json_array_append(&over_limit),
+        Err(AppError::InvalidInput)
+    );
 }
 
 #[test]

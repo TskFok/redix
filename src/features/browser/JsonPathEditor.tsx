@@ -16,6 +16,7 @@ interface JsonPathEditorProps {
   value: JsonValue;
   busy: boolean;
   error: string | null;
+  confirmRootDelete?: (path: string) => boolean;
   onRead(path: string): Promise<JsonPathValue>;
   onMutate(mutation: JsonPathMutation): Promise<JsonMutationResult>;
 }
@@ -28,6 +29,7 @@ export function JsonPathEditor({
   value,
   busy,
   error,
+  confirmRootDelete,
   onRead,
   onMutate,
 }: JsonPathEditorProps) {
@@ -78,6 +80,11 @@ export function JsonPathEditor({
     try {
       const result = await onRead(trimmedPath);
       if (mountedRef.current && readRequestRef.current === requestId) {
+        if (!result.found) {
+          setOperationError("未找到匹配的 JSON Path。");
+          setReadResult(null);
+          return;
+        }
         setReadResult(result);
       }
     } catch {
@@ -96,6 +103,9 @@ export function JsonPathEditor({
     if (kind === "delete") {
       setValidationError(null);
       setOperationError(null);
+      if (confirmRootDelete && !confirmRootDelete(trimmedPath)) {
+        return;
+      }
       try {
         await onMutate({ kind, path: trimmedPath });
       } catch {

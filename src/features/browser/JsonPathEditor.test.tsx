@@ -27,6 +27,7 @@ describe("JsonPathEditor", () => {
     const pathValue: JsonPathValue = {
       key: "profile:1",
       path: "$.profile.name",
+      found: true,
       value: "Alice",
       ttl_ms: 5000,
     };
@@ -59,6 +60,7 @@ describe("JsonPathEditor", () => {
     const onRead = vi.fn().mockResolvedValue({
       key: "profile:1",
       path: "$",
+      found: true,
       value: rootValue,
       ttl_ms: -1,
     } satisfies JsonPathValue);
@@ -221,6 +223,48 @@ describe("JsonPathEditor", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent("未找到匹配的 JSON Path。");
+  });
+
+  it("区分缺失路径和真实 JSON null", async () => {
+    const onRead = vi
+      .fn()
+      .mockResolvedValueOnce({
+        key: "profile:1",
+        path: "$.missing",
+        found: false,
+        value: null,
+        ttl_ms: -1,
+      } satisfies JsonPathValue)
+      .mockResolvedValueOnce({
+        key: "profile:1",
+        path: "$.optional",
+        found: true,
+        value: null,
+        ttl_ms: -1,
+      } satisfies JsonPathValue);
+
+    render(
+      <JsonPathEditor
+        value={rootValue}
+        busy={false}
+        error={null}
+        onRead={onRead}
+        onMutate={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$.missing" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "读取路径" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("未找到匹配的 JSON Path。");
+    expect(screen.queryByLabelText("路径读取结果")).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("JSON Path"), {
+      target: { value: "$.optional" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "读取路径" }));
+    expect(await screen.findByLabelText("路径读取结果")).toHaveTextContent("null");
   });
 
   it("busy 时禁用输入和按钮，异步错误显示在编辑器内", () => {

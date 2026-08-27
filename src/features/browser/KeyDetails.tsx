@@ -49,6 +49,11 @@ interface OperationContext {
   key: string;
 }
 
+function isRootJsonPath(path: string): boolean {
+  const normalized = path.trim();
+  return normalized === "$" || normalized === ".";
+}
+
 export function KeyDetails({
   connectionId,
   detail,
@@ -328,11 +333,23 @@ export function KeyDetails({
                 path: mutation.path,
               });
       if (!isCurrent(operation)) {
-        throw new Error("stale-json-path-mutation");
+        return result;
       }
-      const refreshed = await refreshDetail(operation);
-      if (refreshed && isCurrent(operation)) {
-        onDetailChange(refreshed);
+      if (
+        mutation.kind === "delete" &&
+        isRootJsonPath(mutation.path) &&
+        result.affected > 0
+      ) {
+        onDeleted(operation.key);
+        return result;
+      }
+      try {
+        const refreshed = await refreshDetail(operation);
+        if (refreshed && isCurrent(operation)) {
+          onDetailChange(refreshed);
+        }
+      } catch {
+        return result;
       }
       return result;
     } catch (caught) {
@@ -457,6 +474,10 @@ export function KeyDetails({
           value={detail.value.Json.value}
           busy={busy}
           error={jsonPathError}
+          confirmRootDelete={(path) =>
+            !isRootJsonPath(path)
+              || window.confirm(`确定删除整个 JSON 键“${detail.key}”吗？`)
+          }
           onRead={handleJsonPathRead}
           onMutate={handleJsonPathMutate}
         />

@@ -206,6 +206,7 @@ describe("Tauri IPC bridge", () => {
     const pathValue: JsonPathValue = {
       key: "doc",
       path: "$.user",
+      found: true,
       value: { name: "redix" },
       ttl_ms: -1,
     };

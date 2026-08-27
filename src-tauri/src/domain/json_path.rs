@@ -68,6 +68,7 @@ impl DeleteJsonPathInput {
 pub struct JsonPathValue {
     pub key: String,
     pub path: String,
+    pub found: bool,
     pub value: Option<serde_json::Value>,
     pub ttl_ms: i64,
 }
@@ -87,30 +88,39 @@ pub fn validate_json_path(path: &str, _allow_legacy_root: bool) -> Result<(), Ap
         return Err(AppError::InvalidInput);
     }
 
-    if !path.starts_with('$') && !path.starts_with('.') {
+    if path.chars().any(char::is_control) {
         return Err(AppError::InvalidInput);
     }
 
-    if path
-        .chars()
-        .any(|character| character.is_control() || matches!(character, '*' | '?' | ';'))
-        || path.contains("..")
-    {
-        return Err(AppError::InvalidInput);
+    if matches!(path, "$" | ".") {
+        return Ok(());
     }
 
-    Ok(())
+    let normalized = if path.starts_with('$') {
+        path.to_owned()
+    } else if path.starts_with('.') {
+        format!("${path}")
+    } else {
+        return Err(AppError::InvalidInput);
+    };
+
+    validate_normalized_json_path(&normalized)
 }
 
 pub fn normalize_json_path(path: &str, legacy: bool) -> Result<String, AppError> {
     validate_json_path(path, legacy)?;
 
     if legacy {
-        if path == "$" {
+        if matches!(path, "$" | ".") {
             return Ok(".".to_string());
         }
-        if let Some(stripped) = path.strip_prefix("$.") {
-            return Ok(format!(".{stripped}"));
+        if let Some(stripped) = path.strip_prefix('$') {
+            if stripped.starts_with('.') {
+                return Ok(stripped.to_string());
+            }
+            if stripped.starts_with('[') {
+                return Ok(format!(".{stripped}"));
+            }
         }
     }
 
@@ -149,4 +159,103 @@ fn validate_json_payload(value: &serde_json::Value) -> Result<(), AppError> {
     }
 
     Ok(())
+}
+
+fn validate_normalized_json_path(path: &str) -> Result<(), AppError> {
+    let bytes = path.as_bytes();
+    let mut cursor = 1;
+
+    while cursor < bytes.len() {
+        cursor = match bytes[cursor] {
+            b'.' => parse_member_chain(path, cursor + 1)?,
+            b'[' => parse_bracket_segment(path, cursor)?,
+            _ => return Err(AppError::InvalidInput),
+        };
+    }
+
+    Ok(())
+}
+
+fn parse_member_chain(path: &str, cursor: usize) -> Result<usize, AppError> {
+    let bytes = path.as_bytes();
+    if cursor >= bytes.len() {
+        return Err(AppError::InvalidInput);
+    }
+
+    if bytes[cursor] == b'[' {
+        return parse_bracket_segment(path, cursor);
+    }
+
+    if !is_identifier_start(bytes[cursor]) {
+        return Err(AppError::InvalidInput);
+    }
+
+    let mut next = cursor + 1;
+    while next < bytes.len() && is_identifier_continue(bytes[next]) {
+        next += 1;
+    }
+    Ok(next)
+}
+
+fn parse_bracket_segment(path: &str, cursor: usize) -> Result<usize, AppError> {
+    let bytes = path.as_bytes();
+    let Some(first) = bytes.get(cursor + 1).copied() else {
+        return Err(AppError::InvalidInput);
+    };
+
+    match first {
+        b'\'' | b'"' => parse_quoted_key(path, cursor + 2, first),
+        b'0'..=b'9' => parse_index_segment(path, cursor + 1),
+        _ => Err(AppError::InvalidInput),
+    }
+}
+
+fn parse_quoted_key(path: &str, mut cursor: usize, quote: u8) -> Result<usize, AppError> {
+    let bytes = path.as_bytes();
+
+    while let Some(byte) = bytes.get(cursor).copied() {
+        match byte {
+            b'\\' => {
+                let Some(escaped) = bytes.get(cursor + 1).copied() else {
+                    return Err(AppError::InvalidInput);
+                };
+                if escaped != quote && escaped != b'\\' {
+                    return Err(AppError::InvalidInput);
+                }
+                cursor += 2;
+            }
+            byte if byte == quote => {
+                if bytes.get(cursor + 1) != Some(&b']') {
+                    return Err(AppError::InvalidInput);
+                }
+                return Ok(cursor + 2);
+            }
+            _ => {
+                cursor += 1;
+            }
+        }
+    }
+
+    Err(AppError::InvalidInput)
+}
+
+fn parse_index_segment(path: &str, mut cursor: usize) -> Result<usize, AppError> {
+    let bytes = path.as_bytes();
+    while matches!(bytes.get(cursor), Some(b'0'..=b'9')) {
+        cursor += 1;
+    }
+
+    if bytes.get(cursor) != Some(&b']') {
+        return Err(AppError::InvalidInput);
+    }
+
+    Ok(cursor + 1)
+}
+
+fn is_identifier_start(byte: u8) -> bool {
+    matches!(byte, b'_' | b'$' | b'a'..=b'z' | b'A'..=b'Z') || byte >= 0x80
+}
+
+fn is_identifier_continue(byte: u8) -> bool {
+    is_identifier_start(byte) || byte.is_ascii_digit()
 }

@@ -22,6 +22,14 @@
 - 每个任务遵守 RED → GREEN → REFACTOR；每个任务完成后使用简体中文提交信息，默认在当前 `main` 分支修改。
 - 真实 Redis Stack 流程使用环境变量并保持 ignored；未配置环境变量时只记录未执行，不把无网络测试声称为通过。
 
+## Final Review Addendum
+
+- 最终审查修复波次将 `validate_json_path()` 从黑名单改为白名单：只允许根路径、对象成员链和单个非负整数数组下标，允许合理的 bracket key quoting/escaping；union、slice、filter、recursive descent、function/operator 和其他多目标表达式必须拒绝。
+- `JsonPathValue` 在 `value` 之外新增 `found: bool`，用来区分“路径不存在”和“路径存在但值为 JSON null”；前端保持对真实 `null` 的显示能力。
+- `MODULE LIST` 能力探测使用严格 `Result` parser：空数组是合法“无模块”，但 malformed top-level / malformed entry / missing name / RESP2 奇数字段都必须返回 `AppError::CommandFailed`，不能缓存成 no modules；`database_analysis` 现有宽松 parser 不变。
+- 成功的 RedisJSON mutation 后，`PTTL` 失败只降级为未知 TTL，不得把写入回滚成失败；前端 detail refresh 失败也不得覆盖已提交成功。
+- capability cache 在 `open_connection`、`close_connection`、`select_database` 时递增 session generation；probe 返回后只有 token 仍匹配当前连接会话时才允许写回缓存。
+
 ## 文件地图与责任
 
 第一批只修改下列业务文件和测试/文档文件，后续 Search/Vector/拓扑计划不得把状态继续塞入这些文件：

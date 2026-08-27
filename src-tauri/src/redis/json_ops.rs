@@ -8,22 +8,26 @@ use crate::{
     error::AppError,
 };
 
-use super::{
-    connection_manager::{map_command_error, map_json_command_error},
-    database_analysis::parse_module_list,
-};
+use super::connection_manager::{map_command_error, map_json_command_error};
 
 const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+const UNKNOWN_TTL_MS: i64 = -3;
 
-pub(crate) fn parse_module_capabilities(value: Value) -> ModuleCapabilities {
-    let modules = parse_module_list(value)
-        .into_iter()
-        .map(|mut module| {
-            module.version = normalize_module_version(module.version);
-            module
-        })
-        .collect();
-    ModuleCapabilities::from_modules(modules)
+#[derive(Debug, PartialEq)]
+pub(crate) struct ParsedJsonGetReply {
+    pub found: bool,
+    pub value: Option<serde_json::Value>,
+}
+
+pub(crate) fn parse_module_capabilities(value: Value) -> Result<ModuleCapabilities, AppError> {
+    let entries = module_entries(value)?;
+    let mut modules = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let mut module = parse_module_entry(entry)?;
+        module.version = normalize_module_version(module.version);
+        modules.push(module);
+    }
+    Ok(ModuleCapabilities::from_modules(modules))
 }
 
 pub(crate) fn json_path_uses_legacy_syntax(capabilities: &ModuleCapabilities) -> bool {
@@ -42,15 +46,16 @@ pub(crate) async fn read_json_path(
     let reply = ::redis::cmd("JSON.GET")
         .arg(&input.key)
         .arg(&path)
-        .query_async::<Option<String>>(connection)
+        .query_async::<Value>(connection)
         .await
         .map_err(map_json_command_error)?;
-    let value = parse_json_get_reply(reply, &path, legacy)?;
+    let parsed = parse_json_get_reply(reply, &path, legacy)?;
     let ttl_ms = read_ttl_ms(connection, &input.key).await?;
     Ok(JsonPathValue {
         key: input.key,
         path: input.path,
-        value,
+        found: parsed.found,
+        value: parsed.value,
         ttl_ms,
     })
 }
@@ -70,7 +75,7 @@ pub(crate) async fn write_json_path(
         .await
         .map_err(map_json_command_error)?;
     let affected = parse_json_set_reply(reply)?;
-    let ttl_ms = read_ttl_ms(connection, &input.key).await?;
+    let ttl_ms = read_mutation_ttl_ms(connection, &input.key).await;
     Ok(JsonMutationResult {
         key: input.key,
         path: input.path,
@@ -96,7 +101,7 @@ pub(crate) async fn append_json_array_path(
         .await
         .map_err(map_json_command_error)?;
     let (affected, new_length) = parse_json_array_append_reply(reply)?;
-    let ttl_ms = read_ttl_ms(connection, &input.key).await?;
+    let ttl_ms = read_mutation_ttl_ms(connection, &input.key).await;
     Ok(JsonMutationResult {
         key: input.key,
         path: input.path,
@@ -118,7 +123,7 @@ pub(crate) async fn delete_json_path_value(
         .query_async::<i64>(connection)
         .await
         .map_err(map_json_command_error)?;
-    let ttl_ms = read_ttl_ms(connection, &input.key).await?;
+    let ttl_ms = read_mutation_ttl_ms(connection, &input.key).await;
     Ok(JsonMutationResult {
         key: input.key,
         path: input.path,
@@ -129,27 +134,38 @@ pub(crate) async fn delete_json_path_value(
 }
 
 pub(crate) fn parse_json_get_reply(
-    reply: Option<String>,
+    reply: Value,
     path: &str,
     legacy: bool,
-) -> Result<Option<serde_json::Value>, AppError> {
-    let Some(raw) = reply else {
-        return Ok(None);
+) -> Result<ParsedJsonGetReply, AppError> {
+    let value = parse_json_get_reply_value(reply)?;
+    let Some(value) = value else {
+        return Ok(ParsedJsonGetReply {
+            found: false,
+            value: None,
+        });
     };
-    if raw.len() > MAX_JSON_RESPONSE_BYTES {
-        return Err(AppError::CommandFailed);
-    }
 
-    let value: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|_| AppError::CommandFailed)?;
     if legacy || !path.starts_with('$') {
-        return Ok(Some(value));
+        return Ok(ParsedJsonGetReply {
+            found: true,
+            value: Some(value),
+        });
     }
 
     match value {
-        serde_json::Value::Array(values) if values.is_empty() => Ok(None),
-        serde_json::Value::Array(mut values) if values.len() == 1 => Ok(Some(values.remove(0))),
-        value => Ok(Some(value)),
+        serde_json::Value::Array(values) if values.is_empty() => Ok(ParsedJsonGetReply {
+            found: false,
+            value: None,
+        }),
+        serde_json::Value::Array(mut values) if values.len() == 1 => Ok(ParsedJsonGetReply {
+            found: true,
+            value: Some(values.remove(0)),
+        }),
+        value => Ok(ParsedJsonGetReply {
+            found: true,
+            value: Some(value),
+        }),
     }
 }
 
@@ -204,6 +220,110 @@ async fn read_ttl_ms(connection: &mut MultiplexedConnection, key: &str) -> Resul
         .map_err(map_command_error)
 }
 
+async fn read_mutation_ttl_ms(connection: &mut MultiplexedConnection, key: &str) -> i64 {
+    resolve_mutation_ttl_ms(read_ttl_ms(connection, key).await)
+}
+
+fn resolve_mutation_ttl_ms(ttl: Result<i64, AppError>) -> i64 {
+    ttl.unwrap_or(UNKNOWN_TTL_MS)
+}
+
+fn parse_json_get_reply_value(reply: Value) -> Result<Option<serde_json::Value>, AppError> {
+    match reply {
+        Value::Nil => Ok(None),
+        Value::BulkString(bytes) => parse_json_bytes(bytes),
+        Value::SimpleString(text) => parse_json_text(text),
+        Value::Attribute { data, .. } => parse_json_get_reply_value(*data),
+        _ => Err(AppError::CommandFailed),
+    }
+}
+
+fn parse_json_bytes(bytes: Vec<u8>) -> Result<Option<serde_json::Value>, AppError> {
+    if bytes.len() > MAX_JSON_RESPONSE_BYTES {
+        return Err(AppError::CommandFailed);
+    }
+
+    let text = String::from_utf8(bytes).map_err(|_| AppError::CommandFailed)?;
+    parse_json_text(text)
+}
+
+fn parse_json_text(text: String) -> Result<Option<serde_json::Value>, AppError> {
+    if text.len() > MAX_JSON_RESPONSE_BYTES {
+        return Err(AppError::CommandFailed);
+    }
+
+    let value = serde_json::from_str(&text).map_err(|_| AppError::CommandFailed)?;
+    Ok(Some(value))
+}
+
+fn module_entries(value: Value) -> Result<Vec<Value>, AppError> {
+    match value {
+        Value::Array(entries) | Value::Set(entries) => Ok(entries),
+        Value::Attribute { data, .. } => module_entries(*data),
+        _ => Err(AppError::CommandFailed),
+    }
+}
+
+fn parse_module_entry(value: Value) -> Result<crate::domain::ModuleSummary, AppError> {
+    let mut name = None;
+    let mut version = None;
+
+    match value {
+        Value::Map(entries) => {
+            for (key, value) in entries {
+                update_module_field(&key, &value, &mut name, &mut version);
+            }
+        }
+        Value::Array(entries) => {
+            let mut pairs = entries.chunks_exact(2);
+            for pair in &mut pairs {
+                update_module_field(&pair[0], &pair[1], &mut name, &mut version);
+            }
+            if !pairs.remainder().is_empty() {
+                return Err(AppError::CommandFailed);
+            }
+        }
+        Value::Attribute { data, .. } => return parse_module_entry(*data),
+        _ => return Err(AppError::CommandFailed),
+    }
+
+    let Some(name) = name.filter(|name| !name.trim().is_empty()) else {
+        return Err(AppError::CommandFailed);
+    };
+
+    Ok(crate::domain::ModuleSummary {
+        name,
+        version: version.filter(|version| !version.trim().is_empty()),
+    })
+}
+
+fn update_module_field(
+    key: &Value,
+    value: &Value,
+    name: &mut Option<String>,
+    version: &mut Option<String>,
+) {
+    let Some(key) = value_as_string(key) else {
+        return;
+    };
+
+    match key.as_str() {
+        "name" => *name = value_as_string(value),
+        "ver" | "version" => *version = value_as_string(value),
+        _ => {}
+    }
+}
+
+fn value_as_string(value: &Value) -> Option<String> {
+    match value {
+        Value::BulkString(bytes) => String::from_utf8(bytes.clone()).ok(),
+        Value::SimpleString(text) => Some(text.clone()),
+        Value::Int(number) => Some(number.to_string()),
+        Value::Attribute { data, .. } => value_as_string(data),
+        _ => None,
+    }
+}
+
 fn normalize_module_version(version: Option<String>) -> Option<String> {
     let version = version?;
     let trimmed = version.trim();
@@ -249,8 +369,8 @@ mod tests {
             attributes: vec![],
         };
 
-        let resp2_capabilities = parse_module_capabilities(resp2);
-        let resp3_capabilities = parse_module_capabilities(resp3);
+        let resp2_capabilities = parse_module_capabilities(resp2).unwrap();
+        let resp3_capabilities = parse_module_capabilities(resp3).unwrap();
 
         assert!(resp2_capabilities.json_supported);
         assert_eq!(resp2_capabilities.json_version.as_deref(), Some("2.0.0"));
@@ -259,31 +379,107 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_json_get_root_reply_without_unwrapping_nested_arrays() {
-        let object_reply = Some(r#"[{"name":"redix"}]"#.to_owned());
-        let object = parse_json_get_reply(object_reply, "$", false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(object, serde_json::json!({"name": "redix"}));
+    fn empty_module_list_is_a_valid_no_modules_result() {
+        let capabilities = parse_module_capabilities(Value::Array(vec![])).unwrap();
 
-        let array_reply = Some(r#"[[{"name":"redix"}]]"#.to_owned());
-        let array = parse_json_get_reply(array_reply, "$", false)
-            .unwrap()
-            .unwrap();
-        assert_eq!(array, serde_json::json!([{"name": "redix"}]));
+        assert_eq!(capabilities.modules, vec![]);
+        assert!(!capabilities.json_supported);
+        assert_eq!(capabilities.json_version, None);
     }
 
     #[test]
-    fn missing_json_reply_is_not_reported_as_a_server_error() {
+    fn malformed_module_list_top_level_and_entries_map_to_command_failed() {
         assert_eq!(
-            parse_json_get_reply(None, "$.missing", false).unwrap(),
-            None
+            parse_module_capabilities(Value::BulkString(b"oops".to_vec())).unwrap_err(),
+            AppError::CommandFailed
+        );
+        assert_eq!(
+            parse_module_capabilities(Value::Array(vec![Value::BulkString(b"oops".to_vec())]))
+                .unwrap_err(),
+            AppError::CommandFailed
+        );
+        assert_eq!(
+            parse_module_capabilities(Value::Array(vec![Value::Array(vec![
+                Value::BulkString(b"name".to_vec()),
+                Value::BulkString(b"RedisJSON".to_vec()),
+                Value::BulkString(b"ver".to_vec()),
+            ])]))
+            .unwrap_err(),
+            AppError::CommandFailed
+        );
+    }
+
+    #[test]
+    fn module_list_entries_require_a_name_but_ignore_unknown_fields() {
+        let with_unknown_fields = Value::Array(vec![Value::Map(vec![
+            (
+                Value::SimpleString("name".into()),
+                Value::SimpleString("RedisJSON".into()),
+            ),
+            (Value::SimpleString("ver".into()), Value::Int(20000)),
+            (
+                Value::SimpleString("extra".into()),
+                Value::SimpleString("ignored".into()),
+            ),
+        ])]);
+        let capabilities = parse_module_capabilities(with_unknown_fields).unwrap();
+        assert!(capabilities.json_supported);
+
+        let missing_name = Value::Array(vec![Value::Map(vec![(
+            Value::SimpleString("ver".into()),
+            Value::Int(20000),
+        )])]);
+        assert_eq!(
+            parse_module_capabilities(missing_name).unwrap_err(),
+            AppError::CommandFailed
+        );
+    }
+
+    #[test]
+    fn normalizes_json_get_root_reply_without_unwrapping_nested_arrays() {
+        let object_reply = Value::BulkString(br#"[{"name":"redix"}]"#.to_vec());
+        let object = parse_json_get_reply(object_reply, "$", false)
+            .unwrap()
+            .value;
+        assert_eq!(object, Some(serde_json::json!({"name": "redix"})));
+
+        let array_reply = Value::BulkString(br#"[[{"name":"redix"}]]"#.to_vec());
+        let array = parse_json_get_reply(array_reply, "$", false).unwrap().value;
+        assert_eq!(array, Some(serde_json::json!([{"name": "redix"}])));
+    }
+
+    #[test]
+    fn json_get_distinguishes_missing_path_from_json_null() {
+        let missing = parse_json_get_reply(Value::Nil, "$.missing", false).unwrap();
+        assert!(!missing.found);
+        assert_eq!(missing.value, None);
+
+        let null_value =
+            parse_json_get_reply(Value::BulkString(b"[null]".to_vec()), "$", false).unwrap();
+        assert!(null_value.found);
+        assert_eq!(null_value.value, Some(serde_json::Value::Null));
+    }
+
+    #[test]
+    fn json_get_response_size_limit_accepts_exact_boundary_and_rejects_overflow() {
+        let exact = format!("\"{}\"", "x".repeat((4 * 1024 * 1024) - 2)).into_bytes();
+        let exact_value = parse_json_get_reply(Value::BulkString(exact), "$", false).unwrap();
+        assert!(exact_value.found);
+        assert_eq!(
+            exact_value.value,
+            Some(serde_json::Value::String("x".repeat((4 * 1024 * 1024) - 2)))
+        );
+
+        let overflow = format!("\"{}\"", "x".repeat((4 * 1024 * 1024) - 1)).into_bytes();
+        assert_eq!(
+            parse_json_get_reply(Value::BulkString(overflow), "$", false).unwrap_err(),
+            AppError::CommandFailed
         );
     }
 
     #[test]
     fn malformed_json_get_reply_maps_to_command_failed() {
-        let error = parse_json_get_reply(Some("{".to_owned()), "$", false).unwrap_err();
+        let error = parse_json_get_reply(Value::BulkString(b"{".to_vec()), "$", false).unwrap_err();
 
         assert_eq!(error, AppError::CommandFailed);
     }
@@ -297,6 +493,24 @@ mod tests {
         assert_eq!(
             parse_json_array_append_reply(Value::Int(5)).unwrap(),
             (1, Some(5))
+        );
+    }
+
+    #[test]
+    fn json_array_append_tracks_all_affected_matches() {
+        assert_eq!(
+            parse_json_array_append_reply(Value::Array(vec![Value::Int(4), Value::Int(5)]))
+                .unwrap(),
+            (2, Some(5))
+        );
+    }
+
+    #[test]
+    fn pttl_failures_after_mutation_fall_back_to_unknown_ttl() {
+        assert_eq!(resolve_mutation_ttl_ms(Ok(-1)), -1);
+        assert_eq!(
+            resolve_mutation_ttl_ms(Err(AppError::ConnectionFailed)),
+            UNKNOWN_TTL_MS
         );
     }
 }

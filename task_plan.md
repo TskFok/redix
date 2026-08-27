@@ -178,6 +178,15 @@ Phase 11：本地 Redis Stream Consumer Group（已完成）
 - 默认继续在 `main` 分支直接工作，不创建新分支。
 - 不修改现有 `src-tauri/` 用户变更，不引入 Redis Cloud、SQL 查询或新的业务能力。
 - 只在用户批准视觉设计后开始实现代码。
+
+## Phase 12：RedisJSON 最终审查修复波次（2026-08-27）
+
+- [x] 阅读总设计、RedisJSON 计划、SDD 进度和最终审查 diff
+- [x] 按 TDD 先补白名单路径、严格模块 parser、`found` 合同、generation 竞态和 Browser 写入链回归测试
+- [x] 实现路径白名单、mutation TTL unknown、会话 token 缓存保护、前端根删除确认与删除清理
+- [x] 运行完整 Rust/前端/build/fmt/non-Cloud/SQL/diff 验收；Redis Stack 环境缺失时明确记为 skipped
+- [x] 提交中文 commit，并把修复/测试摘要写入内部 final fix report
+- **Status:** complete
 - 计划、发现和进度文件持续记录本轮工作，不覆盖上一轮 MVP 记录。
 
 ## Phase 7：Browser 能力扩展（2026-08-18）
@@ -468,3 +477,13 @@ complete：设计文档和第一批实施计划已获用户确认；RedisJSON/�
 - [x] 写入 `.superpowers/sdd/2026-08-24-redisjson-module-capabilities/task-5-report.md`
 - [x] 创建简体中文提交
 - **Status:** complete（文档/记录提交后，纯格式修复提交已使 `cargo fmt --check` 通过；业务语义未改变）
+
+### RedisJSON 第一批最终审查收口（2026-08-26）
+
+- [ ] 完整阅读设计、实施计划、最终审查差异包和所有相关 Rust/TypeScript 数据流
+- [ ] 先补 RED 测试：单目标路径白名单、mutation/TTL 分离、capability generation、missing/null、严格 MODULE LIST、精确大小边界
+- [ ] 实现后端修复并通过 json_ops、connection_manager、commands/domain 定向测试
+- [ ] 先补 RED 前端测试，再实现根删除确认、删除后详情清理、刷新失败不覆盖提交成功、found/null 区分
+- [ ] 运行完整 Rust/前端/build/fmt/non-Cloud/SQL/diff 验收；Redis Stack 环境缺失时明确记为 skipped
+- [ ] 写入 ignored 的 `final-fix-report.md`，同步根目录持久摘要，并在当前 `main` 创建简体中文提交
+- **Status:** in_progress

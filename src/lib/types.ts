@@ -417,6 +417,7 @@ export interface AppendJsonArrayInput extends JsonPathInput {
 export interface JsonPathValue {
   key: string;
   path: string;
+  found: boolean;
   value: JsonValue | null;
   ttl_ms: number;
 }
