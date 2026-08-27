@@ -397,3 +397,12 @@
 - 已确认当前工作区为干净的 `main`，HEAD `00acdd7`，不创建分支、不派生代理；`.superpowers/sdd` 仍由目录级规则忽略。
 - 已恢复并完整读取根目录规划文件、设计文档和 520 行实施计划；计划原有 JSON path 黑名单合同将按最终审查升级为可证明单目标的白名单合同。
 - 当前正在逐段完整阅读 4852 行最终审查差异包并追踪现有 Rust/TypeScript 数据流；尚未修改生产代码。
+
+## Session: 2026-08-27 — 当前项目与 RedisInsight 差异盘点
+
+- **Status:** discovery_pending_design_approval
+- 已读取当前/参考仓库状态、当前前端入口、typed bridge、Rust command/service/domain 清单，以及参考项目的 UI pages、Browser 模块和本地连接/拓扑 API 模块。
+- 已确认现有 Redix 的 Standalone/TLS 与此前记录一致，未发现需要重做的已交付批次；当前待补差异集中在 RedisSearch/Query、Vector Set、Redis Array、RedisJSON 深层树编辑、Workbench/CLI 高级体验和 SSH/Sentinel/Cluster。
+- 已确认目标项目中的 Cloud、Azure、RDI、AI、Telemetry、远程插件和云账户/发现入口不属于本次实现范围；目标的插件可视化仅作为不引入远程运行时的排除项处理。
+- 已确认拓扑连接会影响 profile 版本、连接 manager、命令路由、观察/分析生命周期，模块编辑会影响 capability snapshot、RESP 解析、结果上限和 Browser 详情边界；下一步应先提交分批设计供用户确认，未开始修改业务源码。
+- 发现记录已同步到 `findings.md`；当前仅做只读勘察与计划记录更新。

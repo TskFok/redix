@@ -442,3 +442,13 @@
 - Task 5 review 确认 `cargo fmt --check` 的失败是 `src-tauri/src/domain/json_path.rs` 与 `src-tauri/tests/domain.rs` 的纯格式差异；已只对这两个文件运行 rustfmt。
 - 格式修复后 `cargo fmt --check`、domain 27/27、前端 136/136、build、non-cloud 和 diff check 均通过；未配置 `REDIX_TEST_REDIS_STACK_URL` 的环境事实保持不变。
 - Task 5 fix commit：`ba531e4`。
+
+## 2026-08-27 当前项目与 RedisInsight 新一轮差异盘点
+
+- 当前 `redix` 与参考项目均处于 `main` 且工作区干净；本轮继续在当前分支工作，不创建分支，也不修改参考项目。
+- 当前 Redix 已实际注册并实现的 Tauri 能力包括：连接/导入导出/Standalone TLS、SCAN/键 CRUD/批量操作/基础五类数据、RedisJSON 根与受限路径操作、Stream Consumer Group、Database/Instance/Analysis、Slow Log、Pub/Sub、Profiler、Workbench 批量命令/目录/历史、Query Library 和 Settings。
+- 参考 RedisInsight 的本地非 Cloud 模块证据：`api/src/modules/browser/redisearch` 提供 FT 索引/搜索/信息/键索引；`browser/vector-set` 提供向量集合和相似度查询；`browser/array` 提供 Redis Array 的范围/搜索/聚合/编辑；`browser/rejson-rl` 提供更完整的 JSON 树/下载/增删改；`pages/vector-search` 提供独立 Vector Search 工作区。
+- 参考项目的本地连接/拓扑证据：`api/src/modules/ssh`、`redis-sentinel`、`cluster-monitor`、`database-import`、`certificate` 和 UI 的 `sentinel-connection`、`cluster-connection`、`redis-cluster`、`cluster-details`；这些能力会改变连接 profile、client 生命周期、命令路由和安全边界，不能作为普通 Standalone host/port 的小修补。
+- 参考项目 Workbench/CLI 还包含独立 CLI 会话、Redis 命令帮助/自动补全、查询结果历史、嵌套结果视图和插件可视化；其中远程插件运行时、AI/Copilot、云端和 Telemetry 属于明确排除项，只保留可在本地 typed IPC 上复现的命令帮助、CLI/结果体验。
+- 本轮应采用垂直批次而不是一次性移植整个 Electron/NestJS 项目：先完成可独立验证的模块能力批次（Search/Query、Vector Set、Array、JSON 深层编辑），再评估 Workbench/CLI，最后单独设计 SSH/Sentinel/Cluster；每批维持固定错误码、能力降级、RESP2/RESP3 parser、结果/输入上限、TDD 和默认 ignored 的真实 Redis/Redis Stack 流程。
+- 硬排除继续包括 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry、远程插件/插件市场、云登录/账户/端点/发现和 SQL；Browser/Analysis/批量操作继续禁止 `KEYS`，且不在循环遍历中查询 SQL。

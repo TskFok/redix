@@ -488,3 +488,44 @@ complete：设计文档和第一批实施计划已获用户确认；RedisJSON/�
 - [ ] 运行完整 Rust/前端/build/fmt/non-Cloud/SQL/diff 验收；Redis Stack 环境缺失时明确记为 skipped
 - [ ] 写入 ignored 的 `final-fix-report.md`，同步根目录持久摘要，并在当前 `main` 创建简体中文提交
 - **Status:** in_progress
+
+## Phase 15：RedisInsight 非 Cloud 剩余差异新一轮盘点（2026-08-27）
+
+### Goal
+
+在 RedisJSON 第一批、Standalone TLS 及既有本地工作区之上，继续对照 `/Users/ushopal/workspace/myself/RedisInsight` 识别并补齐剩余本地能力；Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry、远程插件和 SQL 永久排除。
+
+### Status
+
+discovery_pending_design_approval：已完成当前/目标项目证据盘点，等待本轮分批设计确认；尚未修改业务源码。
+
+### Discovery checklist
+
+- [x] 核对当前分支、工作区与历史交付状态
+- [x] 盘点当前 Redix 的 Tauri command、Rust service、typed bridge 和前端工作区
+- [x] 盘点 RedisInsight 的 Browser 模块、Vector Search、Workbench/CLI 和本地拓扑入口
+- [x] 明确 Cloud/AI/Telemetry/远程插件/SQL 排除边界
+- [ ] 在聊天中确认分批设计、优先级和第一批验收范围
+- [ ] 编写并自审本轮设计文档
+- [ ] 用户审阅设计文档后编写实现计划
+- [ ] 按 TDD 实现并验证各批次
+
+### Proposed batch order
+
+1. Search/Query：索引列表、索引信息、有限分页查询和结果回填。
+2. Vector Set + Array：能力探测、常用编辑/查询/范围动作和结果上限。
+3. RedisJSON 深层树编辑：在已有受限 path API 上补对象/数组树视图和高频编辑动作。
+4. Workbench/CLI：本地命令帮助、补全、独立会话/结果视图增强，不引入 Monaco 或远程插件运行时。
+5. SSH、Sentinel、Cluster：单独设计连接 handle、隧道/发现/路由和观察/分析节点边界。
+
+### Scope boundaries
+
+- 继续默认在当前 `main` 分支修改，不创建分支；commit 信息使用简体中文。
+- 保持 typed IPC、固定错误映射、响应上限、能力不可用时局部降级；不把模块/拓扑错误变成全局连接失败。
+- Browser/Analysis/批量操作继续使用 SCAN/显式命令，不引入 `KEYS`、SQL 或循环 SQL 查询。
+
+### Errors encountered
+
+| Error | Attempt | Resolution |
+|---|---:|---|
+| 设计文档自审命令的正则包含未转义 `???`，`rg` 报 repetition operator 错误 | 1 | 改用不含 `???` 的占位符扫描表达式重跑；设计文档和代码未受影响 |
