@@ -65,6 +65,18 @@ impl VectorSetElementInput {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct VectorSetKeyInput {
+    pub connection_id: String,
+    pub key: String,
+}
+
+impl VectorSetKeyInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        validate_connection_and_key(&self.connection_id, &self.key)
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct VectorSetSummary {
     pub key: String,

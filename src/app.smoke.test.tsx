@@ -119,6 +119,8 @@ beforeEach(() => {
     json_version: null,
     search_supported: false,
     search_version: null,
+    array_supported: false,
+    vector_set_supported: false,
   });
   listSearchIndexesMock.mockResolvedValue({ indexes: [] });
   getSearchIndexMock.mockResolvedValue(null);
@@ -292,6 +294,8 @@ describe("Redix 应用壳", () => {
       json_version: null,
       search_supported: true,
       search_version: "2.8.10",
+      array_supported: false,
+      vector_set_supported: false,
     });
     listSearchIndexesMock.mockResolvedValue({ indexes: [] });
 

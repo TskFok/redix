@@ -5,7 +5,7 @@ use tauri::Manager;
 use redix_lib::{
     commands::{
         array, browser, connections, database, json, observability, query_library, search,
-        settings, workbench,
+        settings, vector_set, workbench,
     },
     domain::{
         AppSettings, CommandHistoryEntry, CommandResult, QueryLibraryItemInput,
@@ -57,6 +57,16 @@ fn exposes_all_tauri_command_adapters() {
     let _ = array::delete_array_range;
     let _ = array::search_array;
     let _ = array::aggregate_array;
+    let _ = vector_set::create_vector_set;
+    let _ = vector_set::add_vector_set_elements;
+    let _ = vector_set::get_vector_set_summary;
+    let _ = vector_set::list_vector_set_elements;
+    let _ = vector_set::get_vector_set_element;
+    let _ = vector_set::set_vector_set_attributes;
+    let _ = vector_set::delete_vector_set_attributes;
+    let _ = vector_set::delete_vector_set_elements;
+    let _ = vector_set::search_vector_set;
+    let _ = vector_set::download_vector_embedding;
     let _ = browser::scan_keys;
     let _ = browser::get_key;
     let _ = browser::set_key;

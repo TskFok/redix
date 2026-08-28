@@ -71,6 +71,7 @@ import {
   setKeyTtl,
   scanArray,
   searchArray,
+  searchVectorSet,
   deleteQueryLibraryItem,
   testConnection,
   updateSlowLogConfig,
@@ -170,6 +171,23 @@ describe("Tauri IPC bridge", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("get_array_range", { input });
   });
 
+  it("为 VSIM 保留三种输入之一和属性开关", async () => {
+    const input = {
+      connection_id: "local",
+      key: "embeddings",
+      by_element: "seed",
+      by_vector: null,
+      by_vector_base64: null,
+      count: 10,
+      with_attributes: true,
+    };
+    const result = { matches: [], has_more: false };
+    invokeMock.mockResolvedValue(result);
+
+    await expect(searchVectorSet(input)).resolves.toEqual(result);
+    expect(invokeMock).toHaveBeenLastCalledWith("search_vector_set", { input });
+  });
+
   it("用稳定命令名调用 scan_keys", async () => {
     const result: ScanPage = { cursor: 0, keys: [], has_more: false };
     invokeMock.mockResolvedValue(result);
@@ -245,6 +263,8 @@ describe("Tauri IPC bridge", () => {
       json_version: "2.8.4",
       search_supported: false,
       search_version: null,
+      array_supported: false,
+      vector_set_supported: false,
     };
     const pathValue: JsonPathValue = {
       key: "doc",

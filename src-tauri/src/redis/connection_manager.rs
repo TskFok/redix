@@ -6,24 +6,28 @@ use tokio::sync::RwLock;
 use crate::{
     domain::{
         normalize_key_type, parse_info_sections, parse_keyspace_line, validate_certificate_pem,
-        validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AggregateArrayInput,
-        AnalyzeDatabaseInput, AppendArrayInput, AppendJsonArrayInput, ArrayKeyInput,
-        ArrayMultiGetInput, ArrayRangeInput, ArrayScanInput, CommandDefinition,
+        validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AddVectorSetElementsInput,
+        AggregateArrayInput, AnalyzeDatabaseInput, AppendArrayInput, AppendJsonArrayInput,
+        ArrayKeyInput, ArrayMultiGetInput, ArrayRangeInput, ArrayScanInput, CommandDefinition,
         CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateArrayInput,
         CreateKeyInput, CreateSearchIndexInput, CreateStreamConsumerGroupInput,
-        DatabaseAnalysisReport, DatabaseOverview, DeleteArrayElementsInput, DeleteArrayRangeInput,
-        DeleteJsonPathInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
-        DeleteStreamConsumerInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
-        GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        CreateVectorSetInput, DatabaseAnalysisReport, DatabaseOverview, DeleteArrayElementsInput,
+        DeleteArrayRangeInput, DeleteJsonPathInput, DeleteKeysInput,
+        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, DeleteVectorSetElementsInput,
+        ExecuteCommandsInput, ExportKeysInput, ExportedKey, GetJsonPathInput,
+        GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
         GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
         InstanceDetails, InstanceOverview, JsonMutationResult, JsonPathValue, KeyInfo,
         KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue, ListSearchIndexesResult,
         ModuleCapabilities, ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue,
         RenameKeyInput, ScanKeysInput, ScanPage, SearchIndexInfo, SearchIndexInput,
         SearchQueryInput, SearchQueryResult, SelectDatabaseInput, SetArrayElementInput,
-        SetJsonPathInput, SetKeyInput, SetKeyTtlInput, SlowLogConfig, SlowLogEntry, SortedSetEntry,
-        StartProfilerInput, StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamConsumer,
-        StreamConsumerGroup, StreamEntry, StreamPendingEntry, UpdateSlowLogConfigInput,
+        SetJsonPathInput, SetKeyInput, SetKeyTtlInput, SetVectorSetAttributesInput, SlowLogConfig,
+        SlowLogEntry, SortedSetEntry, StartProfilerInput, StartPubSubInput, StopProfilerInput,
+        StopPubSubInput, StreamConsumer, StreamConsumerGroup, StreamEntry, StreamPendingEntry,
+        UpdateSlowLogConfigInput, VectorSetElement, VectorSetElementInput, VectorSetKeyInput,
+        VectorSetPage, VectorSetSummary, VectorSimilarityMatch, VectorSimilarityQueryInput,
+        VectorSimilarityResult,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -58,6 +62,12 @@ use super::{
         parse_stream_consumer_groups, parse_stream_consumers, parse_stream_pending_entries,
     },
     tokenize_command,
+    vector_set::{
+        build_vadd_command, build_vemb_command, build_vgetattr_command, build_vrange_command,
+        build_vrem_command, build_vsetattr_command, build_vsim_command,
+        parse_vector_set_attributes, parse_vector_set_element, parse_vector_set_info,
+        parse_vector_set_page, parse_vsim_reply,
+    },
 };
 
 #[allow(async_fn_in_trait)]
@@ -118,6 +128,43 @@ pub trait RedisOperations: Send + Sync {
         &self,
         input: AggregateArrayInput,
     ) -> Result<crate::domain::ArrayAggregateResult, AppError>;
+    async fn create_vector_set(&self, input: CreateVectorSetInput) -> Result<KeyValue, AppError>;
+    async fn add_vector_set_elements(
+        &self,
+        input: AddVectorSetElementsInput,
+    ) -> Result<(), AppError>;
+    async fn get_vector_set_summary(
+        &self,
+        input: VectorSetKeyInput,
+    ) -> Result<VectorSetSummary, AppError>;
+    async fn list_vector_set_elements(
+        &self,
+        input: crate::domain::ListVectorSetElementsInput,
+    ) -> Result<VectorSetPage, AppError>;
+    async fn get_vector_set_element(
+        &self,
+        input: VectorSetElementInput,
+    ) -> Result<VectorSetElement, AppError>;
+    async fn set_vector_set_attributes(
+        &self,
+        input: SetVectorSetAttributesInput,
+    ) -> Result<VectorSetElement, AppError>;
+    async fn delete_vector_set_attributes(
+        &self,
+        input: VectorSetElementInput,
+    ) -> Result<(), AppError>;
+    async fn delete_vector_set_elements(
+        &self,
+        input: DeleteVectorSetElementsInput,
+    ) -> Result<u64, AppError>;
+    async fn search_vector_set(
+        &self,
+        input: VectorSimilarityQueryInput,
+    ) -> Result<VectorSimilarityResult, AppError>;
+    async fn download_vector_embedding(
+        &self,
+        input: VectorSetElementInput,
+    ) -> Result<String, AppError>;
     async fn get_module_capabilities(
         &self,
         connection_id: &str,
@@ -293,6 +340,15 @@ impl RedisService {
     async fn ensure_array_supported(&self, connection_id: &str) -> Result<(), AppError> {
         let capabilities = self.get_module_capabilities(connection_id).await?;
         if capabilities.array_supported {
+            Ok(())
+        } else {
+            Err(AppError::UnsupportedFeature)
+        }
+    }
+
+    async fn ensure_vector_set_supported(&self, connection_id: &str) -> Result<(), AppError> {
+        let capabilities = self.get_module_capabilities(connection_id).await?;
+        if capabilities.vector_set_supported {
             Ok(())
         } else {
             Err(AppError::UnsupportedFeature)
@@ -797,6 +853,269 @@ impl RedisOperations for RedisService {
             .await
             .map_err(map_command_error)?;
         parse_array_aggregate(reply, &operation)
+    }
+
+    async fn create_vector_set(&self, input: CreateVectorSetInput) -> Result<KeyValue, AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        if redis_key_exists(&mut connection, &input.key).await? {
+            return Err(AppError::CommandFailed);
+        }
+
+        let mut pipeline = ::redis::pipe();
+        for element in &input.elements {
+            pipeline.add_command(build_vadd_command(
+                &input.key,
+                element,
+                Some(input.dimension),
+            )?);
+        }
+        if let Some(ttl_ms) = input.ttl_ms {
+            validate_ttl(ttl_ms)?;
+            pipeline.cmd("PEXPIRE").arg(&input.key).arg(ttl_ms);
+        }
+        pipeline
+            .query_async::<Vec<Value>>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        read_key(&mut connection, &input.key).await
+    }
+
+    async fn add_vector_set_elements(
+        &self,
+        input: AddVectorSetElementsInput,
+    ) -> Result<(), AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+        let expected_dimension = read_vector_set_dimension(&mut connection, &input.key).await?;
+        let mut pipeline = ::redis::pipe();
+        for element in &input.elements {
+            pipeline.add_command(build_vadd_command(&input.key, element, expected_dimension)?);
+        }
+        pipeline
+            .query_async::<Vec<Value>>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(())
+    }
+
+    async fn get_vector_set_summary(
+        &self,
+        input: VectorSetKeyInput,
+    ) -> Result<VectorSetSummary, AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+        let mut pipeline = ::redis::pipe();
+        pipeline
+            .cmd("VCARD")
+            .arg(&input.key)
+            .cmd("VINFO")
+            .arg(&input.key);
+        let replies = pipeline
+            .query_async::<Vec<Value>>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if replies.len() != 2 {
+            return Err(AppError::CommandFailed);
+        }
+        let total = value_as_decimal_string(&replies[0])?;
+        let (dimension, quantization) = parse_vector_set_info(replies[1].clone())?;
+        Ok(VectorSetSummary {
+            key: input.key,
+            total,
+            dimension,
+            quantization,
+        })
+    }
+
+    async fn list_vector_set_elements(
+        &self,
+        input: crate::domain::ListVectorSetElementsInput,
+    ) -> Result<VectorSetPage, AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+
+        let (names, pagination_supported) = match build_vrange_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+        {
+            Ok(reply) => (parse_vector_set_page(reply, input.limit)?, true),
+            Err(error) if is_unknown_command_error(&error) => {
+                let reply = ::redis::cmd("VRANDMEMBER")
+                    .arg(&input.key)
+                    .arg(input.limit)
+                    .query_async::<Value>(&mut connection)
+                    .await
+                    .map_err(map_command_error)?;
+                (parse_vector_set_page(reply, input.limit)?, false)
+            }
+            Err(error) => return Err(map_command_error(error)),
+        };
+        let cursor = if pagination_supported && names.len() == input.limit {
+            names.last().map(|name| format!("({name}"))
+        } else {
+            None
+        };
+        let has_more = pagination_supported && cursor.is_some();
+        let elements = load_vector_set_page_elements(&mut connection, &input.key, names).await?;
+        Ok(VectorSetPage {
+            elements,
+            cursor,
+            has_more,
+        })
+    }
+
+    async fn get_vector_set_element(
+        &self,
+        input: VectorSetElementInput,
+    ) -> Result<VectorSetElement, AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+        read_vector_set_element_with_connection(&mut connection, &input.key, &input.element).await
+    }
+
+    async fn set_vector_set_attributes(
+        &self,
+        input: SetVectorSetAttributesInput,
+    ) -> Result<VectorSetElement, AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+        build_vsetattr_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        read_vector_set_element_with_connection(&mut connection, &input.key, &input.element).await
+    }
+
+    async fn delete_vector_set_attributes(
+        &self,
+        input: VectorSetElementInput,
+    ) -> Result<(), AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+        let mut command = ::redis::cmd("VSETATTR");
+        command.arg(&input.key).arg(&input.element).arg("{}");
+        command
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(())
+    }
+
+    async fn delete_vector_set_elements(
+        &self,
+        input: DeleteVectorSetElementsInput,
+    ) -> Result<u64, AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+        let mut pipeline = ::redis::pipe();
+        for element in &input.elements {
+            let single = DeleteVectorSetElementsInput {
+                connection_id: input.connection_id.clone(),
+                key: input.key.clone(),
+                elements: vec![element.clone()],
+            };
+            pipeline.add_command(build_vrem_command(&single)?);
+        }
+        let replies = pipeline
+            .query_async::<Vec<Value>>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if replies.len() != input.elements.len() {
+            return Err(AppError::CommandFailed);
+        }
+        let mut affected = 0_u64;
+        for reply in replies {
+            affected = affected
+                .checked_add(
+                    value_as_decimal_string(&reply)?
+                        .parse::<u64>()
+                        .map_err(|_| AppError::CommandFailed)?,
+                )
+                .ok_or(AppError::CommandFailed)?;
+        }
+        Ok(affected)
+    }
+
+    async fn search_vector_set(
+        &self,
+        input: VectorSimilarityQueryInput,
+    ) -> Result<VectorSimilarityResult, AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+
+        let (mut matches, with_attributes) = match build_vsim_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+        {
+            Ok(reply) => (
+                parse_vsim_reply(reply, input.with_attributes)?,
+                input.with_attributes,
+            ),
+            Err(error) if input.with_attributes && is_with_attributes_unsupported(&error) => {
+                let mut fallback = input.clone();
+                fallback.with_attributes = false;
+                let reply = build_vsim_command(&fallback)?
+                    .query_async::<Value>(&mut connection)
+                    .await
+                    .map_err(map_command_error)?;
+                (parse_vsim_reply(reply, false)?, false)
+            }
+            Err(error) => return Err(map_command_error(error)),
+        };
+        if !with_attributes {
+            load_vector_set_match_attributes(&mut connection, &input.key, &mut matches).await?;
+        }
+        Ok(VectorSimilarityResult {
+            has_more: matches.len() == input.count as usize,
+            matches,
+        })
+    }
+
+    async fn download_vector_embedding(
+        &self,
+        input: VectorSetElementInput,
+    ) -> Result<String, AppError> {
+        input.validate()?;
+        self.ensure_vector_set_supported(&input.connection_id)
+            .await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
+        let reply = build_vemb_command(&input.key, &input.element)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if matches!(reply, Value::Nil) {
+            return Err(AppError::KeyNotFound);
+        }
+        let element = parse_vector_set_element(reply, Value::Nil, &input.element)?;
+        element.vector_base64.ok_or(AppError::InvalidInput)
     }
 
     async fn get_module_capabilities(
@@ -1557,6 +1876,98 @@ async fn redis_key_exists(
     Ok(exists > 0)
 }
 
+async fn read_vector_set_dimension(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+) -> Result<Option<u32>, AppError> {
+    let reply = ::redis::cmd("VINFO")
+        .arg(key)
+        .query_async::<Value>(connection)
+        .await
+        .map_err(map_command_error)?;
+    parse_vector_set_info(reply).map(|(dimension, _)| dimension)
+}
+
+async fn read_vector_set_element_with_connection(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+    element: &str,
+) -> Result<VectorSetElement, AppError> {
+    let mut pipeline = ::redis::pipe();
+    pipeline
+        .add_command(build_vemb_command(key, element)?)
+        .add_command(build_vgetattr_command(key, element)?);
+    let replies = pipeline
+        .query_async::<Vec<Value>>(connection)
+        .await
+        .map_err(map_command_error)?;
+    if replies.len() != 2 {
+        return Err(AppError::CommandFailed);
+    }
+    if matches!(replies[0], Value::Nil) && matches!(replies[1], Value::Nil) {
+        return Err(AppError::KeyNotFound);
+    }
+    parse_vector_set_element(replies[0].clone(), replies[1].clone(), element)
+}
+
+async fn load_vector_set_page_elements(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+    names: Vec<String>,
+) -> Result<Vec<VectorSetElement>, AppError> {
+    if names.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut pipeline = ::redis::pipe();
+    for name in &names {
+        pipeline.add_command(build_vgetattr_command(key, name)?);
+    }
+    let replies = pipeline
+        .query_async::<Vec<Value>>(connection)
+        .await
+        .map_err(map_command_error)?;
+    if replies.len() != names.len() {
+        return Err(AppError::CommandFailed);
+    }
+    names
+        .into_iter()
+        .zip(replies)
+        .map(|(name, reply)| {
+            Ok(VectorSetElement {
+                name,
+                score: None,
+                vector_base64: None,
+                attributes: parse_vector_set_attributes(reply)?,
+            })
+        })
+        .collect()
+}
+
+async fn load_vector_set_match_attributes(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+    matches: &mut [VectorSimilarityMatch],
+) -> Result<(), AppError> {
+    if matches.is_empty() {
+        return Ok(());
+    }
+    let mut pipeline = ::redis::pipe();
+    for item in matches.iter() {
+        pipeline.add_command(build_vgetattr_command(key, &item.name)?);
+    }
+    let replies = pipeline
+        .query_async::<Vec<Value>>(connection)
+        .await
+        .map_err(map_command_error)?;
+    if replies.len() != matches.len() {
+        return Err(AppError::CommandFailed);
+    }
+    for (item, reply) in matches.iter_mut().zip(replies) {
+        item.attributes = parse_vector_set_attributes(reply)?;
+    }
+    Ok(())
+}
+
 async fn apply_ttl(
     connection: &mut ::redis::aio::MultiplexedConnection,
     key: &str,
@@ -2138,6 +2549,18 @@ fn is_unknown_command_error(error: &::redis::RedisError) -> bool {
     error.detail().is_some_and(|detail| {
         let detail = detail.to_ascii_lowercase();
         detail.contains("unknown command") || detail.contains("unknown subcommand")
+    })
+}
+
+fn is_with_attributes_unsupported(error: &::redis::RedisError) -> bool {
+    error.detail().is_some_and(|detail| {
+        let detail = detail.to_ascii_lowercase();
+        detail.contains("withattribs")
+            && (detail.contains("unknown")
+                || detail.contains("unsupported")
+                || detail.contains("not supported")
+                || detail.contains("syntax")
+                || detail.contains("invalid"))
     })
 }
 

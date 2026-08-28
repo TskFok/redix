@@ -38,6 +38,8 @@ const readyCapabilities: ModuleCapabilities = {
   json_version: null,
   search_supported: true,
   search_version: "2.8.10",
+  array_supported: false,
+  vector_set_supported: false,
 };
 
 const indexInfo = {

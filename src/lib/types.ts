@@ -724,6 +724,87 @@ export interface AggregateArrayInput extends ArrayKeyInput {
   limit: number;
 }
 
+export interface VectorSetElementPayload {
+  name: string;
+  vector_values: number[] | null;
+  vector_fp32_base64: string | null;
+  attributes: JsonValue | null;
+}
+
+export interface VectorSetKeyInput {
+  connection_id: string;
+  key: string;
+}
+
+export interface VectorSetElementInput extends VectorSetKeyInput {
+  element: string;
+}
+
+export interface VectorSetSummary {
+  key: string;
+  total: string;
+  dimension: number | null;
+  quantization: string | null;
+}
+
+export interface VectorSetElement {
+  name: string;
+  score: number | null;
+  vector_base64: string | null;
+  attributes: JsonValue | null;
+}
+
+export interface VectorSetPage {
+  elements: VectorSetElement[];
+  cursor: string | null;
+  has_more: boolean;
+}
+
+export interface VectorSimilarityMatch {
+  name: string;
+  score: number;
+  attributes: JsonValue | null;
+}
+
+export interface VectorSimilarityResult {
+  matches: VectorSimilarityMatch[];
+  has_more: boolean;
+}
+
+export interface CreateVectorSetInput extends VectorSetKeyInput {
+  dimension: number;
+  quantization: string | null;
+  elements: VectorSetElementPayload[];
+  ttl_ms: number | null;
+}
+
+export interface AddVectorSetElementsInput extends VectorSetKeyInput {
+  elements: VectorSetElementPayload[];
+}
+
+export interface ListVectorSetElementsInput extends VectorSetKeyInput {
+  start: string | null;
+  end: string | null;
+  limit: number;
+}
+
+export interface SetVectorSetAttributesInput extends VectorSetKeyInput {
+  element: string;
+  attributes: JsonValue;
+}
+
+export interface DeleteVectorSetElementsInput extends VectorSetKeyInput {
+  elements: string[];
+}
+
+export interface VectorSimilarityQueryInput extends VectorSetKeyInput {
+  by_element: string | null;
+  by_vector: number[] | null;
+  by_vector_base64: string | null;
+  count: number;
+  with_attributes: boolean;
+}
+
 export type RedisValue =
   | { String: { value: string } }
   | { Hash: { fields: Array<{ field: string; value: string }> } }

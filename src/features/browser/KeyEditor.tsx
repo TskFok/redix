@@ -37,6 +37,10 @@ function editorTitle(kind: RedisValueKind): string {
       return "JSON 文档";
     case "stream":
       return "Stream 条目";
+    case "array":
+      return "Array 数据";
+    case "vectorset":
+      return "Vector Set 数据";
   }
 }
 

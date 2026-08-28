@@ -17,6 +17,8 @@ const noSearch: ModuleCapabilities = {
   json_version: null,
   search_supported: false,
   search_version: null,
+  array_supported: false,
+  vector_set_supported: false,
 };
 
 const oldSearch: ModuleCapabilities = {

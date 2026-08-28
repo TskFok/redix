@@ -98,6 +98,13 @@ pub(crate) fn parse_vector_set_element(
     })
 }
 
+pub(crate) fn parse_vector_set_attributes(
+    value: Value,
+) -> Result<Option<serde_json::Value>, AppError> {
+    ensure_response_size(&value)?;
+    parse_attributes(value)
+}
+
 pub(crate) fn parse_vsim_reply(
     value: Value,
     with_attributes: bool,

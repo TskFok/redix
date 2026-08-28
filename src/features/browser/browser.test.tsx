@@ -125,6 +125,8 @@ describe("Redis Browser", () => {
       json_version: "20611",
       search_supported: false,
       search_version: null,
+      array_supported: false,
+      vector_set_supported: false,
     });
     getKeySearchIndexesMock.mockResolvedValue([]);
     getJsonPathMock.mockResolvedValue({
@@ -1338,6 +1340,8 @@ describe("Redis Browser", () => {
             json_version: "2.0.0",
             search_supported: false,
             search_version: null,
+            array_supported: false,
+            vector_set_supported: false,
           },
         }}
         onDetailChange={onDetailChange}
@@ -1527,6 +1531,8 @@ describe("Redis Browser", () => {
             json_version: null,
             search_supported: true,
             search_version: "2.8.10",
+            array_supported: false,
+            vector_set_supported: false,
           },
         }}
         onDetailChange={vi.fn()}
@@ -1564,6 +1570,8 @@ describe("Redis Browser", () => {
             json_version: null,
             search_supported: true,
             search_version: "1.6.0",
+            array_supported: false,
+            vector_set_supported: false,
           },
         }}
         onDetailChange={vi.fn()}

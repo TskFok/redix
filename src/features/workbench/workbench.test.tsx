@@ -104,6 +104,8 @@ describe("Redis Workbench 工作区", () => {
       json_version: null,
       search_supported: false,
       search_version: null,
+      array_supported: false,
+      vector_set_supported: false,
     });
     getKeyMock.mockRejectedValue({ code: "KEY_NOT_FOUND", message: "键不存在" });
     setKeyMock.mockResolvedValue(undefined);

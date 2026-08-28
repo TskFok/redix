@@ -98,9 +98,23 @@ describe("Browser 状态 helper", () => {
 
   it("为模块类型提供稳定标签和不泄露原始错误的提示", () => {
     expect(keyTypeLabel("stream")).toBe("Stream");
+    expect(keyTypeLabel("array")).toBe("Array");
+    expect(keyTypeLabel("vectorset")).toBe("Vector Set");
     expect(keyTypeLabel("ReJSON-RL")).toBe("JSON");
     expect(keyTypeLabel("ReJSON-RS")).toBe("JSON");
     expect(browserErrorMessage({ code: "UNSUPPORTED_DATA_TYPE", message: "secret" }, "读取失败"))
       .toBe("当前 Redis 数据类型暂不支持。");
+  });
+
+  it("保留 Array 和 Vector Set 摘要的独立类型", () => {
+    const array: RedisValue = { Array: { length: "4", count: "3" } };
+    const vectorSet: RedisValue = {
+      VectorSet: { total: "2", dimension: 3, quantization: "f32" },
+    };
+
+    expect(redisValueKind(array)).toBe("array");
+    expect(redisValueKind(vectorSet)).toBe("vectorset");
+    expect(cloneRedisValue(array)).toEqual(array);
+    expect(cloneRedisValue(vectorSet)).toEqual(vectorSet);
   });
 });

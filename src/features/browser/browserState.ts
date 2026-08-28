@@ -121,6 +121,12 @@ export function cloneRedisValue(value: RedisValue): RedisValue {
       },
     };
   }
+  if ("Array" in value) {
+    return { Array: { ...value.Array } };
+  }
+  if ("VectorSet" in value) {
+    return { VectorSet: { ...value.VectorSet } };
+  }
   return {
     Stream: {
       entries: value.Stream.entries.map((entry) => ({
@@ -138,7 +144,9 @@ export type RedisValueKind =
   | "set"
   | "sorted-set"
   | "json"
-  | "stream";
+  | "stream"
+  | "array"
+  | "vectorset";
 
 export function redisValueKind(value: RedisValue): RedisValueKind {
   if ("String" in value) {
@@ -158,6 +166,12 @@ export function redisValueKind(value: RedisValue): RedisValueKind {
   }
   if ("Json" in value) {
     return "json";
+  }
+  if ("Array" in value) {
+    return "array";
+  }
+  if ("VectorSet" in value) {
+    return "vectorset";
   }
   return "stream";
 }
@@ -182,6 +196,11 @@ export function keyTypeLabel(keyType: string): string {
     case "rejson-rs":
     case "json":
       return "JSON";
+    case "array":
+      return "Array";
+    case "vectorset":
+    case "vector-set":
+      return "Vector Set";
     default:
       return keyType || "未知";
   }

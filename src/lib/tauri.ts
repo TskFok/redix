@@ -68,6 +68,17 @@ import type {
   RenameKeyInput,
   SaveConnectionInput,
   SaveCommandHistoryInput,
+  AddVectorSetElementsInput,
+  CreateVectorSetInput,
+  DeleteVectorSetElementsInput,
+  VectorSetElement,
+  VectorSetElementInput,
+  VectorSetKeyInput,
+  VectorSetPage,
+  VectorSetSummary,
+  VectorSimilarityQueryInput,
+  VectorSimilarityResult,
+  SetVectorSetAttributesInput,
   QueryLibraryItem,
   QueryLibraryItemInput,
   PublishPubSubInput,
@@ -348,6 +359,48 @@ export function searchArray(input: SearchArrayInput): Promise<ArraySearchResult>
 
 export function aggregateArray(input: AggregateArrayInput): Promise<import("./types").ArrayAggregateResult> {
   return call<import("./types").ArrayAggregateResult>("aggregate_array", { input });
+}
+
+export function createVectorSet(input: CreateVectorSetInput): Promise<KeyValue> {
+  return call<KeyValue>("create_vector_set", { input });
+}
+
+export function addVectorSetElements(input: AddVectorSetElementsInput): Promise<void> {
+  return call<void>("add_vector_set_elements", { input });
+}
+
+export function getVectorSetSummary(input: VectorSetKeyInput): Promise<VectorSetSummary> {
+  return call<VectorSetSummary>("get_vector_set_summary", { input });
+}
+
+export function listVectorSetElements(input: import("./types").ListVectorSetElementsInput): Promise<VectorSetPage> {
+  return call<VectorSetPage>("list_vector_set_elements", { input });
+}
+
+export function getVectorSetElement(input: VectorSetElementInput): Promise<VectorSetElement> {
+  return call<VectorSetElement>("get_vector_set_element", { input });
+}
+
+export function setVectorSetAttributes(
+  input: SetVectorSetAttributesInput,
+): Promise<VectorSetElement> {
+  return call<VectorSetElement>("set_vector_set_attributes", { input });
+}
+
+export function deleteVectorSetAttributes(input: VectorSetElementInput): Promise<void> {
+  return call<void>("delete_vector_set_attributes", { input });
+}
+
+export function deleteVectorSetElements(input: DeleteVectorSetElementsInput): Promise<number> {
+  return call<number>("delete_vector_set_elements", { input });
+}
+
+export function searchVectorSet(input: VectorSimilarityQueryInput): Promise<VectorSimilarityResult> {
+  return call<VectorSimilarityResult>("search_vector_set", { input });
+}
+
+export function downloadVectorEmbedding(input: VectorSetElementInput): Promise<string> {
+  return call<string>("download_vector_embedding", { input });
 }
 
 export function getJsonPath(input: JsonPathInput): Promise<JsonPathValue> {
