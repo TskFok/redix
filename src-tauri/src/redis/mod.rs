@@ -7,6 +7,7 @@ mod key_ops;
 mod observability;
 mod search;
 mod stream_groups;
+mod vector_set;
 mod workbench;
 
 pub use connection_manager::{RedisOperations, RedisService};
