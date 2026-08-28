@@ -3,7 +3,7 @@
 ## 文档状态
 
 - 日期：2026-08-28
-- 状态：待用户审阅
+- 状态：已确认，待实施
 - 对照项目：/Users/ushopal/workspace/myself/RedisInsight
 - 当前项目：Redix
 - 本批次：Browser 中的 Vector Set 与 Redis Array
