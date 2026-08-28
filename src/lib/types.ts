@@ -83,6 +83,8 @@ export interface ModuleCapabilities {
   json_version: string | null;
   search_supported: boolean;
   search_version: string | null;
+  array_supported: boolean;
+  vector_set_supported: boolean;
 }
 
 export type SearchKeyType = "hash" | "json";
@@ -594,6 +596,134 @@ export interface DeleteStreamConsumerInput {
   consumer: string;
 }
 
+export type ArrayCreateMode = "contiguous" | "sparse";
+
+export interface ArrayElement {
+  index: string;
+  value: string;
+}
+
+export interface ArrayCell {
+  index: string;
+  value: string | null;
+}
+
+export interface ArraySummary {
+  key: string;
+  length: string;
+  count: string;
+  next_index: string;
+}
+
+export interface ArrayRange {
+  cells: ArrayCell[];
+  start: string;
+  end: string;
+  has_more: boolean;
+}
+
+export interface ArrayScan {
+  elements: ArrayElement[];
+  next_start: string | null;
+  has_more: boolean;
+}
+
+export interface ArraySearchResult {
+  elements: ArrayElement[];
+  total: string;
+}
+
+export interface ArrayAggregateResult {
+  operation: string;
+  value: string;
+}
+
+export interface ArrayMutationResult {
+  affected: number;
+  key_exists: boolean;
+  next_index: string | null;
+}
+
+export interface ArrayKeyInput {
+  connection_id: string;
+  key: string;
+}
+
+export interface CreateArrayInput extends ArrayKeyInput {
+  mode: ArrayCreateMode;
+  start_index: string | null;
+  values: string[];
+  elements: ArrayElement[];
+  ttl_ms: number | null;
+}
+
+export interface ArrayRangeInput extends ArrayKeyInput {
+  start: string;
+  end: string;
+}
+
+export interface ArrayScanInput extends ArrayKeyInput {
+  start: string | null;
+  end: string | null;
+  limit: number;
+}
+
+export interface ArrayElementInput extends ArrayKeyInput {
+  index: string;
+}
+
+export interface ArrayMultiGetInput extends ArrayKeyInput {
+  indices: string[];
+}
+
+export interface SetArrayElementInput extends ArrayKeyInput {
+  index: string;
+  value: string;
+}
+
+export interface AppendArrayInput extends ArrayKeyInput {
+  values: string[];
+}
+
+export interface DeleteArrayElementsInput extends ArrayKeyInput {
+  indices: string[];
+}
+
+export interface DeleteArrayRangeInput extends ArrayRangeInput {}
+
+export interface ArrayPredicate {
+  criteria: string;
+  value: string;
+}
+
+export interface SearchArrayInput extends ArrayKeyInput {
+  start: string | null;
+  end: string | null;
+  predicates: ArrayPredicate[];
+  combinator: string | null;
+  nocase: boolean;
+  with_values: boolean;
+  limit: number;
+}
+
+export type ArrayAggregateOperation =
+  | "SUM"
+  | "MIN"
+  | "MAX"
+  | "AND"
+  | "OR"
+  | "XOR"
+  | "MATCH"
+  | "USED";
+
+export interface AggregateArrayInput extends ArrayKeyInput {
+  operation: ArrayAggregateOperation;
+  start: string | null;
+  end: string | null;
+  values: string[];
+  limit: number;
+}
+
 export type RedisValue =
   | { String: { value: string } }
   | { Hash: { fields: Array<{ field: string; value: string }> } }
@@ -601,7 +731,15 @@ export type RedisValue =
   | { Set: { members: string[] } }
   | { SortedSet: { members: Array<{ member: string; score: number }> } }
   | { Json: { value: JsonValue } }
-  | { Stream: { entries: StreamEntry[] } };
+  | { Stream: { entries: StreamEntry[] } }
+  | { Array: { length: string; count: string } }
+  | {
+      VectorSet: {
+        total: string;
+        dimension: number | null;
+        quantization: string | null;
+      };
+    };
 
 export interface KeyValue {
   key: string;

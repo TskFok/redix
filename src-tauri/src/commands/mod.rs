@@ -1,3 +1,4 @@
+pub mod array;
 pub mod browser;
 pub mod connections;
 pub mod database;
@@ -7,6 +8,12 @@ pub mod query_library;
 pub mod search;
 pub mod settings;
 pub mod workbench;
+
+pub use array::{
+    aggregate_array, append_array_elements, create_array, delete_array_elements,
+    delete_array_range, get_array_elements, get_array_range, get_array_summary, scan_array,
+    search_array, set_array_element,
+};
 
 pub use browser::{
     create_key, delete_key, delete_keys, export_keys, get_key, get_key_info, import_keys,

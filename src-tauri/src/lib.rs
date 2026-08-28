@@ -52,6 +52,17 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::array::create_array,
+            commands::array::get_array_summary,
+            commands::array::get_array_range,
+            commands::array::scan_array,
+            commands::array::get_array_elements,
+            commands::array::set_array_element,
+            commands::array::append_array_elements,
+            commands::array::delete_array_elements,
+            commands::array::delete_array_range,
+            commands::array::search_array,
+            commands::array::aggregate_array,
             commands::connections::list_connections,
             commands::connections::save_connection,
             commands::connections::delete_connection,

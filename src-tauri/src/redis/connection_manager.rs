@@ -6,10 +6,12 @@ use tokio::sync::RwLock;
 use crate::{
     domain::{
         normalize_key_type, parse_info_sections, parse_keyspace_line, validate_certificate_pem,
-        validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput,
-        AppendJsonArrayInput, CommandDefinition, CommandExecutionItem, CommandResult,
-        ConnectionInfo, ConnectionProfile, CreateKeyInput, CreateSearchIndexInput,
-        CreateStreamConsumerGroupInput, DatabaseAnalysisReport, DatabaseOverview,
+        validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AggregateArrayInput,
+        AnalyzeDatabaseInput, AppendArrayInput, AppendJsonArrayInput, ArrayKeyInput,
+        ArrayMultiGetInput, ArrayRangeInput, ArrayScanInput, CommandDefinition,
+        CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateArrayInput,
+        CreateKeyInput, CreateSearchIndexInput, CreateStreamConsumerGroupInput,
+        DatabaseAnalysisReport, DatabaseOverview, DeleteArrayElementsInput, DeleteArrayRangeInput,
         DeleteJsonPathInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
         DeleteStreamConsumerInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
         GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
@@ -18,16 +20,23 @@ use crate::{
         KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue, ListSearchIndexesResult,
         ModuleCapabilities, ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue,
         RenameKeyInput, ScanKeysInput, ScanPage, SearchIndexInfo, SearchIndexInput,
-        SearchQueryInput, SearchQueryResult, SelectDatabaseInput, SetJsonPathInput, SetKeyInput,
-        SetKeyTtlInput, SlowLogConfig, SlowLogEntry, SortedSetEntry, StartProfilerInput,
-        StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamConsumer, StreamConsumerGroup,
-        StreamEntry, StreamPendingEntry, UpdateSlowLogConfigInput,
+        SearchQueryInput, SearchQueryResult, SelectDatabaseInput, SetArrayElementInput,
+        SetJsonPathInput, SetKeyInput, SetKeyTtlInput, SlowLogConfig, SlowLogEntry, SortedSetEntry,
+        StartProfilerInput, StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamConsumer,
+        StreamConsumerGroup, StreamEntry, StreamPendingEntry, UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
 };
 
 use super::{
+    array::{
+        build_array_aggregate_command, build_array_append_command, build_array_delete_command,
+        build_array_delete_range_command, build_array_multi_get_command, build_array_range_command,
+        build_array_scan_command, build_array_search_command, build_array_set_command,
+        build_create_array_command, parse_array_aggregate, parse_array_multi_get,
+        parse_array_range, parse_array_scan, parse_array_search_with_values, parse_array_summary,
+    },
     capabilities::{
         build_command_info_command, is_array_command_set_supported,
         is_vector_set_command_set_supported, parse_command_info, parse_vector_set_info_summary,
@@ -70,6 +79,45 @@ pub trait RedisOperations: Send + Sync {
     async fn publish_pub_sub(&self, input: PublishPubSubInput) -> Result<u64, AppError>;
     async fn scan_keys(&self, input: crate::domain::ScanKeysInput) -> Result<ScanPage, AppError>;
     async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError>;
+    async fn create_array(&self, input: CreateArrayInput) -> Result<KeyValue, AppError>;
+    async fn get_array_summary(
+        &self,
+        input: ArrayKeyInput,
+    ) -> Result<crate::domain::ArraySummary, AppError>;
+    async fn get_array_range(
+        &self,
+        input: ArrayRangeInput,
+    ) -> Result<crate::domain::ArrayRange, AppError>;
+    async fn scan_array(&self, input: ArrayScanInput)
+        -> Result<crate::domain::ArrayScan, AppError>;
+    async fn get_array_elements(
+        &self,
+        input: ArrayMultiGetInput,
+    ) -> Result<Vec<Option<String>>, AppError>;
+    async fn set_array_element(
+        &self,
+        input: SetArrayElementInput,
+    ) -> Result<crate::domain::ArrayMutationResult, AppError>;
+    async fn append_array_elements(
+        &self,
+        input: AppendArrayInput,
+    ) -> Result<crate::domain::ArrayMutationResult, AppError>;
+    async fn delete_array_elements(
+        &self,
+        input: DeleteArrayElementsInput,
+    ) -> Result<crate::domain::ArrayMutationResult, AppError>;
+    async fn delete_array_range(
+        &self,
+        input: DeleteArrayRangeInput,
+    ) -> Result<crate::domain::ArrayMutationResult, AppError>;
+    async fn search_array(
+        &self,
+        input: crate::domain::SearchArrayInput,
+    ) -> Result<crate::domain::ArraySearchResult, AppError>;
+    async fn aggregate_array(
+        &self,
+        input: AggregateArrayInput,
+    ) -> Result<crate::domain::ArrayAggregateResult, AppError>;
     async fn get_module_capabilities(
         &self,
         connection_id: &str,
@@ -236,6 +284,15 @@ impl RedisService {
     async fn ensure_search_supported(&self, connection_id: &str) -> Result<(), AppError> {
         let capabilities = self.get_module_capabilities(connection_id).await?;
         if capabilities.search_compatible() {
+            Ok(())
+        } else {
+            Err(AppError::UnsupportedFeature)
+        }
+    }
+
+    async fn ensure_array_supported(&self, connection_id: &str) -> Result<(), AppError> {
+        let capabilities = self.get_module_capabilities(connection_id).await?;
+        if capabilities.array_supported {
             Ok(())
         } else {
             Err(AppError::UnsupportedFeature)
@@ -517,6 +574,229 @@ impl RedisOperations for RedisService {
     async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError> {
         let mut connection = self.connection(connection_id).await?;
         read_key(&mut connection, key).await
+    }
+
+    async fn create_array(&self, input: CreateArrayInput) -> Result<KeyValue, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let exists: i64 = ::redis::cmd("EXISTS")
+            .arg(&input.key)
+            .query_async::<i64>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if exists > 0 {
+            return Err(AppError::CommandFailed);
+        }
+
+        build_create_array_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if let Some(ttl_ms) = input.ttl_ms {
+            apply_ttl(&mut connection, &input.key, ttl_ms).await?;
+        }
+        read_key(&mut connection, &input.key).await
+    }
+
+    async fn get_array_summary(
+        &self,
+        input: ArrayKeyInput,
+    ) -> Result<crate::domain::ArraySummary, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let mut pipeline = ::redis::pipe();
+        pipeline
+            .cmd("ARLEN")
+            .arg(&input.key)
+            .cmd("ARCOUNT")
+            .arg(&input.key)
+            .cmd("ARNEXT")
+            .arg(&input.key);
+        let replies = pipeline
+            .query_async::<Vec<Value>>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if replies.len() != 3 {
+            return Err(AppError::CommandFailed);
+        }
+        parse_array_summary(
+            &input.key,
+            replies[0].clone(),
+            replies[1].clone(),
+            replies[2].clone(),
+        )
+    }
+
+    async fn get_array_range(
+        &self,
+        input: ArrayRangeInput,
+    ) -> Result<crate::domain::ArrayRange, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let reply = build_array_range_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_array_range(reply, &input.start, &input.end)
+    }
+
+    async fn scan_array(
+        &self,
+        input: ArrayScanInput,
+    ) -> Result<crate::domain::ArrayScan, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let reply = build_array_scan_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_array_scan(reply, input.limit)
+    }
+
+    async fn get_array_elements(
+        &self,
+        input: ArrayMultiGetInput,
+    ) -> Result<Vec<Option<String>>, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let reply = build_array_multi_get_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_array_multi_get(reply)
+    }
+
+    async fn set_array_element(
+        &self,
+        input: SetArrayElementInput,
+    ) -> Result<crate::domain::ArrayMutationResult, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        build_array_set_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(crate::domain::ArrayMutationResult {
+            affected: 1,
+            key_exists: true,
+            next_index: None,
+        })
+    }
+
+    async fn append_array_elements(
+        &self,
+        input: AppendArrayInput,
+    ) -> Result<crate::domain::ArrayMutationResult, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let length = ::redis::cmd("ARLEN")
+            .arg(&input.key)
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        let index = value_as_decimal_string(&length)?;
+        if index == u64::MAX.to_string() {
+            return Err(AppError::InvalidInput);
+        }
+        build_array_append_command(&input.key, &index, &input.values)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(crate::domain::ArrayMutationResult {
+            affected: input.values.len() as u64,
+            key_exists: true,
+            next_index: Some(index),
+        })
+    }
+
+    async fn delete_array_elements(
+        &self,
+        input: DeleteArrayElementsInput,
+    ) -> Result<crate::domain::ArrayMutationResult, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let reply = build_array_delete_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        let affected = value_as_decimal_string(&reply)?
+            .parse::<u64>()
+            .map_err(|_| AppError::CommandFailed)?;
+        let key_exists = redis_key_exists(&mut connection, &input.key).await?;
+        Ok(crate::domain::ArrayMutationResult {
+            affected,
+            key_exists,
+            next_index: None,
+        })
+    }
+
+    async fn delete_array_range(
+        &self,
+        input: DeleteArrayRangeInput,
+    ) -> Result<crate::domain::ArrayMutationResult, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let reply = build_array_delete_range_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        let affected = value_as_decimal_string(&reply)?
+            .parse::<u64>()
+            .map_err(|_| AppError::CommandFailed)?;
+        let key_exists = redis_key_exists(&mut connection, &input.key).await?;
+        Ok(crate::domain::ArrayMutationResult {
+            affected,
+            key_exists,
+            next_index: None,
+        })
+    }
+
+    async fn search_array(
+        &self,
+        input: crate::domain::SearchArrayInput,
+    ) -> Result<crate::domain::ArraySearchResult, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let reply = build_array_search_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_array_search_with_values(reply, input.limit, input.with_values)
+    }
+
+    async fn aggregate_array(
+        &self,
+        input: AggregateArrayInput,
+    ) -> Result<crate::domain::ArrayAggregateResult, AppError> {
+        input.validate()?;
+        self.ensure_array_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ensure_existing_key_type(&mut connection, &input.key, "array").await?;
+        let operation = input.operation.clone();
+        let reply = build_array_aggregate_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_array_aggregate(reply, &operation)
     }
 
     async fn get_module_capabilities(
@@ -1244,6 +1524,37 @@ async fn key_size(
         .await
         .map(Some)
         .map_err(map_command_error)
+}
+
+async fn ensure_existing_key_type(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+    expected: &str,
+) -> Result<(), AppError> {
+    let key_type: String = ::redis::cmd("TYPE")
+        .arg(key)
+        .query_async::<String>(connection)
+        .await
+        .map_err(map_command_error)?;
+    if key_type == "none" {
+        return Err(AppError::KeyNotFound);
+    }
+    if normalize_key_type(&key_type) != Some(expected) {
+        return Err(AppError::UnsupportedDataType);
+    }
+    Ok(())
+}
+
+async fn redis_key_exists(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+) -> Result<bool, AppError> {
+    let exists: i64 = ::redis::cmd("EXISTS")
+        .arg(key)
+        .query_async::<i64>(connection)
+        .await
+        .map_err(map_command_error)?;
+    Ok(exists > 0)
 }
 
 async fn apply_ttl(

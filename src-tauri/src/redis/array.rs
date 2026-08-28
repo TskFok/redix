@@ -85,6 +85,7 @@ pub(crate) fn parse_array_scan(value: Value, limit: usize) -> Result<ArrayScan, 
     if !(1..=crate::domain::MAX_ARRAY_ELEMENTS_PER_READ).contains(&limit) {
         return Err(AppError::InvalidInput);
     }
+    ensure_response_size(&value)?;
     let value = unwrap_attributes(value);
     let entries = match value {
         Value::Array(values) | Value::Set(values) => values,
@@ -131,9 +132,26 @@ pub(crate) fn parse_array_search(
     value: Value,
     limit: usize,
 ) -> Result<ArraySearchResult, AppError> {
+    parse_array_search_inner(value, limit, None)
+}
+
+pub(crate) fn parse_array_search_with_values(
+    value: Value,
+    limit: usize,
+    with_values: bool,
+) -> Result<ArraySearchResult, AppError> {
+    parse_array_search_inner(value, limit, Some(with_values))
+}
+
+fn parse_array_search_inner(
+    value: Value,
+    limit: usize,
+    with_values: Option<bool>,
+) -> Result<ArraySearchResult, AppError> {
     if !(1..=crate::domain::MAX_ARRAY_ELEMENTS_PER_READ).contains(&limit) {
         return Err(AppError::InvalidInput);
     }
+    ensure_response_size(&value)?;
     let values = match unwrap_attributes(value) {
         Value::Array(values) | Value::Set(values) => values,
         _ => return Err(AppError::CommandFailed),
@@ -148,14 +166,39 @@ pub(crate) fn parse_array_search(
             let Some(index) = optional_decimal(pair[0].clone())? else {
                 continue;
             };
-            let value = pair
-                .get(1)
-                .cloned()
-                .map(optional_text)
-                .transpose()?
-                .flatten()
-                .unwrap_or_default();
+            let value = if with_values == Some(false) {
+                String::new()
+            } else {
+                pair.get(1)
+                    .cloned()
+                    .map(optional_text)
+                    .transpose()?
+                    .flatten()
+                    .unwrap_or_default()
+            };
             elements.push(ArrayElement { index, value });
+        }
+    } else if with_values == Some(true) {
+        if values.len() % 2 != 0 {
+            return Err(AppError::CommandFailed);
+        }
+        for pair in values.chunks_exact(2) {
+            let Some(index) = optional_decimal(pair[0].clone())? else {
+                continue;
+            };
+            elements.push(ArrayElement {
+                index,
+                value: optional_text(pair[1].clone())?.unwrap_or_default(),
+            });
+        }
+    } else if with_values == Some(false) {
+        for value in values {
+            if let Some(index) = optional_decimal(value)? {
+                elements.push(ArrayElement {
+                    index,
+                    value: String::new(),
+                });
+            }
         }
     } else if values.len() % 2 == 0
         && values
@@ -190,10 +233,23 @@ pub(crate) fn parse_array_search(
     })
 }
 
+pub(crate) fn parse_array_value(value: Value) -> Result<Option<String>, AppError> {
+    ensure_response_size(&value)?;
+    optional_text(value)
+}
+
+pub(crate) fn parse_array_multi_get(value: Value) -> Result<Vec<Option<String>>, AppError> {
+    array_values(value)?
+        .into_iter()
+        .map(parse_array_value)
+        .collect()
+}
+
 pub(crate) fn parse_array_aggregate(
     value: Value,
     operation: &ArrayAggregateOperation,
 ) -> Result<crate::domain::ArrayAggregateResult, AppError> {
+    ensure_response_size(&value)?;
     let value = match unwrap_attributes(value) {
         Value::Nil => String::new(),
         value => optional_text(value)?.ok_or(AppError::CommandFailed)?,

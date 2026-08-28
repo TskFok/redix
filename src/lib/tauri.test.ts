@@ -4,13 +4,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearSlowLogs,
   acknowledgeStreamPendingEntries,
+  aggregateArray,
+  appendArrayElements,
   appendJsonArray,
   closeConnection,
   createSearchIndex,
+  createArray,
   createKey,
   createStreamConsumerGroup,
   deleteKeys,
   deleteConnection,
+  deleteArrayElements,
+  deleteArrayRange,
   deleteKey,
   deleteJsonPath,
   deleteSearchIndex,
@@ -21,6 +26,7 @@ import {
   executeCommand,
   exportKeys,
   getJsonPath,
+  getArrayRange,
   getModuleCapabilities,
   getSlowLogConfig,
   getSlowLogs,
@@ -28,6 +34,8 @@ import {
   getInstanceDetails,
   getCommandCatalog,
   getKey,
+  getArraySummary,
+  getArrayElements,
   getKeyInfo,
   getStreamConsumerGroups,
   getStreamConsumers,
@@ -59,7 +67,10 @@ import {
   stopPubSub,
   stopProfiler,
   setKey,
+  setArrayElement,
   setKeyTtl,
+  scanArray,
+  searchArray,
   deleteQueryLibraryItem,
   testConnection,
   updateSlowLogConfig,
@@ -140,6 +151,25 @@ beforeEach(() => {
 });
 
 describe("Tauri IPC bridge", () => {
+  it("把 Array 查询作为 typed input 传给 Tauri", async () => {
+    const input = {
+      connection_id: "local",
+      key: "events",
+      start: "0",
+      end: "99",
+    };
+    const result = {
+      cells: [],
+      start: "0",
+      end: "99",
+      has_more: false,
+    };
+    invokeMock.mockResolvedValue(result);
+
+    await expect(getArrayRange(input)).resolves.toEqual(result);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_array_range", { input });
+  });
+
   it("用稳定命令名调用 scan_keys", async () => {
     const result: ScanPage = { cursor: 0, keys: [], has_more: false };
     invokeMock.mockResolvedValue(result);

@@ -1,6 +1,18 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import type {
+  AggregateArrayInput,
+  AppendArrayInput,
+  ArrayKeyInput,
+  ArrayMultiGetInput,
+  ArrayMutationResult,
+  ArrayRange,
+  ArrayRangeInput,
+  ArrayScan,
+  ArrayScanInput,
+  ArraySearchResult,
+  ArraySummary,
+  CreateArrayInput,
   AppendJsonArrayInput,
   CommandDefinition,
   CommandExecutionItem,
@@ -19,6 +31,8 @@ import type {
   DatabaseAnalysisReport,
   DeleteKeysInput,
   DeleteKeyInput,
+  DeleteArrayElementsInput,
+  DeleteArrayRangeInput,
   DeleteStreamConsumerGroupInput,
   DeleteStreamConsumerInput,
   ExecuteCommandsInput,
@@ -50,6 +64,7 @@ import type {
   SearchIndexInput,
   SearchQueryInput,
   SearchQueryResult,
+  SearchArrayInput,
   RenameKeyInput,
   SaveConnectionInput,
   SaveCommandHistoryInput,
@@ -64,6 +79,7 @@ import type {
   SetJsonPathInput,
   SetKeyInput,
   SetKeyTtlInput,
+  SetArrayElementInput,
   SlowLogConfig,
   SlowLogEntry,
   StartPubSubInput,
@@ -286,6 +302,52 @@ export function saveAppSettings(settings: AppSettings): Promise<AppSettings> {
 
 export function getKey(input: GetKeyInput): Promise<KeyValue> {
   return call<KeyValue>("get_key", { input });
+}
+
+export function createArray(input: CreateArrayInput): Promise<KeyValue> {
+  return call<KeyValue>("create_array", { input });
+}
+
+export function getArraySummary(input: ArrayKeyInput): Promise<ArraySummary> {
+  return call<ArraySummary>("get_array_summary", { input });
+}
+
+export function getArrayRange(input: ArrayRangeInput): Promise<ArrayRange> {
+  return call<ArrayRange>("get_array_range", { input });
+}
+
+export function scanArray(input: ArrayScanInput): Promise<ArrayScan> {
+  return call<ArrayScan>("scan_array", { input });
+}
+
+export function getArrayElements(input: ArrayMultiGetInput): Promise<Array<(string | null)>> {
+  return call<Array<(string | null)>>("get_array_elements", { input });
+}
+
+export function setArrayElement(input: SetArrayElementInput): Promise<ArrayMutationResult> {
+  return call<ArrayMutationResult>("set_array_element", { input });
+}
+
+export function appendArrayElements(input: AppendArrayInput): Promise<ArrayMutationResult> {
+  return call<ArrayMutationResult>("append_array_elements", { input });
+}
+
+export function deleteArrayElements(
+  input: DeleteArrayElementsInput,
+): Promise<ArrayMutationResult> {
+  return call<ArrayMutationResult>("delete_array_elements", { input });
+}
+
+export function deleteArrayRange(input: DeleteArrayRangeInput): Promise<ArrayMutationResult> {
+  return call<ArrayMutationResult>("delete_array_range", { input });
+}
+
+export function searchArray(input: SearchArrayInput): Promise<ArraySearchResult> {
+  return call<ArraySearchResult>("search_array", { input });
+}
+
+export function aggregateArray(input: AggregateArrayInput): Promise<import("./types").ArrayAggregateResult> {
+  return call<import("./types").ArrayAggregateResult>("aggregate_array", { input });
 }
 
 export function getJsonPath(input: JsonPathInput): Promise<JsonPathValue> {

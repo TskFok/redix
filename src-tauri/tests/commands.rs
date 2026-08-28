@@ -4,8 +4,8 @@ use tauri::Manager;
 
 use redix_lib::{
     commands::{
-        browser, connections, database, json, observability, query_library, search, settings,
-        workbench,
+        array, browser, connections, database, json, observability, query_library, search,
+        settings, workbench,
     },
     domain::{
         AppSettings, CommandHistoryEntry, CommandResult, QueryLibraryItemInput,
@@ -46,6 +46,17 @@ impl SecretStore for EmptySecrets {
 
 #[test]
 fn exposes_all_tauri_command_adapters() {
+    let _ = array::create_array;
+    let _ = array::get_array_summary;
+    let _ = array::get_array_range;
+    let _ = array::scan_array;
+    let _ = array::get_array_elements;
+    let _ = array::set_array_element;
+    let _ = array::append_array_elements;
+    let _ = array::delete_array_elements;
+    let _ = array::delete_array_range;
+    let _ = array::search_array;
+    let _ = array::aggregate_array;
     let _ = browser::scan_keys;
     let _ = browser::get_key;
     let _ = browser::set_key;
