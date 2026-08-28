@@ -8,15 +8,17 @@ use crate::{
         normalize_key_type, parse_info_sections, parse_keyspace_line, validate_certificate_pem,
         validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput,
         AppendJsonArrayInput, CommandDefinition, CommandExecutionItem, CommandResult,
-        ConnectionInfo, ConnectionProfile, CreateKeyInput, CreateStreamConsumerGroupInput,
-        DatabaseAnalysisReport, DatabaseOverview, DeleteJsonPathInput, DeleteKeysInput,
-        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, ExecuteCommandsInput,
-        ExportKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
-        GetStreamConsumerGroupsInput, GetStreamConsumersInput, GetStreamPendingEntriesInput,
-        HashEntry, ImportKeysInput, InstanceDetails, InstanceOverview, JsonMutationResult,
-        JsonPathValue, KeyInfo, KeyInfoInput, KeySummary, KeyValue, ModuleCapabilities,
-        ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue, RenameKeyInput,
-        ScanKeysInput, ScanPage, SelectDatabaseInput, SetJsonPathInput, SetKeyInput,
+        ConnectionInfo, ConnectionProfile, CreateKeyInput, CreateSearchIndexInput,
+        CreateStreamConsumerGroupInput, DatabaseAnalysisReport, DatabaseOverview,
+        DeleteJsonPathInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
+        DeleteStreamConsumerInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
+        GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
+        InstanceDetails, InstanceOverview, JsonMutationResult, JsonPathValue, KeyInfo,
+        KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue, ListSearchIndexesResult,
+        ModuleCapabilities, ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue,
+        RenameKeyInput, ScanKeysInput, ScanPage, SearchIndexInfo, SearchIndexInput,
+        SearchQueryInput, SearchQueryResult, SelectDatabaseInput, SetJsonPathInput, SetKeyInput,
         SetKeyTtlInput, SlowLogConfig, SlowLogEntry, SortedSetEntry, StartProfilerInput,
         StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamConsumer, StreamConsumerGroup,
         StreamEntry, StreamPendingEntry, UpdateSlowLogConfigInput,
@@ -34,6 +36,10 @@ use super::{
     key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
     observability::{
         parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager, PubSubManager,
+    },
+    search::{
+        build_create_search_index_command, parse_max_search_results, parse_search_index_info,
+        parse_search_index_list, parse_search_query,
     },
     stream_groups::{
         parse_stream_consumer_groups, parse_stream_consumers, parse_stream_pending_entries,
@@ -64,6 +70,18 @@ pub trait RedisOperations: Send + Sync {
         &self,
         connection_id: &str,
     ) -> Result<ModuleCapabilities, AppError>;
+    async fn list_search_indexes(
+        &self,
+        connection_id: &str,
+    ) -> Result<ListSearchIndexesResult, AppError>;
+    async fn create_search_index(&self, input: CreateSearchIndexInput) -> Result<(), AppError>;
+    async fn get_search_index(&self, input: SearchIndexInput) -> Result<SearchIndexInfo, AppError>;
+    async fn delete_search_index(&self, input: SearchIndexInput) -> Result<(), AppError>;
+    async fn search_keys(&self, input: SearchQueryInput) -> Result<SearchQueryResult, AppError>;
+    async fn get_key_search_indexes(
+        &self,
+        input: GetKeySearchIndexesInput,
+    ) -> Result<Vec<KeySearchIndexSummary>, AppError>;
     async fn get_json_path(&self, input: GetJsonPathInput) -> Result<JsonPathValue, AppError>;
     async fn set_json_path(&self, input: SetJsonPathInput) -> Result<JsonMutationResult, AppError>;
     async fn append_json_array(
@@ -209,6 +227,15 @@ impl RedisService {
             .get_multiplexed_async_connection()
             .await
             .map_err(map_connection_error)
+    }
+
+    async fn ensure_search_supported(&self, connection_id: &str) -> Result<(), AppError> {
+        let capabilities = self.get_module_capabilities(connection_id).await?;
+        if capabilities.search_compatible() {
+            Ok(())
+        } else {
+            Err(AppError::UnsupportedFeature)
+        }
     }
 
     async fn inspect_client(client: &Client) -> Result<ConnectionInfo, AppError> {
@@ -509,6 +536,162 @@ impl RedisOperations for RedisService {
             .cache_capabilities_if_current(connection_id, token, capabilities.clone())
             .await;
         Ok(capabilities)
+    }
+
+    async fn list_search_indexes(
+        &self,
+        connection_id: &str,
+    ) -> Result<ListSearchIndexesResult, AppError> {
+        let input = crate::domain::ListSearchIndexesInput {
+            connection_id: connection_id.to_owned(),
+        };
+        input.validate()?;
+        self.ensure_search_supported(connection_id).await?;
+        let mut connection = self.connection(connection_id).await?;
+        let reply = ::redis::cmd("FT._LIST")
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(ListSearchIndexesResult {
+            indexes: parse_search_index_list(reply)?,
+        })
+    }
+
+    async fn create_search_index(&self, input: CreateSearchIndexInput) -> Result<(), AppError> {
+        input.validate()?;
+        self.ensure_search_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        build_create_search_index_command(&input)?
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(())
+    }
+
+    async fn get_search_index(&self, input: SearchIndexInput) -> Result<SearchIndexInfo, AppError> {
+        input.validate()?;
+        self.ensure_search_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let reply = ::redis::cmd("FT.INFO")
+            .arg(&input.index)
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        parse_search_index_info(reply)
+    }
+
+    async fn delete_search_index(&self, input: SearchIndexInput) -> Result<(), AppError> {
+        input.validate()?;
+        self.ensure_search_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ::redis::cmd("FT.DROPINDEX")
+            .arg(&input.index)
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        Ok(())
+    }
+
+    async fn search_keys(&self, input: SearchQueryInput) -> Result<SearchQueryResult, AppError> {
+        input.validate()?;
+        self.ensure_search_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let max_results = ::redis::cmd("FT.CONFIG")
+            .arg("GET")
+            .arg("MAXSEARCHRESULTS")
+            .query_async::<Value>(&mut connection)
+            .await
+            .ok()
+            .and_then(parse_max_search_results);
+        let safe_limit = max_results
+            .and_then(|value| u32::try_from(value).ok())
+            .filter(|value| *value > 0)
+            .map_or(input.limit, |value| input.limit.min(value));
+        let reply = ::redis::cmd("FT.SEARCH")
+            .arg(&input.index)
+            .arg(&input.query)
+            .arg("NOCONTENT")
+            .arg("LIMIT")
+            .arg(input.offset)
+            .arg(safe_limit)
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        let mut result = parse_search_query(reply, input.offset, safe_limit)?;
+        result.max_results = max_results;
+        if result.keys.is_empty() {
+            return Ok(result);
+        }
+
+        let mut pipeline = ::redis::pipe();
+        for key in &result.keys {
+            pipeline.cmd("TYPE").arg(&key.key);
+        }
+        let key_types = pipeline
+            .query_async::<Vec<String>>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if key_types.len() != result.keys.len() {
+            return Err(AppError::CommandFailed);
+        }
+        for (key, key_type) in result.keys.iter_mut().zip(key_types) {
+            key.key_type = key_type;
+        }
+        Ok(result)
+    }
+
+    async fn get_key_search_indexes(
+        &self,
+        input: GetKeySearchIndexesInput,
+    ) -> Result<Vec<KeySearchIndexSummary>, AppError> {
+        input.validate()?;
+        self.ensure_search_supported(&input.connection_id).await?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let key_type = ::redis::cmd("TYPE")
+            .arg(&input.key)
+            .query_async::<String>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        let normalized_key_type = key_type.to_ascii_lowercase();
+        if !matches!(
+            normalized_key_type.as_str(),
+            "hash" | "rejson-rl" | "rejson-rs" | "json"
+        ) {
+            return Ok(Vec::new());
+        }
+
+        let list_reply = ::redis::cmd("FT._LIST")
+            .query_async::<Value>(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        let indexes = parse_search_index_list(list_reply)?;
+        let mut matches = Vec::new();
+        for chunk in indexes.chunks(32) {
+            let mut pipeline = ::redis::pipe();
+            for index in chunk {
+                pipeline.cmd("FT.INFO").arg(&index.name);
+            }
+            let replies = pipeline
+                .query_async::<Vec<Value>>(&mut connection)
+                .await
+                .map_err(map_command_error)?;
+            if replies.len() != chunk.len() {
+                return Err(AppError::CommandFailed);
+            }
+            for (index, reply) in chunk.iter().zip(replies) {
+                let Ok(info) = parse_search_index_info(reply) else {
+                    continue;
+                };
+                if search_index_covers_key(&info, &input.key, &normalized_key_type) {
+                    matches.push(KeySearchIndexSummary {
+                        name: index.name.clone(),
+                        key_type: info.key_type,
+                        prefixes: info.prefixes,
+                    });
+                }
+            }
+        }
+        Ok(matches)
     }
 
     async fn get_json_path(&self, input: GetJsonPathInput) -> Result<JsonPathValue, AppError> {
@@ -997,6 +1180,22 @@ async fn get_slow_log_config_with_connection(
         .await
         .map_err(map_command_error)?;
     parse_slow_log_config_reply(reply)
+}
+
+fn search_index_covers_key(info: &SearchIndexInfo, key: &str, redis_key_type: &str) -> bool {
+    let expected_type = match redis_key_type {
+        "hash" => "hash",
+        "rejson-rl" | "rejson-rs" | "json" => "json",
+        _ => return false,
+    };
+    let index_type = info.key_type.trim().to_ascii_lowercase();
+    let type_matches = match expected_type {
+        "hash" => index_type == "hash",
+        "json" => index_type == "json",
+        _ => false,
+    };
+    type_matches
+        && (info.prefixes.is_empty() || info.prefixes.iter().any(|prefix| key.starts_with(prefix)))
 }
 
 async fn key_size(

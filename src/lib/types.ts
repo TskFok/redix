@@ -1,5 +1,6 @@
 export type Workspace =
   | "browser"
+  | "search-query"
   | "workbench"
   | "database"
   | "database-analysis"
@@ -80,6 +81,93 @@ export interface ModuleCapabilities {
   modules: ModuleSummary[];
   json_supported: boolean;
   json_version: string | null;
+  search_supported: boolean;
+  search_version: string | null;
+}
+
+export type SearchKeyType = "hash" | "json";
+export type SearchFieldType =
+  | "text"
+  | "tag"
+  | "numeric"
+  | "geo"
+  | "geoshape"
+  | "vector";
+
+export interface SearchIndexFieldInput {
+  name: string;
+  field_type: SearchFieldType;
+}
+
+export interface SearchIndexSummary {
+  name: string;
+}
+
+export interface ListSearchIndexesResult {
+  indexes: SearchIndexSummary[];
+}
+
+export interface CreateSearchIndexInput {
+  connection_id: string;
+  index: string;
+  key_type: SearchKeyType;
+  prefixes: string[];
+  fields: SearchIndexFieldInput[];
+}
+
+export interface SearchIndexInput {
+  connection_id: string;
+  index: string;
+}
+
+export interface GetKeySearchIndexesInput {
+  connection_id: string;
+  key: string;
+}
+
+export interface KeySearchIndexSummary {
+  name: string;
+  key_type: string;
+  prefixes: string[];
+}
+
+export interface SearchIndexAttribute {
+  identifier: string;
+  field_type: string;
+  sortable: boolean;
+  no_index: boolean;
+}
+
+export interface SearchIndexInfo {
+  index_name: string;
+  key_type: string;
+  prefixes: string[];
+  attributes: SearchIndexAttribute[];
+  num_docs: number | null;
+  num_terms: number | null;
+  num_records: number | null;
+  total_index_memory_bytes: number | null;
+}
+
+export interface SearchQueryInput {
+  connection_id: string;
+  index: string;
+  query: string;
+  offset: number;
+  limit: number;
+}
+
+export interface SearchKeyResult {
+  key: string;
+  key_type: string;
+}
+
+export interface SearchQueryResult {
+  total: number;
+  offset: number;
+  next_offset: number | null;
+  max_results: number | null;
+  keys: SearchKeyResult[];
 }
 
 export interface InstanceOverview {

@@ -15,6 +15,7 @@ const {
   scanKeysMock,
   getKeyMock,
   getModuleCapabilitiesMock,
+  getKeySearchIndexesMock,
   getJsonPathMock,
   setJsonPathMock,
   appendJsonArrayMock,
@@ -39,6 +40,7 @@ const {
   scanKeysMock: vi.fn(),
   getKeyMock: vi.fn(),
   getModuleCapabilitiesMock: vi.fn(),
+  getKeySearchIndexesMock: vi.fn(),
   getJsonPathMock: vi.fn(),
   setJsonPathMock: vi.fn(),
   appendJsonArrayMock: vi.fn(),
@@ -64,6 +66,7 @@ vi.mock("../../lib/tauri", () => ({
   scanKeys: scanKeysMock,
   getKey: getKeyMock,
   getModuleCapabilities: getModuleCapabilitiesMock,
+  getKeySearchIndexes: getKeySearchIndexesMock,
   getJsonPath: getJsonPathMock,
   setJsonPath: setJsonPathMock,
   appendJsonArray: appendJsonArrayMock,
@@ -120,7 +123,10 @@ describe("Redis Browser", () => {
       modules: [{ name: "ReJSON", version: "20611" }],
       json_supported: true,
       json_version: "20611",
+      search_supported: false,
+      search_version: null,
     });
+    getKeySearchIndexesMock.mockResolvedValue([]);
     getJsonPathMock.mockResolvedValue({
       key: "profile:1",
       path: "$",
@@ -1130,6 +1136,8 @@ describe("Redis Browser", () => {
       modules: [],
       json_supported: false,
       json_version: null,
+      search_supported: false,
+      search_version: null,
     });
     const jsonSummary = {
       key: "profile:1",
@@ -1328,6 +1336,8 @@ describe("Redis Browser", () => {
             modules: [{ name: "RedisJSON", version: "2.0.0" }],
             json_supported: true,
             json_version: "2.0.0",
+            search_supported: false,
+            search_version: null,
           },
         }}
         onDetailChange={onDetailChange}
@@ -1491,6 +1501,80 @@ describe("Redis Browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Stream 字段名不能为空");
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("Hash 详情显示所属 RedisSearch 索引", async () => {
+    const hashDetail: KeyValue = {
+      key: "user:1",
+      key_type: "hash",
+      ttl_ms: -1,
+      value: { Hash: { fields: [{ field: "name", value: "Alice" }] } },
+    };
+    getKeySearchIndexesMock.mockResolvedValue([
+      { name: "idx:users", key_type: "HASH", prefixes: ["user:"] },
+    ]);
+
+    render(
+      <KeyDetails
+        connectionId="local"
+        detail={hashDetail}
+        loading={false}
+        moduleProbe={{
+          status: "ready",
+          capabilities: {
+            modules: [{ name: "search", version: "2.8.10" }],
+            json_supported: false,
+            json_version: null,
+            search_supported: true,
+            search_version: "2.8.10",
+          },
+        }}
+        onDetailChange={vi.fn()}
+        onDeleted={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("heading", { name: "所属 RedisSearch 索引" })).toBeInTheDocument();
+    expect(getKeySearchIndexesMock).toHaveBeenCalledWith({
+      connection_id: "local",
+      key: "user:1",
+    });
+    expect(screen.getByText("idx:users")).toBeInTheDocument();
+    expect(screen.getByText("HASH · user:")).toBeInTheDocument();
+  });
+
+  it("RedisSearch 版本不满足时不读取键索引关联", async () => {
+    const hashDetail: KeyValue = {
+      key: "user:1",
+      key_type: "hash",
+      ttl_ms: -1,
+      value: { Hash: { fields: [{ field: "name", value: "Alice" }] } },
+    };
+
+    render(
+      <KeyDetails
+        connectionId="local"
+        detail={hashDetail}
+        loading={false}
+        moduleProbe={{
+          status: "ready",
+          capabilities: {
+            modules: [{ name: "search", version: "1.6.0" }],
+            json_supported: false,
+            json_version: null,
+            search_supported: true,
+            search_version: "1.6.0",
+          },
+        }}
+        onDetailChange={vi.fn()}
+        onDeleted={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getKeySearchIndexesMock).not.toHaveBeenCalled();
+    });
+    expect(screen.queryByRole("heading", { name: "所属 RedisSearch 索引" })).not.toBeInTheDocument();
   });
 
   it("详情重命名更新身份，并可刷新详细元数据", async () => {

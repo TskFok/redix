@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   deleteKey,
   deleteJsonPath,
+  getKeySearchIndexes,
   getKeyInfo,
   getKey,
   getJsonPath,
@@ -17,6 +18,7 @@ import type {
   JsonPathValue,
   KeyInfo,
   KeyValue,
+  KeySearchIndexSummary,
   RedisValue,
 } from "../../lib/types";
 import {
@@ -29,6 +31,7 @@ import {
 import KeyEditor from "./KeyEditor";
 import JsonPathEditor, { type JsonPathMutation } from "./JsonPathEditor";
 import StreamConsumerGroups from "./StreamConsumerGroups";
+import { searchCapabilityState } from "../search/searchState";
 
 interface KeyDetailsProps {
   connectionId: string;
@@ -69,10 +72,14 @@ export function KeyDetails({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [jsonPathError, setJsonPathError] = useState<string | null>(null);
+  const [searchIndexes, setSearchIndexes] = useState<KeySearchIndexSummary[]>([]);
+  const [searchIndexesLoading, setSearchIndexesLoading] = useState(false);
+  const [searchIndexesError, setSearchIndexesError] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState(detail?.key ?? "");
   const [localInfo, setLocalInfo] = useState<KeyInfo | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(0);
+  const searchIndexesRequestRef = useRef(0);
   const currentConnectionRef = useRef(connectionId);
   const currentKeyRef = useRef(detail?.key ?? null);
   currentConnectionRef.current = connectionId;
@@ -98,6 +105,56 @@ export function KeyDetails({
   }, [connectionId, detail?.key, onBusyChange]);
 
   const info = metadata === undefined ? localInfo : metadata;
+  const detailKeyType = detail?.key_type.trim().toLowerCase() ?? "";
+  const searchableKey =
+    detailKeyType === "hash" ||
+    detailKeyType === "json" ||
+    detailKeyType === "rejson-rl" ||
+    detailKeyType === "rejson-rs";
+  const searchCapability = searchCapabilityState(moduleProbe);
+  const searchSupported = searchCapability.status === "ready";
+
+  useEffect(() => {
+    const requestId = searchIndexesRequestRef.current + 1;
+    searchIndexesRequestRef.current = requestId;
+    setSearchIndexes([]);
+    setSearchIndexesError(null);
+    setSearchIndexesLoading(false);
+
+    if (!detail || !searchableKey || !searchSupported) {
+      return;
+    }
+
+    setSearchIndexesLoading(true);
+    void getKeySearchIndexes({ connection_id: connectionId, key: detail.key })
+      .then((indexes) => {
+        if (
+          mountedRef.current &&
+          searchIndexesRequestRef.current === requestId
+        ) {
+          setSearchIndexes(indexes);
+        }
+      })
+      .catch((caught) => {
+        if (
+          mountedRef.current &&
+          searchIndexesRequestRef.current === requestId
+        ) {
+          setSearchIndexesError(
+            browserErrorMessage(caught, "读取 RedisSearch 索引失败，请稍后重试。"),
+          );
+        }
+      })
+      .finally(() => {
+        if (searchIndexesRequestRef.current === requestId) {
+          setSearchIndexesLoading(false);
+        }
+      });
+
+    return () => {
+      searchIndexesRequestRef.current += 1;
+    };
+  }, [connectionId, detail?.key, searchableKey, searchSupported]);
 
   const isCurrent = (operation: OperationContext) =>
     mountedRef.current &&
@@ -481,6 +538,34 @@ export function KeyDetails({
           onRead={handleJsonPathRead}
           onMutate={handleJsonPathMutate}
         />
+      ) : null}
+      {searchableKey && searchSupported ? (
+        <section className="key-search-indexes" aria-labelledby="key-search-indexes-title">
+          <div className="stream-subpanel-heading">
+            <div>
+              <p className="eyebrow">REDISEARCH</p>
+              <h3 id="key-search-indexes-title">所属 RedisSearch 索引</h3>
+            </div>
+            {searchIndexesLoading ? <span>读取中…</span> : null}
+          </div>
+          {searchIndexesError ? (
+            <p className="inline-error" role="alert">{searchIndexesError}</p>
+          ) : searchIndexes.length > 0 ? (
+            <ul className="key-search-index-list">
+              {searchIndexes.map((index) => (
+                <li key={index.name}>
+                  <code>{index.name}</code>
+                  <span>
+                    {index.key_type}
+                    {index.prefixes.length > 0 ? ` · ${index.prefixes.join(", ")}` : " · 全部键"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : searchIndexesLoading ? null : (
+            <p className="empty-state-compact">该键不属于已发现的 RedisSearch 索引。</p>
+          )}
+        </section>
       ) : null}
       {detail.key_type.toLowerCase() === "stream" ? (
         <StreamConsumerGroups

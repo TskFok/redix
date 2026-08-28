@@ -3,6 +3,7 @@ mod database_analysis;
 mod json_ops;
 mod key_ops;
 mod observability;
+mod search;
 mod stream_groups;
 mod workbench;
 

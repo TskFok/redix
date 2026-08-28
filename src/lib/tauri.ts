@@ -12,6 +12,7 @@ import type {
   ConnectionInfo,
   ConnectionProfile,
   ConnectionExportDocument,
+  CreateSearchIndexInput,
   CreateKeyInput,
   CreateStreamConsumerGroupInput,
   DatabaseOverview,
@@ -26,6 +27,7 @@ import type {
   ExportKeysInput,
   GetSlowLogsInput,
   GetKeyInput,
+  GetKeySearchIndexesInput,
   JsonMutationResult,
   JsonPathInput,
   JsonPathValue,
@@ -42,6 +44,12 @@ import type {
   KeyInfoInput,
   KeyValue,
   ModuleCapabilities,
+  ListSearchIndexesResult,
+  KeySearchIndexSummary,
+  SearchIndexInfo,
+  SearchIndexInput,
+  SearchQueryInput,
+  SearchQueryResult,
   RenameKeyInput,
   SaveConnectionInput,
   SaveCommandHistoryInput,
@@ -166,6 +174,36 @@ export function getModuleCapabilities(
   return call<ModuleCapabilities>("get_module_capabilities", {
     connection_id: connectionId,
   });
+}
+
+export function listSearchIndexes(
+  connectionId: string,
+): Promise<ListSearchIndexesResult> {
+  return call<ListSearchIndexesResult>("list_search_indexes", {
+    connection_id: connectionId,
+  });
+}
+
+export function createSearchIndex(input: CreateSearchIndexInput): Promise<void> {
+  return call<void>("create_search_index", { input });
+}
+
+export function getSearchIndex(input: SearchIndexInput): Promise<SearchIndexInfo> {
+  return call<SearchIndexInfo>("get_search_index", { input });
+}
+
+export function deleteSearchIndex(input: SearchIndexInput): Promise<void> {
+  return call<void>("delete_search_index", { input });
+}
+
+export function searchKeys(input: SearchQueryInput): Promise<SearchQueryResult> {
+  return call<SearchQueryResult>("search_keys", { input });
+}
+
+export function getKeySearchIndexes(
+  input: GetKeySearchIndexesInput,
+): Promise<KeySearchIndexSummary[]> {
+  return call<KeySearchIndexSummary[]>("get_key_search_indexes", { input });
 }
 
 export function analyzeDatabase(

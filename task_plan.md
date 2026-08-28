@@ -497,7 +497,7 @@ complete：设计文档和第一批实施计划已获用户确认；RedisJSON/�
 
 ### Status
 
-discovery_pending_design_approval：已完成当前/目标项目证据盘点，等待本轮分批设计确认；尚未修改业务源码。
+complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust domain、RESP2/RESP3 parser、service、typed IPC、React 工作区、Browser 索引关联和全量验收；Redis Stack 真实网络流程因未配置测试地址而明确记录为 skip。
 
 ### Discovery checklist
 
@@ -505,10 +505,31 @@ discovery_pending_design_approval：已完成当前/目标项目证据盘点，�
 - [x] 盘点当前 Redix 的 Tauri command、Rust service、typed bridge 和前端工作区
 - [x] 盘点 RedisInsight 的 Browser 模块、Vector Search、Workbench/CLI 和本地拓扑入口
 - [x] 明确 Cloud/AI/Telemetry/远程插件/SQL 排除边界
-- [ ] 在聊天中确认分批设计、优先级和第一批验收范围
-- [ ] 编写并自审本轮设计文档
-- [ ] 用户审阅设计文档后编写实现计划
-- [ ] 按 TDD 实现并验证各批次
+- [x] 在聊天中确认分批设计、优先级和第一批验收范围
+- [x] 编写并自审本轮设计文档
+- [x] 用户审阅设计文档后编写实现计划
+- [x] 按 TDD 实现并验证第一批 Search / Query 功能
+
+### Implementation plan
+
+- [x] 已保存 `docs/superpowers/plans/2026-08-27-search-query.md`
+- [x] 已自审任务覆盖、文件映射、命令/DTO 类型一致性和占位符扫描
+- [x] 用户选择 Inline Execution 并开始生产代码
+- [x] 完成 Rust domain/parser/service/commands 定向验证
+- [x] 完成 typed IPC、React Search/Query 页面和 Browser 索引关联
+- [x] 完成全量测试、构建、非 Cloud 扫描和最终文档记录
+
+### Search / Query 第一批交付记录（2026-08-28）
+
+- [x] Task 1：Search DTO、输入上限、RedisSearch 2.0+ capability 和 `UNSUPPORTED_FEATURE` 固定错误。
+- [x] Task 2：`FT._LIST`、`FT.INFO`、`FT.SEARCH` 的 RESP2/RESP3 受限解析、`FT.CREATE` 安全参数构造和响应上限。
+- [x] Task 3：六个 typed Tauri command、当前连接/数据库 service、单次 pipeline 类型补全、索引关联和删除保留原 key。
+- [x] Task 4：TypeScript DTO、typed bridge、版本门控、分页与旧响应丢弃状态模型。
+- [x] Task 5：Search / Query 工作区、索引创建/详情/删除、`NOCONTENT` 分页查询、导航和局部降级。
+- [x] Task 6：Browser Hash/JSON 键详情中的 RedisSearch 索引关联摘要及竞态保护。
+- [x] Task 7：README、非 Cloud 范围、发现/进度记录和最终验证矩阵。
+- [x] 真实 Redis Stack ignored 流程已编译并执行；由于 `REDIX_TEST_REDIS_STACK_URL` 未配置，输出为 skip，未声称网络连通。
+- [x] 最终矩阵：前端 17 个测试文件/153 个测试通过；Rust 81 lib + 6 commands + 7 database analysis + 34 domain + 15 persistence 通过；build、non-cloud、rustfmt 和 diff check 通过。
 
 ### Proposed batch order
 
@@ -529,3 +550,7 @@ discovery_pending_design_approval：已完成当前/目标项目证据盘点，�
 | Error | Attempt | Resolution |
 |---|---:|---|
 | 设计文档自审命令的正则包含未转义 `???`，`rg` 报 repetition operator 错误 | 1 | 改用不含 `???` 的占位符扫描表达式重跑；设计文档和代码未受影响 |
+| 读取目标 RedisSearch info 转换器时使用了不存在的路径 | 1 | 改用 `rg --files redisinsight/api/src/modules/browser` 定位到目标项目实际的 Browser utility 路径；未修改目标项目 |
+| 实现计划占位符扫描命令再次包含未转义 `???`，`rg` 报 repetition operator 错误 | 1 | 改用固定字符串扫描和不含 `???` 的正则重跑；计划内容已修正 |
+| 恢复中核对后台进程时 `ps` 受到桌面沙箱权限限制 | 1 | 改用后续命令的退出状态和工作区状态判断，无生产文件受影响 |
+| 深入对照目标 `FT.INFO` 转换器后发现真实回复把 `key_type`/`prefixes` 放在 `index_definition` 嵌套结构中 | 1 | 先补 nested fixture 让 parser 定向测试 RED，再增加兼容解析并通过 6 个 Search parser 测试 |

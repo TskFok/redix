@@ -443,6 +443,16 @@
 - 格式修复后 `cargo fmt --check`、domain 27/27、前端 136/136、build、non-cloud 和 diff check 均通过；未配置 `REDIX_TEST_REDIS_STACK_URL` 的环境事实保持不变。
 - Task 5 fix commit：`ba531e4`。
 
+## 2026-08-28 RedisSearch / Query 第一批实现与验收
+
+- 对照 RedisInsight 的 Browser RedisSearch 路由，本批以当前 Standalone 数据库为边界实现索引列表、创建、INFO、删除、有限查询和键-索引关联；不复制 Cloud、远程插件或 SQL 运行时。
+- Search 能力通过 `MODULE LIST` 的 `search` / `redisearch` 模块名和 2.0+ 版本门控；不可用时 Search / Query 页面局部降级，普通 Browser、JSON、Workbench、Database 和 Observability 不被阻断。
+- Redis 命令固定为 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、`FT.CONFIG GET MAXSEARCHRESULTS` 和受限 `FT.SEARCH ... NOCONTENT LIMIT`；查询文本作为独立参数传入，生产路径不使用 `KEYS`、SQL 或循环 SQL 查询。
+- RESP parser 同时覆盖 Redis 常见 RESP2 数组和 RESP3 Map/Set/Attribute 形态；对索引、属性、结果数量和估算响应大小执行固定上限，前端只接收结构化 DTO。
+- Browser 关联只对 Hash/JSON 键读取最多 500 个索引名，并以最多 32 个 `FT.INFO` 命令组成批次 pipeline；不返回 raw schema map，旧 key/connection 响应会被丢弃。
+- 第一批未实现批次保持清晰：Vector Set、Redis Array、RedisJSON 深层树编辑、Workbench/CLI 高级体验，以及 SSH/Sentinel/Cluster 拓扑连接；这些能力需要独立的数据模型或连接路由设计。
+- `REDIX_TEST_REDIS_STACK_URL` 未配置，因此 ignored Redis Stack Search 流程只记录 skip；没有把 parser/unit test 结果外推为真实 Redis Stack 网络通过。
+
 ## 2026-08-27 当前项目与 RedisInsight 新一轮差异盘点
 
 - 当前 `redix` 与参考项目均处于 `main` 且工作区干净；本轮继续在当前分支工作，不创建分支，也不修改参考项目。

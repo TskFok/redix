@@ -14,6 +14,7 @@
 - Stream Consumer Group 支持创建/删除 Group、读取消费者与 Pending 列表、确认 Pending 条目和删除消费者；Pending 单次最多读取 500 条。
 - RedisJSON 根文档的读取和编辑，以及路径级 `JSON.GET`/`JSON.SET`/`JSON.DEL`/`JSON.ARRAPPEND`；未安装 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE` 错误。
 - 连接级 `MODULE LIST` 模块能力探测与 session 级缓存；探测失败或未检测到 RedisJSON 时，不阻断普通 Browser 流程，RedisJSON 路径编辑器稳定降级为不可用提示。
+- RedisSearch / Query 第一批本地能力：在检测到 Search 2.0+ 时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引管理、受限的 `FT.SEARCH ... NOCONTENT LIMIT` 分页查询，以及 Browser Hash/JSON 键详情中的索引关联摘要；输入、索引数量、结果数量和响应大小均有固定上限，查询文本不持久化。模块缺失或版本不满足时仅 Search / Query 工作区局部降级。
 - Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
 - Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
 - Database 工作区读取本地实例与数据库键空间概览，并支持安全的数据库切换；指标不可用时按字段降级，不暴露 Redis 原始错误。
@@ -31,10 +32,10 @@
 - Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry 及其他云托管 Redis 产品。
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
 - Cluster、Sentinel、拓扑发现或拓扑 fan-out、SSH、远程托管实例和云资源管理。
-- Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档/路径第一批与 Stream 基础能力除外）。
+- Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档/路径第一批、RedisSearch / Query 第一批与 Stream 基础能力除外）。
 - Stream 实时消费、阻塞式 `XREADGROUP`、`XCLAIM`/`XAUTOCLAIM`、Claim 流程、Profiler 日志文件/历史持久化/拓扑 fan-out 和超过 500 条记录的分页编辑。
 - Monaco、远程插件、远程插件运行时、云端命令目录和 SQL。
-- Search/Query、Vector、Array、CLI 独立会话，以及其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
+- Vector、Array、CLI 独立会话，以及其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
 
 ## 人工审查清单
 
@@ -43,6 +44,7 @@
 - [x] Browser 代码路径使用 `SCAN` 分页，没有加入 `KEYS` 命令。
 - [x] 未加入云 SDK、云端点、云登录、云账户模型或云凭据存储。
 - [x] 未引入 SQL，也没有在循环中查询 SQL。
+- [x] Search / Query 只通过 typed IPC 使用受限 `FT.*` 命令，不使用 `KEYS`、SQL 或未约束的 raw reply。
 - [x] Workbench 历史使用共享版本化 JSON 仓储，不保存密码、URI 或底层错误文本。
 - [x] 现有前端和 Rust 测试仍需通过；真实 Redis、Tauri bundle 结果按实际环境记录。
 
@@ -65,4 +67,10 @@ git diff --check
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration redis_stack_json_path_flow_when_redis_stack_is_available -- --ignored --nocapture
+```
+
+RedisSearch / Query ignored 流程同样使用 `REDIX_TEST_REDIS_STACK_URL`：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration redis_stack_search_flow_when_redis_stack_is_available -- --ignored --nocapture
 ```

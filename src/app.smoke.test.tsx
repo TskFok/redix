@@ -8,6 +8,9 @@ const {
   closeConnectionMock,
   scanKeysMock,
   getModuleCapabilitiesMock,
+  listSearchIndexesMock,
+  getSearchIndexMock,
+  searchKeysMock,
   executeCommandMock,
   executeCommandsMock,
   getCommandCatalogMock,
@@ -29,6 +32,9 @@ const {
   closeConnectionMock: vi.fn(),
   scanKeysMock: vi.fn(),
   getModuleCapabilitiesMock: vi.fn(),
+  listSearchIndexesMock: vi.fn(),
+  getSearchIndexMock: vi.fn(),
+  searchKeysMock: vi.fn(),
   executeCommandMock: vi.fn(),
   executeCommandsMock: vi.fn(),
   getCommandCatalogMock: vi.fn(),
@@ -52,6 +58,9 @@ vi.mock("./lib/tauri", () => ({
   closeConnection: closeConnectionMock,
   scanKeys: scanKeysMock,
   getModuleCapabilities: getModuleCapabilitiesMock,
+  listSearchIndexes: listSearchIndexesMock,
+  getSearchIndex: getSearchIndexMock,
+  searchKeys: searchKeysMock,
   executeCommand: executeCommandMock,
   executeCommands: executeCommandsMock,
   getCommandCatalog: getCommandCatalogMock,
@@ -108,6 +117,17 @@ beforeEach(() => {
     modules: [],
     json_supported: false,
     json_version: null,
+    search_supported: false,
+    search_version: null,
+  });
+  listSearchIndexesMock.mockResolvedValue({ indexes: [] });
+  getSearchIndexMock.mockResolvedValue(null);
+  searchKeysMock.mockResolvedValue({
+    total: 0,
+    offset: 0,
+    next_offset: null,
+    max_results: 100,
+    keys: [],
   });
   executeCommandMock.mockResolvedValue({ kind: "string", value: "PONG" });
   executeCommandsMock.mockResolvedValue([]);
@@ -262,6 +282,26 @@ describe("Redix 应用壳", () => {
     fireEvent.click(databaseButton);
 
     expect(await screen.findByRole("heading", { name: "数据库概览" })).toBeInTheDocument();
+  });
+
+  it("连接后显示 RedisSearch / Query 工作区", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    getModuleCapabilitiesMock.mockResolvedValue({
+      modules: [{ name: "search", version: "2.8.10" }],
+      json_supported: false,
+      json_version: null,
+      search_supported: true,
+      search_version: "2.8.10",
+    });
+    listSearchIndexesMock.mockResolvedValue({ indexes: [] });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await waitFor(() => expect(openConnectionMock).toHaveBeenCalledWith("local"));
+    fireEvent.click(screen.getByRole("button", { name: "Search / Query" }));
+
+    expect(await screen.findByRole("heading", { name: "RedisSearch / Query" })).toBeInTheDocument();
+    expect(listSearchIndexesMock).toHaveBeenCalledWith("local");
   });
 
   it("已连接时 Workbench 显示命令目录、批量策略和结果格式控件", async () => {

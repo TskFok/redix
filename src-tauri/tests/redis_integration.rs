@@ -7,14 +7,15 @@ use std::{
 use redix_lib::{
     domain::{
         AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput, AppendJsonArrayInput,
-        ConnectionProfile, CreateKeyInput, CreateStreamConsumerGroupInput, DeleteJsonPathInput,
-        DeleteKeysInput, DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput,
-        ExecuteCommandsInput, ExportKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
-        GetStreamConsumerGroupsInput, GetStreamConsumersInput, GetStreamPendingEntriesInput,
-        HashEntry, ImportKeysInput, KeyInfoInput, KeyValue, PublishPubSubInput, RedisValue,
-        RenameKeyInput, ScanKeysInput, SelectDatabaseInput, SetJsonPathInput, SetKeyInput,
-        SetKeyTtlInput, SortedSetEntry, StopPubSubInput, StreamEntry, StreamField,
-        UpdateSlowLogConfigInput,
+        ConnectionProfile, CreateKeyInput, CreateSearchIndexInput, CreateStreamConsumerGroupInput,
+        DeleteJsonPathInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
+        DeleteStreamConsumerInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
+        GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
+        KeyInfoInput, KeyValue, PublishPubSubInput, RedisValue, RenameKeyInput, ScanKeysInput,
+        SearchFieldType, SearchIndexFieldInput, SearchIndexInput, SearchKeyType, SearchQueryInput,
+        SelectDatabaseInput, SetJsonPathInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry,
+        StopPubSubInput, StreamEntry, StreamField, UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -179,6 +180,184 @@ async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
         (Ok(()), Err(cleanup)) => panic!("Redis Stack JSON path cleanup failed: {cleanup}"),
         (Err(flow), Err(cleanup)) => {
             panic!("Redis Stack JSON path flow failed: {flow}; cleanup also failed: {cleanup}")
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "设置 REDIX_TEST_REDIS_STACK_URL 后用 cargo test -- --ignored --nocapture 运行"]
+async fn redis_stack_search_flow_when_redis_stack_is_available() {
+    let Ok(url) = std::env::var("REDIX_TEST_REDIS_STACK_URL") else {
+        eprintln!("skipped: REDIX_TEST_REDIS_STACK_URL is not set");
+        return;
+    };
+    let (profile, password) = integration_profile(&url);
+    let secrets = TestSecrets::default();
+    if let Some(password) = password.as_deref() {
+        secrets
+            .write(
+                "integration",
+                &ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
+    }
+    let service = RedisService::new(
+        std::sync::Arc::new(TestProfiles {
+            profiles: vec![profile],
+        }),
+        std::sync::Arc::new(secrets),
+    );
+    service.open_connection("integration").await.unwrap();
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock must be after Unix epoch")
+        .as_nanos();
+    let prefix = format!("redix:search:test:{}:{timestamp}:", std::process::id());
+    let key = format!("{prefix}one");
+    let index = format!("redix_search_{}_{}", std::process::id(), timestamp);
+
+    let flow = async {
+        let capabilities = service
+            .get_module_capabilities("integration")
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if !capabilities.search_compatible() {
+            eprintln!("skipped: RedisSearch module is not installed or is too old");
+            return Ok::<(), String>(());
+        }
+
+        service
+            .set_key(SetKeyInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+                value: RedisValue::Hash {
+                    fields: vec![
+                        HashEntry {
+                            field: "title".into(),
+                            value: "hello world".into(),
+                        },
+                        HashEntry {
+                            field: "label".into(),
+                            value: "blue".into(),
+                        },
+                    ],
+                },
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+
+        service
+            .create_search_index(CreateSearchIndexInput {
+                connection_id: "integration".into(),
+                index: index.clone(),
+                key_type: SearchKeyType::Hash,
+                prefixes: vec![prefix.clone()],
+                fields: vec![
+                    SearchIndexFieldInput {
+                        name: "title".into(),
+                        field_type: SearchFieldType::Text,
+                    },
+                    SearchIndexFieldInput {
+                        name: "label".into(),
+                        field_type: SearchFieldType::Tag,
+                    },
+                ],
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+
+        let indexes = service
+            .list_search_indexes("integration")
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if !indexes.indexes.iter().any(|item| item.name == index) {
+            return Err("created RedisSearch index is not listed".into());
+        }
+
+        let info = service
+            .get_search_index(SearchIndexInput {
+                connection_id: "integration".into(),
+                index: index.clone(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if info.key_type != "HASH" || info.prefixes != vec![prefix.clone()] {
+            return Err("RedisSearch INFO returned an unexpected definition".into());
+        }
+
+        let result = service
+            .search_keys(SearchQueryInput {
+                connection_id: "integration".into(),
+                index: index.clone(),
+                query: "hello".into(),
+                offset: 0,
+                limit: 20,
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if result.total != 1
+            || result.keys.len() != 1
+            || result.keys[0].key != key
+            || result.keys[0].key_type != "hash"
+        {
+            return Err("RedisSearch query returned an unexpected key result".into());
+        }
+
+        let associations = service
+            .get_key_search_indexes(GetKeySearchIndexesInput {
+                connection_id: "integration".into(),
+                key: key.clone(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if !associations.iter().any(|item| item.name == index) {
+            return Err("Browser key association did not include the created index".into());
+        }
+
+        service
+            .delete_search_index(SearchIndexInput {
+                connection_id: "integration".into(),
+                index: index.clone(),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        service
+            .get_key("integration", &key)
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        Ok::<(), String>(())
+    }
+    .await;
+
+    let cleanup = async {
+        service
+            .delete_key("integration", &key)
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        service
+            .delete_search_index(SearchIndexInput {
+                connection_id: "integration".into(),
+                index: index.clone(),
+            })
+            .await
+            .ok();
+        service
+            .close_connection("integration")
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        Ok::<(), String>(())
+    }
+    .await;
+
+    match (flow, cleanup) {
+        (Ok(()), Ok(())) => {}
+        (Err(flow), Ok(())) => panic!("Redis Stack Search flow failed: {flow}"),
+        (Ok(()), Err(cleanup)) => panic!("Redis Stack Search cleanup failed: {cleanup}"),
+        (Err(flow), Err(cleanup)) => {
+            panic!("Redis Stack Search flow failed: {flow}; cleanup also failed: {cleanup}")
         }
     }
 }

@@ -6,12 +6,14 @@ import {
   acknowledgeStreamPendingEntries,
   appendJsonArray,
   closeConnection,
+  createSearchIndex,
   createKey,
   createStreamConsumerGroup,
   deleteKeys,
   deleteConnection,
   deleteKey,
   deleteJsonPath,
+  deleteSearchIndex,
   deleteStreamConsumer,
   exportConnections,
   deleteStreamConsumerGroup,
@@ -31,6 +33,8 @@ import {
   getStreamConsumers,
   getStreamPendingEntries,
   getInstanceOverview,
+  getKeySearchIndexes,
+  getSearchIndex,
   analyzeDatabase,
   getAppSettings,
   importKeys,
@@ -38,6 +42,7 @@ import {
   listQueryLibrary,
   listCommandHistory,
   listConnections,
+  listSearchIndexes,
   openConnection,
   publishPubSub,
   startProfiler,
@@ -47,6 +52,7 @@ import {
   saveCommandHistory,
   saveAppSettings,
   saveQueryLibraryItem,
+  searchKeys,
   selectDatabase,
   setJsonPath,
   startPubSub,
@@ -78,6 +84,11 @@ import type {
   JsonPathValue,
   KeyValue,
   ModuleCapabilities,
+  CreateSearchIndexInput,
+  KeySearchIndexSummary,
+  ListSearchIndexesResult,
+  SearchIndexInfo,
+  SearchQueryResult,
   RedisValue,
   SaveConnectionInput,
   ImportConnectionsResult,
@@ -202,6 +213,8 @@ describe("Tauri IPC bridge", () => {
       modules: [{ name: "ReJSON", version: "2.8.4" }],
       json_supported: true,
       json_version: "2.8.4",
+      search_supported: false,
+      search_version: null,
     };
     const pathValue: JsonPathValue = {
       key: "doc",
@@ -261,6 +274,86 @@ describe("Tauri IPC bridge", () => {
     await expect(deleteJsonPath(deleteInput)).resolves.toEqual(mutation);
     expect(invokeMock).toHaveBeenLastCalledWith("delete_json_path", {
       input: deleteInput,
+    });
+  });
+
+  it("为 RedisSearch 使用稳定 IPC 合同", async () => {
+    const indexes: ListSearchIndexesResult = {
+      indexes: [{ name: "idx:users" }],
+    };
+    const created: CreateSearchIndexInput = {
+      connection_id: "local",
+      index: "idx:users",
+      key_type: "hash",
+      prefixes: ["user:"],
+      fields: [{ name: "name", field_type: "text" }],
+    };
+    const indexInput = { connection_id: "local", index: "idx:users" };
+    const info: SearchIndexInfo = {
+      index_name: "idx:users",
+      key_type: "HASH",
+      prefixes: ["user:"],
+      attributes: [],
+      num_docs: 1,
+      num_terms: null,
+      num_records: null,
+      total_index_memory_bytes: null,
+    };
+    const query: SearchQueryResult = {
+      total: 1,
+      offset: 0,
+      next_offset: null,
+      max_results: 100,
+      keys: [{ key: "user:1", key_type: "hash" }],
+    };
+    const keyIndexes: KeySearchIndexSummary[] = [
+      { name: "idx:users", key_type: "HASH", prefixes: ["user:"] },
+    ];
+
+    invokeMock
+      .mockResolvedValueOnce(indexes)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(info)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(query)
+      .mockResolvedValueOnce(keyIndexes);
+
+    await expect(listSearchIndexes("local")).resolves.toEqual(indexes);
+    expect(invokeMock).toHaveBeenLastCalledWith("list_search_indexes", {
+      connection_id: "local",
+    });
+
+    await expect(createSearchIndex(created)).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith("create_search_index", {
+      input: created,
+    });
+
+    await expect(getSearchIndex(indexInput)).resolves.toEqual(info);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_search_index", {
+      input: indexInput,
+    });
+
+    await expect(deleteSearchIndex(indexInput)).resolves.toBeUndefined();
+    expect(invokeMock).toHaveBeenLastCalledWith("delete_search_index", {
+      input: indexInput,
+    });
+
+    const queryInput = {
+      connection_id: "local",
+      index: "idx:users",
+      query: "@name:Alice",
+      offset: 0,
+      limit: 100,
+    };
+    await expect(searchKeys(queryInput)).resolves.toEqual(query);
+    expect(invokeMock).toHaveBeenLastCalledWith("search_keys", {
+      input: queryInput,
+    });
+
+    const keyInput = { connection_id: "local", key: "user:1" };
+    await expect(getKeySearchIndexes(keyInput)).resolves.toEqual(keyIndexes);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_key_search_indexes", {
+      input: keyInput,
     });
   });
 

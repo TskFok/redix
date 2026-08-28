@@ -4,7 +4,8 @@ use tauri::Manager;
 
 use redix_lib::{
     commands::{
-        browser, connections, database, json, observability, query_library, settings, workbench,
+        browser, connections, database, json, observability, query_library, search, settings,
+        workbench,
     },
     domain::{
         AppSettings, CommandHistoryEntry, CommandResult, QueryLibraryItemInput,
@@ -81,6 +82,12 @@ fn exposes_all_tauri_command_adapters() {
     let _ = json::set_json_path;
     let _ = json::append_json_array;
     let _ = json::delete_json_path;
+    let _ = search::list_search_indexes;
+    let _ = search::create_search_index;
+    let _ = search::get_search_index;
+    let _ = search::delete_search_index;
+    let _ = search::search_keys;
+    let _ = search::get_key_search_indexes;
     let _ = observability::get_slow_logs;
     let _ = observability::clear_slow_logs;
     let _ = observability::get_slow_log_config;
@@ -100,6 +107,42 @@ fn exposes_all_tauri_command_adapters() {
     let _ = workbench::get_command_catalog;
     let _ = workbench::list_command_history;
     let _ = workbench::save_command_history;
+}
+
+#[test]
+fn search_command_rejects_empty_connection_id_before_connecting() {
+    let app = tauri::test::mock_builder()
+        .manage(AppState::new(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+        ))
+        .invoke_handler(tauri::generate_handler![search::list_search_indexes])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("test app must build");
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .expect("test webview must build");
+
+    let response = tauri::test::get_ipc_response(
+        &webview,
+        tauri::webview::InvokeRequest {
+            cmd: "list_search_indexes".into(),
+            callback: tauri::ipc::CallbackFn(0),
+            error: tauri::ipc::CallbackFn(1),
+            url: "tauri://localhost".parse().unwrap(),
+            body: serde_json::json!({ "connection_id": " " }).into(),
+            headers: Default::default(),
+            invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+        },
+    )
+    .expect_err("empty connection id must fail validation");
+    assert_eq!(
+        response,
+        serde_json::json!({
+            "code": "INVALID_CONNECTION",
+            "message": "连接配置无效"
+        })
+    );
 }
 
 #[test]

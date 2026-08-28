@@ -3,12 +3,14 @@ mod support;
 use redix_lib::{
     domain::{
         command_catalog, is_sensitive_command, normalize_json_path, parse_info_sections,
-        parse_keyspace_line, validate_json_array_append, validate_json_path,
-        AcknowledgeStreamPendingEntriesInput, AppSettings, AppendJsonArrayInput, ConnectionProfile,
-        CreateKeyInput, DeleteKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
+        parse_keyspace_line, search_version_supported, validate_json_array_append,
+        validate_json_path, AcknowledgeStreamPendingEntriesInput, AppSettings,
+        AppendJsonArrayInput, ConnectionProfile, CreateKeyInput, CreateSearchIndexInput,
+        DeleteKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
         GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput,
         ModuleCapabilities, ModuleSummary, PubSubTopic, QueryLibraryItemInput, RedisValue,
-        RenameKeyInput, ScanKeysInput, SelectDatabaseInput, SetJsonPathInput, StartProfilerInput,
+        RenameKeyInput, ScanKeysInput, SearchFieldType, SearchIndexFieldInput, SearchKeyType,
+        SearchQueryInput, SelectDatabaseInput, SetJsonPathInput, StartProfilerInput,
         StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
     },
     error::AppError,
@@ -591,5 +593,176 @@ fn validates_stream_consumer_group_inputs() {
         .validate()
         .unwrap_err(),
         AppError::InvalidConnection
+    );
+}
+
+#[test]
+fn search_create_input_rejects_empty_index_and_duplicate_fields() {
+    let valid = CreateSearchIndexInput {
+        connection_id: "local".into(),
+        index: "idx:users".into(),
+        key_type: SearchKeyType::Hash,
+        prefixes: vec!["user:".into()],
+        fields: vec![
+            SearchIndexFieldInput {
+                name: "name".into(),
+                field_type: SearchFieldType::Text,
+            },
+            SearchIndexFieldInput {
+                name: "name".into(),
+                field_type: SearchFieldType::Tag,
+            },
+        ],
+    };
+
+    assert_eq!(
+        CreateSearchIndexInput {
+            index: String::new(),
+            ..valid.clone()
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidInput
+    );
+    assert_eq!(valid.validate().unwrap_err(), AppError::InvalidInput);
+    assert_eq!(
+        CreateSearchIndexInput {
+            connection_id: " ".into(),
+            ..valid
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidConnection
+    );
+}
+
+#[test]
+fn search_create_input_enforces_field_and_prefix_limits() {
+    let field = |index: usize| SearchIndexFieldInput {
+        name: format!("field:{index}"),
+        field_type: SearchFieldType::Text,
+    };
+    let base = CreateSearchIndexInput {
+        connection_id: "local".into(),
+        index: "idx:users".into(),
+        key_type: SearchKeyType::Json,
+        prefixes: vec!["user:".into()],
+        fields: vec![field(0)],
+    };
+
+    assert_eq!(
+        CreateSearchIndexInput {
+            fields: (0..65).map(field).collect(),
+            ..base.clone()
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidInput
+    );
+    assert_eq!(
+        CreateSearchIndexInput {
+            prefixes: (0..65).map(|index| format!("user:{index}:")).collect(),
+            ..base.clone()
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidInput
+    );
+    assert_eq!(
+        CreateSearchIndexInput {
+            fields: vec![SearchIndexFieldInput {
+                name: "x".repeat(257),
+                field_type: SearchFieldType::Text,
+            }],
+            ..base.clone()
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidInput
+    );
+    assert_eq!(
+        CreateSearchIndexInput {
+            prefixes: vec!["x".repeat(257)],
+            ..base.clone()
+        }
+        .validate()
+        .unwrap_err(),
+        AppError::InvalidInput
+    );
+
+    let boundary = CreateSearchIndexInput {
+        prefixes: (0..64).map(|index| format!("user:{index}:")).collect(),
+        ..base
+    };
+    assert_eq!(boundary.validate(), Ok(()));
+}
+
+#[test]
+fn search_query_input_enforces_query_offset_and_limit() {
+    let valid = SearchQueryInput {
+        connection_id: "local".into(),
+        index: "idx:users".into(),
+        query: "*".into(),
+        offset: 100_000,
+        limit: 200,
+    };
+
+    for invalid in [
+        SearchQueryInput {
+            query: " ".into(),
+            ..valid.clone()
+        },
+        SearchQueryInput {
+            query: "x".repeat(4097),
+            ..valid.clone()
+        },
+        SearchQueryInput {
+            offset: 100_001,
+            ..valid.clone()
+        },
+        SearchQueryInput {
+            limit: 0,
+            ..valid.clone()
+        },
+        SearchQueryInput {
+            limit: 201,
+            ..valid.clone()
+        },
+    ] {
+        assert_eq!(invalid.validate().unwrap_err(), AppError::InvalidInput);
+    }
+    assert_eq!(valid.validate(), Ok(()));
+}
+
+#[test]
+fn search_capabilities_recognize_search_module_names_and_versions() {
+    for name in ["Search", "RediSearch", "redisearch"] {
+        let capabilities = ModuleCapabilities::from_modules(vec![ModuleSummary {
+            name: name.into(),
+            version: Some("2.6.11".into()),
+        }]);
+        assert!(capabilities.search_supported, "module name {name}");
+        assert_eq!(capabilities.search_version.as_deref(), Some("2.6.11"));
+        assert!(capabilities.search_compatible());
+    }
+
+    let no_search = ModuleCapabilities::from_modules(vec![]);
+    assert!(!no_search.search_supported);
+    assert!(!no_search.search_compatible());
+    assert!(!search_version_supported(None));
+    assert!(!search_version_supported(Some("1.6.0")));
+    assert!(search_version_supported(Some("2.0.0")));
+    assert!(search_version_supported(Some("2.10.0")));
+}
+
+#[test]
+fn unsupported_feature_serializes_to_stable_ipc_error() {
+    let json = serde_json::to_value(AppError::UnsupportedFeature).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "code": "UNSUPPORTED_FEATURE",
+            "message": "当前 Redis 功能不可用"
+        })
     );
 }

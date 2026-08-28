@@ -1803,6 +1803,220 @@ code {
   padding-top: 2px;
 }
 
+/* RedisSearch / Query */
+
+.search-page {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.search-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.75fr) minmax(0, 1.25fr);
+  align-items: start;
+  gap: 12px;
+}
+
+.search-index-panel,
+.search-query-panel,
+.search-create-panel {
+  min-width: 0;
+}
+
+.search-index-panel > .field {
+  margin-top: 16px;
+}
+
+.search-delete-button {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.search-index-info {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border);
+}
+
+.search-index-info .detail-info-grid {
+  margin-bottom: 14px;
+}
+
+.search-index-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-raised);
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.search-index-summary code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+
+.search-attributes {
+  margin-top: 16px;
+}
+
+.search-section-label {
+  margin: 0 0 8px;
+  color: var(--color-muted);
+  font-size: 10px;
+}
+
+.search-attributes ul,
+.key-search-index-list {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.search-attributes li,
+.key-search-index-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
+  color: var(--color-text);
+  font-size: 10px;
+}
+
+.search-attributes li > span:first-child,
+.key-search-index-list code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-strong);
+  font-family: "JetBrains Mono", monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-attributes li > span:nth-child(2),
+.key-search-index-list span {
+  flex-shrink: 0;
+  color: var(--color-primary);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+}
+
+.search-attributes li small {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-size: 9px;
+}
+
+.search-query-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.search-query-form .button {
+  min-width: 86px;
+}
+
+.search-result-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-top: 18px;
+  color: var(--color-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+}
+
+.search-results-table {
+  min-width: 360px;
+}
+
+.search-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 14px;
+}
+
+.search-create-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.search-create-grid {
+  margin-top: 0;
+}
+
+.search-fields-fieldset {
+  display: grid;
+  gap: 12px;
+}
+
+.search-field-list {
+  display: grid;
+  gap: 10px;
+}
+
+.search-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(140px, 0.65fr) auto;
+  align-items: end;
+  gap: 10px;
+}
+
+.search-field-row > .button {
+  min-height: 40px;
+}
+
+.search-unavailable {
+  min-height: 260px;
+}
+
+.search-unavailable h2 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.search-unavailable p {
+  max-width: 60ch;
+  margin: 8px 0 0;
+  line-height: 1.5;
+}
+
+.key-search-indexes {
+  display: grid;
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border);
+}
+
+.key-search-indexes h3 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 13px;
+  font-weight: 500;
+}
+
 /* Workbench */
 
 .workbench-layout {
@@ -2891,6 +3105,7 @@ code {
   .stream-group-data-grid,
   .settings-layout,
   .browser-layout,
+  .search-layout,
   .workbench-layout,
   .observability-config-grid,
   .pubsub-subscribe-grid,
@@ -2936,8 +3151,14 @@ code {
   }
 
   .browser-layout,
+  .search-layout,
   .workbench-layout {
     min-height: 0;
+  }
+
+  .search-field-row,
+  .search-query-form {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .browser-list-panel,

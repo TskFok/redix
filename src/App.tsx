@@ -6,6 +6,7 @@ import DatabaseAnalysisPage from "./features/database-analysis/DatabaseAnalysisP
 import DatabasePage from "./features/database/DatabasePage";
 import ObservabilityPage from "./features/observability/ObservabilityPage";
 import QueryLibraryPage from "./features/query-library/QueryLibraryPage";
+import SearchPage from "./features/search/SearchPage";
 import SettingsPage from "./features/settings/SettingsPage";
 import WorkbenchPage from "./features/workbench/WorkbenchPage";
 import { getAppSettings } from "./lib/tauri";
@@ -21,6 +22,7 @@ interface NavigationItem {
   icon:
     | "connections"
     | "browser"
+    | "search-query"
     | "workbench"
     | "database"
     | "database-analysis"
@@ -37,6 +39,12 @@ const navigationItems: NavigationItem[] = [
     icon: "connections",
   },
   { id: "browser", label: "Browser", description: "键浏览", icon: "browser" },
+  {
+    id: "search-query",
+    label: "Search / Query",
+    description: "索引与查询",
+    icon: "search-query",
+  },
   {
     id: "workbench",
     label: "Workbench",
@@ -78,6 +86,7 @@ const navigationItems: NavigationItem[] = [
 const sectionDescriptions: Record<AppSection, string> = {
   connections: "保存并管理本地 Redis 实例",
   browser: "使用 SCAN 浏览键和值",
+  "search-query": "管理 RedisSearch 索引并查询键",
   workbench: "直接执行 Redis 命令并查看返回值",
   database: "查看实例指标和数据库键空间",
   "database-analysis": "显式扫描并汇总键空间与内存",
@@ -101,6 +110,15 @@ function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
         <rect x="4" y="4" width="16" height="16" rx="2" />
         <path d="M4 9h16M9 9v11M15 9v11" />
+      </svg>
+    );
+  }
+
+  if (type === "search-query") {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <circle cx="10.5" cy="10.5" r="5.5" />
+        <path d="m15 15 5 5" />
       </svg>
     );
   }
@@ -285,6 +303,9 @@ export default function App() {
           </p>
           {activeProfile && activeSection === "browser" ? (
             <BrowserPage connectionId={activeProfile.id} scanCount={settings.scan_count} />
+          ) : null}
+          {activeProfile && activeSection === "search-query" ? (
+            <SearchPage connectionId={activeProfile.id} />
           ) : null}
           {activeProfile && activeSection === "workbench" ? (
             <WorkbenchPage

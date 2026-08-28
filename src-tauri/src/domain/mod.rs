@@ -7,6 +7,7 @@ pub mod local_resources;
 pub mod module_capabilities;
 pub mod observability;
 pub mod profile;
+pub mod search;
 pub mod stream;
 pub mod workbench;
 
@@ -19,5 +20,6 @@ pub use local_resources::*;
 pub use module_capabilities::*;
 pub use observability::*;
 pub use profile::*;
+pub use search::*;
 pub use stream::*;
 pub use workbench::*;

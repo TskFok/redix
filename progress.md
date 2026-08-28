@@ -406,3 +406,20 @@
 - 已确认目标项目中的 Cloud、Azure、RDI、AI、Telemetry、远程插件和云账户/发现入口不属于本次实现范围；目标的插件可视化仅作为不引入远程运行时的排除项处理。
 - 已确认拓扑连接会影响 profile 版本、连接 manager、命令路由、观察/分析生命周期，模块编辑会影响 capability snapshot、RESP 解析、结果上限和 Browser 详情边界；下一步应先提交分批设计供用户确认，未开始修改业务源码。
 - 发现记录已同步到 `findings.md`；当前仅做只读勘察与计划记录更新。
+## 2026-08-28：继续 RedisSearch/Query Inline Execution
+
+- 用户选择 Inline Execution；已完成 Task 1 的 Search domain/capability/error、Task 2 的 RESP parser/命令构造和 Task 3 的 RedisService/Tauri commands 初步实现。
+- 恢复时确认没有遗留 cargo/vitest 后台进程；随后已完成定向 Rust 回归、typed IPC、React 工作区、Browser 关联和最终验收。
+
+### Search / Query 第一批收口
+
+- Task 1–3 已完成：Search 2.0+ capability 门控、输入/响应上限、RESP2/RESP3 解析、`FT._LIST`/`FT.CREATE`/`FT.INFO`/`FT.DROPINDEX`/`FT.SEARCH` typed service 和六个 Tauri command。
+- Task 4 已完成：TypeScript DTO、typed IPC wrapper、版本门控、分页状态和旧响应丢弃；定向 bridge/state 测试通过。
+- Task 5 已完成：新增 Search / Query 工作区，支持 Hash/JSON 索引创建、详情、删除（保留原键）、有限 `NOCONTENT` 查询、分页、固定错误提示和模块不可用局部降级。
+- Task 6 已完成：Browser Hash/JSON 键详情显示匹配的 RedisSearch 索引摘要，并保护 connection/key 切换和卸载竞态；普通键详情不发起 Search 请求。
+- Task 7 文档已同步：README 和 `docs/non-cloud-scope.md` 不再把 Search / Query 列为已排除能力，Vector/Array、SSH、Sentinel、Cluster、Cloud、AI、Telemetry、远程插件和 SQL 仍明确排除。
+- Redis Stack ignored 流程 `redis_stack_search_flow_when_redis_stack_is_available` 已编译并执行；由于 `REDIX_TEST_REDIS_STACK_URL` 未配置，实际结果为 skip，未执行真实网络断言。
+- 最终对照目标 `FT.INFO` 回复后补齐了真实的 `index_definition` 嵌套结构解析；新增 fixture 先验证 RED，再以 6 个 Search parser 测试 GREEN，避免仅扁平测试通过而在 Redis Stack INFO/Browser 关联中失效。
+- 最终验证矩阵：`npm run test:frontend` 为 17 个文件/153 个测试通过；`npm run build`、`npm run check:non-cloud`、`npm run test:rust` 均通过；Rust 普通测试为 81 lib + 6 commands + 7 database analysis + 34 domain + 15 persistence，通过；`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 与 `git diff --check` 通过。
+- 前端测试仍输出两条 jsdom `Not implemented: navigation to another Document` 提示，但退出码为 0 且无失败测试，归类为既有测试环境噪音。
+- 按当前项目约定直接保留在 `main` 工作区，本轮未创建新分支、未 push、未擅自创建提交；参考仓库未修改。
