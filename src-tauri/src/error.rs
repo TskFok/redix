@@ -13,6 +13,8 @@ pub enum AppError {
     UnsupportedDataType,
     #[error("当前 Redis 功能不可用")]
     UnsupportedFeature,
+    #[error("Redis key 不存在")]
+    KeyNotFound,
     #[error("Redis 命令执行失败")]
     CommandFailed,
     #[error("本地数据保存失败")]
@@ -31,6 +33,7 @@ impl AppError {
             Self::AuthenticationFailed => "AUTHENTICATION_FAILED",
             Self::UnsupportedDataType => "UNSUPPORTED_DATA_TYPE",
             Self::UnsupportedFeature => "UNSUPPORTED_FEATURE",
+            Self::KeyNotFound => "KEY_NOT_FOUND",
             Self::CommandFailed => "COMMAND_FAILED",
             Self::PersistenceFailed => "PERSISTENCE_FAILED",
             Self::InvalidInput => "INVALID_INPUT",
@@ -45,6 +48,7 @@ impl AppError {
             Self::AuthenticationFailed => "Redis 身份验证失败",
             Self::UnsupportedDataType => "不支持的 Redis 数据类型",
             Self::UnsupportedFeature => "当前 Redis 功能不可用",
+            Self::KeyNotFound => "Redis key 不存在",
             Self::CommandFailed => "Redis 命令执行失败",
             Self::PersistenceFailed => "本地数据保存失败",
             Self::InvalidInput => "输入参数无效",

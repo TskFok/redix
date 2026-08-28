@@ -1,3 +1,4 @@
+pub mod array;
 pub mod connection_transfer;
 pub mod database;
 pub mod database_analysis;
@@ -9,8 +10,10 @@ pub mod observability;
 pub mod profile;
 pub mod search;
 pub mod stream;
+pub mod vector_set;
 pub mod workbench;
 
+pub use array::*;
 pub use connection_transfer::*;
 pub use database::*;
 pub use database_analysis::*;
@@ -22,4 +25,5 @@ pub use observability::*;
 pub use profile::*;
 pub use search::*;
 pub use stream::*;
+pub use vector_set::*;
 pub use workbench::*;

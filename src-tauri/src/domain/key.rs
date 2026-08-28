@@ -36,6 +36,8 @@ pub fn normalize_key_type(value: &str) -> Option<&'static str> {
         "zset" | "sortedset" | "sorted-set" => Some("zset"),
         "stream" => Some("stream"),
         "json" | "rejson-rl" | "rejson-rs" => Some("json"),
+        "array" => Some("array"),
+        "vectorset" | "vector-set" => Some("vector-set"),
         _ => None,
     }
 }
@@ -218,19 +220,43 @@ pub struct ExecuteCommandInput {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum RedisValue {
-    String { value: String },
-    Hash { fields: Vec<HashEntry> },
-    List { items: Vec<String> },
-    Set { members: Vec<String> },
-    SortedSet { members: Vec<SortedSetEntry> },
-    Json { value: serde_json::Value },
-    Stream { entries: Vec<StreamEntry> },
+    String {
+        value: String,
+    },
+    Hash {
+        fields: Vec<HashEntry>,
+    },
+    List {
+        items: Vec<String>,
+    },
+    Set {
+        members: Vec<String>,
+    },
+    SortedSet {
+        members: Vec<SortedSetEntry>,
+    },
+    Json {
+        value: serde_json::Value,
+    },
+    Stream {
+        entries: Vec<StreamEntry>,
+    },
+    Array {
+        length: String,
+        count: String,
+    },
+    VectorSet {
+        total: String,
+        dimension: Option<u32>,
+        quantization: Option<String>,
+    },
 }
 
 impl RedisValue {
     pub fn validate(&self) -> Result<(), AppError> {
         match self {
             Self::String { .. } | Self::Json { .. } => Ok(()),
+            Self::Array { .. } | Self::VectorSet { .. } => Err(AppError::UnsupportedFeature),
             Self::Hash { fields } => {
                 let mut names = HashSet::with_capacity(fields.len());
                 if fields.is_empty()

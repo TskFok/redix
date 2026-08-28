@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::{domain::ModuleSummary, error::AppError};
 
 use super::search::search_version_supported;
@@ -24,7 +26,41 @@ pub struct ModuleCapabilities {
     pub json_version: Option<String>,
     pub search_supported: bool,
     pub search_version: Option<String>,
+    pub array_supported: bool,
+    pub vector_set_supported: bool,
 }
+
+pub(crate) const ARRAY_REQUIRED_COMMANDS: &[&str] = &[
+    "ARSET",
+    "ARMSET",
+    "ARGET",
+    "ARMGET",
+    "ARLEN",
+    "ARCOUNT",
+    "ARGETRANGE",
+    "ARSCAN",
+    "ARNEXT",
+    "AROP",
+    "ARGREP",
+    "ARDEL",
+    "ARDELRANGE",
+    "ARINSERT",
+    "ARRING",
+    "ARINFO",
+];
+
+pub(crate) const VECTOR_SET_REQUIRED_COMMANDS: &[&str] = &[
+    "VADD",
+    "VCARD",
+    "VINFO",
+    "VRANGE",
+    "VRANDMEMBER",
+    "VEMB",
+    "VGETATTR",
+    "VSETATTR",
+    "VREM",
+    "VSIM",
+];
 
 impl ModuleCapabilities {
     pub fn from_modules(modules: Vec<ModuleSummary>) -> Self {
@@ -63,10 +99,31 @@ impl ModuleCapabilities {
             json_version,
             search_supported,
             search_version,
+            array_supported: false,
+            vector_set_supported: false,
         }
+    }
+
+    pub fn from_modules_and_commands(
+        modules: Vec<ModuleSummary>,
+        commands: HashSet<String>,
+    ) -> Self {
+        let mut capabilities = Self::from_modules(modules);
+        capabilities.array_supported = has_all_commands(&commands, ARRAY_REQUIRED_COMMANDS);
+        capabilities.vector_set_supported =
+            has_all_commands(&commands, VECTOR_SET_REQUIRED_COMMANDS);
+        capabilities
     }
 
     pub fn search_compatible(&self) -> bool {
         self.search_supported && search_version_supported(self.search_version.as_deref())
     }
+}
+
+fn has_all_commands(commands: &HashSet<String>, required: &[&str]) -> bool {
+    required.iter().all(|name| {
+        commands
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(name))
+    })
 }

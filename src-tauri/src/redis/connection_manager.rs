@@ -1509,6 +1509,9 @@ async fn write_key(
                     .map_err(map_command_error)?;
             }
         }
+        RedisValue::Array { .. } | RedisValue::VectorSet { .. } => {
+            return Err(AppError::UnsupportedFeature);
+        }
     }
     Ok(())
 }

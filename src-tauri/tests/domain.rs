@@ -5,13 +5,15 @@ use redix_lib::{
         command_catalog, is_sensitive_command, normalize_json_path, parse_info_sections,
         parse_keyspace_line, search_version_supported, validate_json_array_append,
         validate_json_path, AcknowledgeStreamPendingEntriesInput, AppSettings,
-        AppendJsonArrayInput, ConnectionProfile, CreateKeyInput, CreateSearchIndexInput,
-        DeleteKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
+        AppendJsonArrayInput, ArrayCreateMode, ArrayElement, ArrayRangeInput, ConnectionProfile,
+        CreateArrayInput, CreateKeyInput, CreateSearchIndexInput, DeleteKeysInput, ExportedKey,
+        GetJsonPathInput, GetSlowLogsInput,
         GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput,
         ModuleCapabilities, ModuleSummary, PubSubTopic, QueryLibraryItemInput, RedisValue,
         RenameKeyInput, ScanKeysInput, SearchFieldType, SearchIndexFieldInput, SearchKeyType,
         SearchQueryInput, SelectDatabaseInput, SetJsonPathInput, StartProfilerInput,
-        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField,
+        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField, VectorSetElementPayload,
+        VectorSimilarityQueryInput,
     },
     error::AppError,
 };
@@ -71,6 +73,88 @@ fn rejects_an_invalid_profile_from_the_shared_fixture() {
 #[test]
 fn accepts_a_valid_connection_profile() {
     assert_eq!(valid_profile().validate(), Ok(()));
+}
+
+#[test]
+fn array_and_vector_domain_contracts_reject_precision_and_payload_errors() {
+    let input = ArrayRangeInput {
+        connection_id: "local".into(),
+        key: "events".into(),
+        start: "18446744073709551615".into(),
+        end: "18446744073709551616".into(),
+    };
+    assert_eq!(input.validate().unwrap_err(), AppError::InvalidInput);
+
+    let query = VectorSimilarityQueryInput {
+        connection_id: "local".into(),
+        key: "embeddings".into(),
+        by_element: Some("seed".into()),
+        by_vector: Some(vec![1.0]),
+        by_vector_base64: None,
+        count: 10,
+        with_attributes: true,
+    };
+    assert_eq!(query.validate().unwrap_err(), AppError::InvalidInput);
+}
+
+#[test]
+fn normalizes_array_indexes_and_rejects_invalid_values() {
+    assert_eq!(redix_lib::domain::normalize_array_index("00042").unwrap(), "42");
+    assert_eq!(
+        redix_lib::domain::normalize_array_index("18446744073709551615").unwrap(),
+        "18446744073709551615"
+    );
+    for index in ["", "-1", "+1", "18446744073709551616", "1.0"] {
+        assert_eq!(
+            redix_lib::domain::normalize_array_index(index).unwrap_err(),
+            AppError::InvalidInput
+        );
+    }
+}
+
+#[test]
+fn validates_sparse_array_and_fp32_vector_payloads() {
+    let sparse = CreateArrayInput {
+        connection_id: "local".into(),
+        key: "events".into(),
+        mode: ArrayCreateMode::Sparse,
+        start_index: None,
+        values: vec![],
+        elements: vec![
+            ArrayElement {
+                index: "01".into(),
+                value: "first".into(),
+            },
+            ArrayElement {
+                index: "1".into(),
+                value: "duplicate".into(),
+            },
+        ],
+        ttl_ms: None,
+    };
+    assert_eq!(sparse.validate().unwrap_err(), AppError::InvalidInput);
+
+    let vector = VectorSetElementPayload {
+        name: "seed".into(),
+        vector_values: None,
+        vector_fp32_base64: Some("AACAPw==".into()),
+        attributes: Some(serde_json::json!({"kind": "seed"})),
+    };
+    assert_eq!(vector.validate(Some(1)), Ok(()));
+    assert_eq!(vector.validate(Some(2)).unwrap_err(), AppError::InvalidInput);
+}
+
+#[test]
+fn module_capabilities_require_new_command_sets() {
+    let capabilities = ModuleCapabilities::from_modules_and_commands(
+        vec![],
+        ["ARLEN", "ARCOUNT", "ARSET"]
+            .into_iter()
+            .map(String::from)
+            .collect(),
+    );
+    assert!(!capabilities.array_supported);
+    assert!(!capabilities.vector_set_supported);
 }
 
 #[test]
