@@ -328,12 +328,14 @@ impl SearchArrayInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "UPPERCASE")]
 pub enum ArrayAggregateOperation {
-    Count,
     Sum,
-    Average,
     Min,
     Max,
+    And,
+    Or,
+    Xor,
     Match,
+    Used,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -419,12 +421,15 @@ fn validate_range(start: &str, end: &str) -> Result<(), AppError> {
     let end = normalize_array_index(end)?
         .parse::<u64>()
         .map_err(|_| AppError::InvalidInput)?;
-    if start > end
-        || end
-            .checked_sub(start)
+    let span = if start >= end {
+        start
+            .checked_sub(end)
             .and_then(|length| length.checked_add(1))
-            .is_none_or(|length| length > MAX_ARRAY_ELEMENTS_PER_READ as u64)
-    {
+    } else {
+        end.checked_sub(start)
+            .and_then(|length| length.checked_add(1))
+    };
+    if span.is_none_or(|length| length > MAX_ARRAY_ELEMENTS_PER_READ as u64) {
         Err(AppError::InvalidInput)
     } else {
         Ok(())

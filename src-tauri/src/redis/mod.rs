@@ -1,3 +1,4 @@
+mod array;
 mod capabilities;
 mod connection_manager;
 mod database_analysis;
