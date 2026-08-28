@@ -217,6 +217,8 @@ fn length_command(key_type: &str) -> Option<&'static str> {
         "set" => Some("SCARD"),
         "zset" => Some("ZCARD"),
         "stream" => Some("XLEN"),
+        "array" => Some("ARLEN"),
+        "vectorset" | "vector-set" => Some("VCARD"),
         _ => None,
     }
 }
@@ -299,6 +301,13 @@ mod tests {
             command_stats_info_command().get_packed_command(),
             b"*2\r\n$4\r\nINFO\r\n$12\r\ncommandstats\r\n".to_vec()
         );
+    }
+
+    #[test]
+    fn uses_module_length_commands_for_array_and_vector_set() {
+        assert_eq!(length_command("array"), Some("ARLEN"));
+        assert_eq!(length_command("vectorset"), Some("VCARD"));
+        assert_eq!(length_command("vector-set"), Some("VCARD"));
     }
 
     #[test]

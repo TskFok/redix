@@ -28,6 +28,10 @@ use crate::{
 };
 
 use super::{
+    capabilities::{
+        build_command_info_command, is_array_command_set_supported,
+        is_vector_set_command_set_supported, parse_command_info, parse_vector_set_info_summary,
+    },
     database_analysis::{analyze_connection, load_instance_details, parse_module_list},
     json_ops::{
         append_json_array_path, delete_json_path_value, json_path_uses_legacy_syntax,
@@ -526,12 +530,31 @@ impl RedisOperations for RedisService {
 
         let token = self.capture_capability_token(connection_id).await;
         let mut connection = self.connection(connection_id).await?;
-        let reply = ::redis::cmd("MODULE")
+        let module_reply = match ::redis::cmd("MODULE")
             .arg("LIST")
             .query_async::<Value>(&mut connection)
             .await
-            .map_err(|_| AppError::CommandFailed)?;
-        let capabilities = parse_module_capabilities(reply)?;
+        {
+            Ok(reply) => reply,
+            Err(error) if is_unknown_command_error(&error) => Value::Array(Vec::new()),
+            Err(error) => return Err(map_command_error(error)),
+        };
+        let module_capabilities = parse_module_capabilities(module_reply)?;
+        let command_reply = match build_command_info_command()
+            .query_async::<Value>(&mut connection)
+            .await
+        {
+            Ok(reply) => reply,
+            Err(error) if is_unknown_command_error(&error) => Value::Array(Vec::new()),
+            Err(error) => return Err(map_command_error(error)),
+        };
+        let commands = parse_command_info(command_reply)?;
+        let mut capabilities = ModuleCapabilities::from_modules_and_commands(
+            module_capabilities.modules,
+            commands.clone(),
+        );
+        capabilities.array_supported = is_array_command_set_supported(&commands);
+        capabilities.vector_set_supported = is_vector_set_command_set_supported(&commands);
         let _ = self
             .cache_capabilities_if_current(connection_id, token, capabilities.clone())
             .await;
@@ -1210,6 +1233,8 @@ async fn key_size(
         "set" => "SCARD",
         "zset" => "ZCARD",
         "stream" => "XLEN",
+        "array" => "ARLEN",
+        "vectorset" | "vector-set" => "VCARD",
         "ReJSON-RL" | "ReJSON-RS" | "JSON" => return Ok(None),
         _ => return Ok(None),
     };
@@ -1253,7 +1278,7 @@ async fn read_key_info(
         .await
         .map_err(map_command_error)?;
     if key_type == "none" {
-        return Err(AppError::CommandFailed);
+        return Err(AppError::KeyNotFound);
     }
     let ttl_ms: i64 = ::redis::cmd("PTTL")
         .arg(key)
@@ -1304,7 +1329,7 @@ async fn read_key(
         .await
         .map_err(map_command_error)?;
     if key_type == "none" {
-        return Err(AppError::CommandFailed);
+        return Err(AppError::KeyNotFound);
     }
 
     let value = match key_type.as_str() {
@@ -1371,6 +1396,44 @@ async fn read_key(
                 .collect::<Result<Vec<_>, AppError>>()?;
             RedisValue::Stream { entries }
         }
+        "array" => {
+            let mut pipeline = ::redis::pipe();
+            pipeline
+                .cmd("ARLEN")
+                .arg(key)
+                .cmd("ARCOUNT")
+                .arg(key)
+                .cmd("ARNEXT")
+                .arg(key);
+            let replies = pipeline
+                .query_async::<Vec<Value>>(connection)
+                .await
+                .map_err(map_command_error)?;
+            if replies.len() != 3 {
+                return Err(AppError::CommandFailed);
+            }
+            RedisValue::Array {
+                length: value_as_decimal_string(&replies[0])?,
+                count: value_as_decimal_string(&replies[1])?,
+            }
+        }
+        "vectorset" | "vector-set" => {
+            let mut pipeline = ::redis::pipe();
+            pipeline.cmd("VCARD").arg(key).cmd("VINFO").arg(key);
+            let replies = pipeline
+                .query_async::<Vec<Value>>(connection)
+                .await
+                .map_err(map_command_error)?;
+            if replies.len() != 2 {
+                return Err(AppError::CommandFailed);
+            }
+            let (dimension, quantization) = parse_vector_set_info_summary(replies[1].clone())?;
+            RedisValue::VectorSet {
+                total: value_as_decimal_string(&replies[0])?,
+                dimension,
+                quantization,
+            }
+        }
         "ReJSON-RL" | "ReJSON-RS" | "JSON" => {
             let raw: String = ::redis::cmd("JSON.GET")
                 .arg(key)
@@ -1395,6 +1458,27 @@ async fn read_key(
         ttl_ms,
         value,
     })
+}
+
+fn value_as_decimal_string(value: &Value) -> Result<String, AppError> {
+    let value = match value {
+        Value::Int(value) => u64::try_from(*value)
+            .map_err(|_| AppError::CommandFailed)?
+            .to_string(),
+        Value::BulkString(value) => {
+            String::from_utf8(value.clone()).map_err(|_| AppError::CommandFailed)?
+        }
+        Value::SimpleString(value) | Value::VerbatimString { text: value, .. } => value.clone(),
+        Value::Attribute { data, .. } => return value_as_decimal_string(data),
+        _ => return Err(AppError::CommandFailed),
+    };
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(AppError::CommandFailed);
+    }
+    value
+        .parse::<u64>()
+        .map(|number| number.to_string())
+        .map_err(|_| AppError::CommandFailed)
 }
 
 fn stream_entry_from_reply(entry: ::redis::streams::StreamId) -> Result<StreamEntry, AppError> {
@@ -1737,6 +1821,13 @@ pub(crate) fn map_command_error(error: ::redis::RedisError) -> AppError {
         ::redis::ErrorKind::Io => AppError::ConnectionFailed,
         _ => AppError::CommandFailed,
     }
+}
+
+fn is_unknown_command_error(error: &::redis::RedisError) -> bool {
+    error.detail().is_some_and(|detail| {
+        let detail = detail.to_ascii_lowercase();
+        detail.contains("unknown command") || detail.contains("unknown subcommand")
+    })
 }
 
 pub(crate) fn map_json_command_error(error: ::redis::RedisError) -> AppError {

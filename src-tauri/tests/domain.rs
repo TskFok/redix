@@ -7,12 +7,12 @@ use redix_lib::{
         validate_json_path, AcknowledgeStreamPendingEntriesInput, AppSettings,
         AppendJsonArrayInput, ArrayCreateMode, ArrayElement, ArrayRangeInput, ConnectionProfile,
         CreateArrayInput, CreateKeyInput, CreateSearchIndexInput, DeleteKeysInput, ExportedKey,
-        GetJsonPathInput, GetSlowLogsInput,
-        GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput,
-        ModuleCapabilities, ModuleSummary, PubSubTopic, QueryLibraryItemInput, RedisValue,
-        RenameKeyInput, ScanKeysInput, SearchFieldType, SearchIndexFieldInput, SearchKeyType,
-        SearchQueryInput, SelectDatabaseInput, SetJsonPathInput, StartProfilerInput,
-        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField, VectorSetElementPayload,
+        GetJsonPathInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput, ModuleCapabilities,
+        ModuleSummary, PubSubTopic, QueryLibraryItemInput, RedisValue, RenameKeyInput,
+        ScanKeysInput, SearchFieldType, SearchIndexFieldInput, SearchKeyType, SearchQueryInput,
+        SelectDatabaseInput, SetJsonPathInput, StartProfilerInput, StartPubSubInput,
+        StopProfilerInput, StreamEntry, StreamField, VectorSetElementPayload,
         VectorSimilarityQueryInput,
     },
     error::AppError,
@@ -99,7 +99,10 @@ fn array_and_vector_domain_contracts_reject_precision_and_payload_errors() {
 
 #[test]
 fn normalizes_array_indexes_and_rejects_invalid_values() {
-    assert_eq!(redix_lib::domain::normalize_array_index("00042").unwrap(), "42");
+    assert_eq!(
+        redix_lib::domain::normalize_array_index("00042").unwrap(),
+        "42"
+    );
     assert_eq!(
         redix_lib::domain::normalize_array_index("18446744073709551615").unwrap(),
         "18446744073709551615"
@@ -110,6 +113,22 @@ fn normalizes_array_indexes_and_rejects_invalid_values() {
             AppError::InvalidInput
         );
     }
+}
+
+#[test]
+fn key_type_normalization_includes_module_types() {
+    assert_eq!(
+        redix_lib::domain::normalize_key_type("vectorset"),
+        Some("vector-set")
+    );
+    assert_eq!(
+        redix_lib::domain::normalize_key_type("vector-set"),
+        Some("vector-set")
+    );
+    assert_eq!(
+        redix_lib::domain::normalize_key_type("array"),
+        Some("array")
+    );
 }
 
 #[test]
@@ -141,7 +160,10 @@ fn validates_sparse_array_and_fp32_vector_payloads() {
         attributes: Some(serde_json::json!({"kind": "seed"})),
     };
     assert_eq!(vector.validate(Some(1)), Ok(()));
-    assert_eq!(vector.validate(Some(2)).unwrap_err(), AppError::InvalidInput);
+    assert_eq!(
+        vector.validate(Some(2)).unwrap_err(),
+        AppError::InvalidInput
+    );
 }
 
 #[test]
