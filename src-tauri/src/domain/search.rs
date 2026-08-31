@@ -13,6 +13,7 @@ pub const MAX_SEARCH_INDEXES: usize = 500;
 pub const MAX_SEARCH_OFFSET: u64 = 100_000;
 pub const MAX_SEARCH_PAGE: u32 = 200;
 pub const MAX_SEARCH_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+pub const MAX_SEARCH_FIELD_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ListSearchIndexesInput {
@@ -156,6 +157,8 @@ pub struct SearchQueryInput {
     pub query: String,
     pub offset: u64,
     pub limit: u32,
+    #[serde(default)]
+    pub include_content: bool,
 }
 
 impl SearchQueryInput {
@@ -176,6 +179,14 @@ impl SearchQueryInput {
 pub struct SearchKeyResult {
     pub key: String,
     pub key_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<SearchDocumentField>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SearchDocumentField {
+    pub name: String,
+    pub value: serde_json::Value,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]

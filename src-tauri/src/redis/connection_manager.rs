@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use ::redis::{Client, ClientTlsConfig, TlsCertificates, Value};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, MutexGuard, RwLock};
 
 use crate::{
     domain::{
@@ -260,11 +260,19 @@ pub trait RedisOperations: Send + Sync {
 pub struct RedisService {
     profiles: Arc<dyn ProfileRepository>,
     secrets: Arc<dyn SecretStore>,
-    active: Arc<RwLock<HashMap<String, Client>>>,
+    profile_transaction: Mutex<()>,
+    active: Arc<RwLock<HashMap<String, ConnectionHandle>>>,
     capabilities: Arc<RwLock<HashMap<String, ModuleCapabilities>>>,
     generations: Arc<RwLock<HashMap<String, u64>>>,
     pubsub: Arc<PubSubManager>,
     profiler: Arc<ProfilerManager>,
+}
+
+#[derive(Clone)]
+struct ConnectionHandle {
+    client: Client,
+    profile: ConnectionProfile,
+    _tunnel: Option<Arc<super::ssh::SshTunnel>>,
 }
 
 impl RedisService {
@@ -272,12 +280,72 @@ impl RedisService {
         Self {
             profiles,
             secrets,
+            profile_transaction: Mutex::new(()),
             active: Arc::new(RwLock::new(HashMap::new())),
             capabilities: Arc::new(RwLock::new(HashMap::new())),
             generations: Arc::new(RwLock::new(HashMap::new())),
             pubsub: Arc::new(PubSubManager::new()),
             profiler: Arc::new(ProfilerManager::new()),
         }
+    }
+
+    // Shared with commands so profile and keyring writes, including rollback, are atomic
+    // with respect to connection snapshots and publication. Lock order is transaction,
+    // generation, capabilities, active; never wait for this lock while holding the others.
+    pub(crate) async fn profile_transaction(&self) -> MutexGuard<'_, ()> {
+        self.profile_transaction.lock().await
+    }
+
+    fn connection_secrets(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<ConnectionSecrets, AppError> {
+        if profile.has_password
+            || profile.has_ca_certificate
+            || profile.has_client_certificate
+            || profile
+                .sentinel
+                .as_ref()
+                .is_some_and(|sentinel| sentinel.has_password)
+        {
+            Ok(self.secrets.read(&profile.id)?.unwrap_or_default())
+        } else {
+            Ok(ConnectionSecrets::default())
+        }
+    }
+
+    async fn connection_snapshot(
+        &self,
+        connection_id: &str,
+    ) -> Result<(ConnectionProfile, ConnectionSecrets), AppError> {
+        let _transaction = self.profile_transaction().await;
+        let profile = self
+            .profiles
+            .load()?
+            .into_iter()
+            .find(|profile| profile.id == connection_id)
+            .ok_or(AppError::InvalidConnection)?;
+        profile.validate()?;
+        let secrets = self.connection_secrets(&profile)?;
+        Ok((profile, secrets))
+    }
+
+    pub async fn claim_stream_pending_entries(
+        &self,
+        input: crate::domain::ClaimStreamPendingEntriesInput,
+    ) -> Result<Vec<String>, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        ::redis::cmd("XCLAIM")
+            .arg(&input.key)
+            .arg(&input.group)
+            .arg(&input.consumer)
+            .arg(input.min_idle_ms)
+            .arg(&input.entries)
+            .arg("JUSTID")
+            .query_async::<Vec<String>>(&mut connection)
+            .await
+            .map_err(map_command_error)
     }
 
     pub async fn start_pub_sub(
@@ -313,11 +381,11 @@ impl RedisService {
             .read()
             .await
             .get(connection_id)
-            .cloned()
+            .map(|handle| handle.client.clone())
             .ok_or(AppError::ConnectionFailed)
     }
 
-    async fn connection(
+    pub(crate) async fn connection(
         &self,
         connection_id: &str,
     ) -> Result<::redis::aio::MultiplexedConnection, AppError> {
@@ -383,10 +451,17 @@ impl RedisService {
             })
             .unwrap_or_else(|| "unknown".into());
 
-        Ok(ConnectionInfo { server_version })
+        Ok(ConnectionInfo {
+            server_version,
+            resolved_endpoint: None,
+        })
     }
 
-    fn profile(&self, connection_id: &str) -> Result<ConnectionProfile, AppError> {
+    async fn profile(&self, connection_id: &str) -> Result<ConnectionProfile, AppError> {
+        if let Some(handle) = self.active.read().await.get(connection_id) {
+            return Ok(handle.profile.clone());
+        }
+        let _transaction = self.profile_transaction().await;
         self.profiles
             .load()?
             .into_iter()
@@ -423,14 +498,73 @@ impl RedisService {
 
     async fn bump_connection_generation(&self, connection_id: &str) -> u64 {
         let mut generations = self.generations.write().await;
-        let next = generations
-            .get(connection_id)
-            .copied()
-            .unwrap_or(0)
-            .wrapping_add(1);
-        generations.insert(connection_id.to_owned(), next);
-        next
+        bump_generation(&mut generations, connection_id)
     }
+
+    async fn publish_connection_if_current(
+        &self,
+        connection_id: &str,
+        token: u64,
+        handle: ConnectionHandle,
+        previous_profile: Option<&ConnectionProfile>,
+        expected_secrets: &ConnectionSecrets,
+    ) -> Result<(), AppError> {
+        // Serialize the check, optional persistence, cache invalidation and publication.
+        // Network work must stay outside this guard so close/newer attempts can cancel it.
+        let _transaction = self.profile_transaction().await;
+        let mut generations = self.generations.write().await;
+        if generations.get(connection_id).copied().unwrap_or(0) != token {
+            return Err(AppError::OperationCancelled);
+        }
+        let mut capabilities = self.capabilities.write().await;
+        let mut active = self.active.write().await;
+
+        // Reload under the transaction lock: neither an edited/deleted profile nor
+        // rotated credentials may publish a connection built from an earlier snapshot.
+        let old_profiles = self.profiles.load()?;
+        let current_profile = old_profiles
+            .iter()
+            .find(|profile| profile.id == connection_id)
+            .filter(|profile| *profile == previous_profile.unwrap_or(&handle.profile))
+            .ok_or(AppError::OperationCancelled)?;
+        if self.connection_secrets(current_profile)? != *expected_secrets {
+            return Err(AppError::OperationCancelled);
+        }
+
+        if previous_profile.is_some() {
+            let mut profiles = old_profiles.clone();
+            let profile = profiles
+                .iter_mut()
+                .find(|profile| profile.id == connection_id)
+                .ok_or(AppError::OperationCancelled)?;
+            *profile = handle.profile.clone();
+            if self.profiles.save(&profiles).is_err() {
+                let _ = self.profiles.save(&old_profiles);
+                return Err(AppError::PersistenceFailed);
+            }
+        }
+
+        // The generation guard stays held across synchronous persistence and publication,
+        // so no close or newer operation can invalidate the token between these steps.
+        self.pubsub.cancel_connection(connection_id);
+        self.profiler.cancel_connection(connection_id);
+        // Probes started against the previous active handle during this attempt must
+        // also expire, even though they captured the attempt's generation.
+        bump_generation(&mut generations, connection_id);
+        capabilities.remove(connection_id);
+        active.insert(connection_id.to_owned(), handle);
+        Ok(())
+    }
+}
+
+fn bump_generation(generations: &mut HashMap<String, u64>, connection_id: &str) -> u64 {
+    let next = generations
+        .get(connection_id)
+        .copied()
+        .unwrap_or(0)
+        .wrapping_add(1);
+    generations.insert(connection_id.to_owned(), next);
+    next
 }
 
 impl RedisOperations for RedisService {
@@ -440,44 +574,32 @@ impl RedisOperations for RedisService {
         secrets: &ConnectionSecrets,
     ) -> Result<ConnectionInfo, AppError> {
         profile.validate()?;
-        let client = build_client(profile, secrets)?;
-        Self::inspect_client(&client).await
+        let (handle, endpoint) = connect_handle(profile, secrets).await?;
+        let mut info = Self::inspect_client(&handle.client).await?;
+        info.resolved_endpoint = endpoint;
+        Ok(info)
     }
 
     async fn open_connection(&self, connection_id: &str) -> Result<ConnectionInfo, AppError> {
-        let profile = self
-            .profiles
-            .load()?
-            .into_iter()
-            .find(|profile| profile.id == connection_id)
-            .ok_or(AppError::InvalidConnection)?;
-        profile.validate()?;
-        let secrets =
-            if profile.has_password || profile.has_ca_certificate || profile.has_client_certificate
-            {
-                self.secrets.read(connection_id)?.unwrap_or_default()
-            } else {
-                ConnectionSecrets::default()
-            };
-        let client = build_client(&profile, &secrets)?;
-        let info = Self::inspect_client(&client).await?;
-        self.pubsub.cancel_connection(connection_id);
-        self.profiler.cancel_connection(connection_id);
-        self.bump_connection_generation(connection_id).await;
-        self.capabilities.write().await.remove(connection_id);
-        self.active
-            .write()
-            .await
-            .insert(connection_id.to_owned(), client);
+        let token = self.bump_connection_generation(connection_id).await;
+        let (profile, secrets) = self.connection_snapshot(connection_id).await?;
+        let (handle, endpoint) = connect_handle(&profile, &secrets).await?;
+        let mut info = Self::inspect_client(&handle.client).await?;
+        info.resolved_endpoint = endpoint;
+        self.publish_connection_if_current(connection_id, token, handle, None, &secrets)
+            .await?;
         Ok(info)
     }
 
     async fn close_connection(&self, connection_id: &str) -> Result<(), AppError> {
+        let mut generations = self.generations.write().await;
+        bump_generation(&mut generations, connection_id);
+        let mut capabilities = self.capabilities.write().await;
+        let mut active = self.active.write().await;
         self.pubsub.cancel_connection(connection_id);
         self.profiler.cancel_connection(connection_id);
-        self.bump_connection_generation(connection_id).await;
-        self.capabilities.write().await.remove(connection_id);
-        self.active.write().await.remove(connection_id);
+        capabilities.remove(connection_id);
+        active.remove(connection_id);
         Ok(())
     }
 
@@ -1226,21 +1348,29 @@ impl RedisOperations for RedisService {
             .ok()
             .and_then(parse_max_search_results);
         let safe_limit = max_results
-            .and_then(|value| u32::try_from(value).ok())
-            .filter(|value| *value > 0)
+            .and_then(|value| u32::try_from(value.saturating_sub(input.offset)).ok())
             .map_or(input.limit, |value| input.limit.min(value));
-        let reply = ::redis::cmd("FT.SEARCH")
-            .arg(&input.index)
-            .arg(&input.query)
-            .arg("NOCONTENT")
+        if safe_limit == 0 {
+            return Err(AppError::InvalidInput);
+        }
+        let mut command = ::redis::cmd("FT.SEARCH");
+        command.arg(&input.index).arg(&input.query);
+        if !input.include_content {
+            command.arg("NOCONTENT");
+        }
+        let reply = command
             .arg("LIMIT")
             .arg(input.offset)
             .arg(safe_limit)
             .query_async::<Value>(&mut connection)
             .await
             .map_err(map_command_error)?;
-        let mut result = parse_search_query(reply, input.offset, safe_limit)?;
+        let mut result =
+            parse_search_query(reply, input.offset, safe_limit, input.include_content)?;
         result.max_results = max_results;
+        if let Some(max_results) = max_results {
+            result.next_offset = result.next_offset.filter(|next| *next < max_results);
+        }
         if result.keys.is_empty() {
             return Ok(result);
         }
@@ -1642,7 +1772,7 @@ impl RedisOperations for RedisService {
     ) -> Result<DatabaseAnalysisReport, AppError> {
         input.validate()?;
         let mut connection = self.connection(&input.connection_id).await?;
-        let profile = self.profile(&input.connection_id)?;
+        let profile = self.profile(&input.connection_id).await?;
         analyze_connection(&mut connection, profile.database, &input).await
     }
 
@@ -1650,7 +1780,7 @@ impl RedisOperations for RedisService {
         &self,
         connection_id: &str,
     ) -> Result<Vec<DatabaseOverview>, AppError> {
-        let profile = self.profile(connection_id)?;
+        let profile = self.profile(connection_id).await?;
         profile.validate()?;
         let mut connection = self.connection(connection_id).await?;
         let info = ::redis::cmd("INFO")
@@ -1692,45 +1822,21 @@ impl RedisOperations for RedisService {
         input: SelectDatabaseInput,
     ) -> Result<ConnectionProfile, AppError> {
         input.validate()?;
-        let old_profiles = self.profiles.load()?;
-        let old_profile = old_profiles
-            .iter()
-            .find(|profile| profile.id == input.connection_id)
-            .cloned()
-            .ok_or(AppError::InvalidConnection)?;
-        old_profile.validate()?;
-        let secrets = if old_profile.has_password
-            || old_profile.has_ca_certificate
-            || old_profile.has_client_certificate
-        {
-            self.secrets.read(&input.connection_id)?.unwrap_or_default()
-        } else {
-            ConnectionSecrets::default()
-        };
+        let token = self.bump_connection_generation(&input.connection_id).await;
+        let (old_profile, secrets) = self.connection_snapshot(&input.connection_id).await?;
         let mut new_profile = old_profile.clone();
         new_profile.database = input.database;
-        let client = build_client_with_database(&old_profile, &secrets, input.database)?;
-        Self::inspect_client(&client).await?;
+        let (handle, _) = connect_handle(&new_profile, &secrets).await?;
+        Self::inspect_client(&handle.client).await?;
 
-        let mut profiles = old_profiles.clone();
-        let profile = profiles
-            .iter_mut()
-            .find(|profile| profile.id == input.connection_id)
-            .ok_or(AppError::InvalidConnection)?;
-        *profile = new_profile.clone();
-        if self.profiles.save(&profiles).is_err() {
-            let _ = self.profiles.save(&old_profiles);
-            return Err(AppError::PersistenceFailed);
-        }
-
-        self.pubsub.cancel_connection(&input.connection_id);
-        self.profiler.cancel_connection(&input.connection_id);
-        self.bump_connection_generation(&input.connection_id).await;
-        self.capabilities.write().await.remove(&input.connection_id);
-        self.active
-            .write()
-            .await
-            .insert(input.connection_id, client);
+        self.publish_connection_if_current(
+            &input.connection_id,
+            token,
+            handle,
+            Some(&old_profile),
+            &secrets,
+        )
+        .await?;
         Ok(new_profile)
     }
 
@@ -2334,7 +2440,7 @@ async fn replace_collection(
         .map_err(map_command_error)
 }
 
-fn command_result(value: Value) -> Result<CommandResult, AppError> {
+pub(crate) fn command_result(value: Value) -> Result<CommandResult, AppError> {
     let kind = match &value {
         Value::Nil => "null",
         Value::Int(_) | Value::Double(_) => "number",
@@ -2401,6 +2507,105 @@ pub fn connection_url(
     password: Option<&str>,
 ) -> Result<String, AppError> {
     connection_url_with_database(profile, password, profile.database)
+}
+
+async fn connect_handle(
+    profile: &ConnectionProfile,
+    secrets: &ConnectionSecrets,
+) -> Result<(ConnectionHandle, Option<crate::domain::ConnectionEndpoint>), AppError> {
+    profile.validate()?;
+    let tunnel = if profile.ssh.is_some() {
+        Some(Arc::new(super::ssh::SshTunnel::start(profile).await?))
+    } else {
+        None
+    };
+    let mut effective = profile.clone();
+    if let Some(tunnel) = &tunnel {
+        effective.ssh = None;
+        effective.host = "127.0.0.1".into();
+        effective.port = tunnel.port;
+    }
+    let (client, endpoint) = discover_client(&effective, secrets).await?;
+    Ok((
+        ConnectionHandle {
+            client,
+            profile: profile.clone(),
+            _tunnel: tunnel,
+        },
+        endpoint,
+    ))
+}
+
+async fn discover_client(
+    profile: &ConnectionProfile,
+    secrets: &ConnectionSecrets,
+) -> Result<(Client, Option<crate::domain::ConnectionEndpoint>), AppError> {
+    profile.validate()?;
+    let Some(sentinel) = &profile.sentinel else {
+        return Ok((build_client(profile, secrets)?, None));
+    };
+    // Bound every seed attempt so an unavailable seed cannot prevent fallback.
+    let config = ::redis::AsyncConnectionConfig::new()
+        .set_connection_timeout(Some(std::time::Duration::from_secs(3)))
+        .set_response_timeout(Some(std::time::Duration::from_secs(3)));
+    let mut last_error = AppError::ConnectionFailed;
+    for node in &sentinel.nodes {
+        let attempt = async {
+            let mut seed_profile = profile.clone();
+            seed_profile.sentinel = None;
+            seed_profile.host = node.host.clone();
+            seed_profile.port = node.port;
+            seed_profile.username = sentinel.username.clone();
+            seed_profile.database = 0;
+            seed_profile.tls = sentinel.tls;
+            let mut seed_secrets = secrets.clone();
+            seed_secrets.password = secrets.sentinel_password.clone();
+            let seed = build_client(&seed_profile, &seed_secrets)?;
+            let mut connection = seed
+                .get_multiplexed_async_connection_with_config(&config)
+                .await
+                .map_err(map_connection_error)?;
+            let address = ::redis::cmd("SENTINEL")
+                .arg("GET-MASTER-ADDR-BY-NAME")
+                .arg(&sentinel.master_name)
+                .query_async::<Option<(String, u16)>>(&mut connection)
+                .await
+                .map_err(map_connection_error)?
+                .ok_or(AppError::ConnectionFailed)?;
+            let endpoint = crate::domain::ConnectionEndpoint {
+                host: address.0,
+                port: address.1,
+            };
+            let mut master_profile = profile.clone();
+            master_profile.sentinel = None;
+            master_profile.host = endpoint.host.clone();
+            master_profile.port = endpoint.port;
+            let master = build_client(&master_profile, secrets)?;
+            let mut connection = master
+                .get_multiplexed_async_connection_with_config(&config)
+                .await
+                .map_err(map_connection_error)?;
+            let role = ::redis::cmd("ROLE")
+                .query_async::<Vec<Value>>(&mut connection)
+                .await
+                .map_err(map_connection_error)?;
+            if role
+                .first()
+                .and_then(|value| ::redis::from_redis_value::<String>(value.clone()).ok())
+                .as_deref()
+                != Some("master")
+            {
+                return Err(AppError::ConnectionFailed);
+            }
+            Ok((master, Some(endpoint)))
+        }
+        .await;
+        match attempt {
+            Ok(client) => return Ok(client),
+            Err(error) => last_error = error,
+        }
+    }
+    Err(last_error)
 }
 
 fn build_client(
@@ -2494,7 +2699,7 @@ pub fn validate_ttl(ttl_ms: i64) -> Result<(), AppError> {
     }
 }
 
-fn standalone_host(host: &str) -> Result<String, AppError> {
+pub(super) fn standalone_host(host: &str) -> Result<String, AppError> {
     let host = host.trim();
     if host.parse::<std::net::Ipv6Addr>().is_ok() {
         return Ok(format!("[{host}]"));
@@ -2580,15 +2785,19 @@ pub(crate) fn map_json_command_error(error: ::redis::RedisError) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
 
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::sync::oneshot;
 
     use crate::{
         domain::{
             ConnectionProfile, GetSlowLogsInput, GetStreamConsumerGroupsInput,
             GetStreamPendingEntriesInput, ModuleCapabilities, ModuleSummary, PublishPubSubInput,
-            StopProfilerInput,
+            SelectDatabaseInput, StopProfilerInput,
         },
         error::AppError,
         persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -2632,6 +2841,8 @@ mod tests {
 
     fn valid_profile() -> ConnectionProfile {
         ConnectionProfile {
+            ssh: None,
+            sentinel: None,
             id: "local".into(),
             name: "Local".into(),
             host: "127.0.0.1".into(),
@@ -2646,6 +2857,434 @@ mod tests {
             has_ca_certificate: false,
             has_client_certificate: false,
         }
+    }
+
+    struct MutableProfiles(Mutex<Vec<ConnectionProfile>>);
+
+    impl ProfileRepository for MutableProfiles {
+        fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+
+        fn save(&self, profiles: &[ConnectionProfile]) -> Result<(), AppError> {
+            *self.0.lock().unwrap() = profiles.to_vec();
+            Ok(())
+        }
+    }
+
+    struct MutableSecrets(Mutex<Option<ConnectionSecrets>>);
+
+    impl SecretStore for MutableSecrets {
+        fn read(&self, _: &str) -> Result<Option<ConnectionSecrets>, AppError> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+
+        fn write(&self, _: &str, secrets: &ConnectionSecrets) -> Result<(), AppError> {
+            *self.0.lock().unwrap() = Some(secrets.clone());
+            Ok(())
+        }
+
+        fn delete(&self, _: &str) -> Result<(), AppError> {
+            *self.0.lock().unwrap() = None;
+            Ok(())
+        }
+    }
+
+    // Pause the real client's PING so tests can order lifecycle operations without sleeps.
+    struct PausedRedis {
+        port: u16,
+        ping: oneshot::Receiver<()>,
+        resume: Option<oneshot::Sender<()>>,
+        task: tokio::task::JoinHandle<()>,
+    }
+
+    impl PausedRedis {
+        async fn start() -> Self {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (ping_tx, ping) = oneshot::channel();
+            let (resume, resume_rx) = oneshot::channel();
+            let task = tokio::spawn(async move {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = BufReader::new(stream);
+                let mut gate = Some((ping_tx, resume_rx));
+                loop {
+                    let mut line = String::new();
+                    if stream.read_line(&mut line).await.unwrap() == 0 {
+                        break;
+                    }
+                    let count: usize = line.trim().strip_prefix('*').unwrap().parse().unwrap();
+                    let mut args = Vec::new();
+                    for _ in 0..count {
+                        line.clear();
+                        stream.read_line(&mut line).await.unwrap();
+                        let length: usize = line.trim().strip_prefix('$').unwrap().parse().unwrap();
+                        let mut data = vec![0; length + 2];
+                        stream.read_exact(&mut data).await.unwrap();
+                        args.push(String::from_utf8(data[..length].to_vec()).unwrap());
+                    }
+                    let response = match args[0].as_str() {
+                        "PING" => {
+                            let (ping_tx, resume_rx) = gate.take().unwrap();
+                            ping_tx.send(()).unwrap();
+                            resume_rx.await.unwrap();
+                            "+PONG\r\n"
+                        }
+                        "INFO" => "$21\r\nredis_version:7.0.0\r\n\r\n",
+                        _ => "+OK\r\n",
+                    };
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+            Self {
+                port,
+                ping,
+                resume: Some(resume),
+                task,
+            }
+        }
+
+        async fn wait_for_ping(&mut self) {
+            tokio::time::timeout(Duration::from_secs(5), &mut self.ping)
+                .await
+                .unwrap()
+                .unwrap();
+        }
+
+        fn resume(&mut self) {
+            self.resume.take().unwrap().send(()).unwrap();
+        }
+
+        fn profile(&self) -> ConnectionProfile {
+            let mut profile = valid_profile();
+            profile.port = self.port;
+            profile
+        }
+    }
+
+    impl Drop for PausedRedis {
+        fn drop(&mut self) {
+            self.task.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn lifecycle_close_cancels_an_open_waiting_for_redis() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles, Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        server.wait_for_ping().await;
+
+        service.close_connection("local").await.unwrap();
+        server.resume();
+
+        assert_eq!(opening.await.unwrap(), Err(AppError::OperationCancelled));
+        assert!(service.client("local").await.is_err());
+        assert!(!service.capabilities.read().await.contains_key("local"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_open_rejects_a_profile_edited_during_connection() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        server.wait_for_ping().await;
+        let mut edited = server.profile();
+        edited.name = "Edited".into();
+        profiles.save(&[edited]).unwrap();
+        server.resume();
+
+        assert_eq!(opening.await.unwrap(), Err(AppError::OperationCancelled));
+        assert!(service.client("local").await.is_err());
+    }
+
+    async fn assert_rotation_cancels_connection(select_database: bool) {
+        let mut server = PausedRedis::start().await;
+        let mut profile = server.profile();
+        profile.has_password = true;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![profile])));
+        let secrets = Arc::new(MutableSecrets(Mutex::new(Some(ConnectionSecrets {
+            password: Some("original".into()),
+            ..ConnectionSecrets::default()
+        }))));
+        let service = Arc::new(RedisService::new(profiles.clone(), secrets.clone()));
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move {
+            if select_database {
+                opening_service
+                    .select_database(SelectDatabaseInput {
+                        connection_id: "local".into(),
+                        database: 2,
+                    })
+                    .await
+                    .map(|_| ())
+            } else {
+                opening_service.open_connection("local").await.map(|_| ())
+            }
+        });
+        server.wait_for_ping().await;
+        secrets
+            .write(
+                "local",
+                &ConnectionSecrets {
+                    password: Some("rotated".into()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
+        server.resume();
+
+        assert_eq!(opening.await.unwrap(), Err(AppError::OperationCancelled));
+        assert!(service.client("local").await.is_err());
+        assert_eq!(profiles.load().unwrap()[0].database, 0);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_open_rejects_credentials_rotated_during_connection() {
+        assert_rotation_cancels_connection(false).await;
+    }
+
+    #[tokio::test]
+    async fn lifecycle_open_snapshot_waits_for_profile_transaction_rollback() {
+        let mut server = PausedRedis::start().await;
+        let original = server.profile();
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![original.clone()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let transaction = service.profile_transaction().await;
+        let mut uncommitted = original.clone();
+        uncommitted.name = "Uncommitted".into();
+        profiles.save(&[uncommitted]).unwrap();
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        let ping_arrived = tokio::time::timeout(Duration::from_millis(100), &mut server.ping).await;
+        profiles.save(&[original.clone()]).unwrap();
+        drop(transaction);
+        if ping_arrived.is_err() {
+            server.wait_for_ping().await;
+        }
+        server.resume();
+        opening.await.unwrap().unwrap();
+
+        assert_eq!(service.profile("local").await.unwrap(), original);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_database_publication_waits_for_profile_transaction_rollback() {
+        let mut server = PausedRedis::start().await;
+        let original = server.profile();
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![original.clone()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let selecting_service = Arc::clone(&service);
+        let mut selecting = tokio::spawn(async move {
+            selecting_service
+                .select_database(SelectDatabaseInput {
+                    connection_id: "local".into(),
+                    database: 2,
+                })
+                .await
+        });
+        server.wait_for_ping().await;
+        let transaction = service.profile_transaction().await;
+        server.resume();
+        let early_result = tokio::time::timeout(Duration::from_millis(100), &mut selecting).await;
+        profiles.save(&[original]).unwrap();
+        drop(transaction);
+        match early_result {
+            Ok(result) => {
+                result.unwrap().unwrap();
+            }
+            Err(_) => {
+                selecting.await.unwrap().unwrap();
+            }
+        }
+
+        assert_eq!(profiles.load().unwrap()[0].database, 2);
+        assert_eq!(service.profile("local").await.unwrap().database, 2);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_close_can_cancel_publication_waiting_for_profile_transaction() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles, Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let mut opening =
+            tokio::spawn(async move { opening_service.open_connection("local").await });
+        server.wait_for_ping().await;
+        let transaction = service.profile_transaction().await;
+        server.resume();
+        let early_result = tokio::time::timeout(Duration::from_millis(100), &mut opening).await;
+        let close_result =
+            tokio::time::timeout(Duration::from_secs(1), service.close_connection("local")).await;
+        drop(transaction);
+
+        close_result
+            .expect(
+                "publication must not hold the generation lock while waiting for the transaction",
+            )
+            .unwrap();
+        let result = match early_result {
+            Ok(result) => result.unwrap(),
+            Err(_) => opening.await.unwrap(),
+        };
+        assert_eq!(result, Err(AppError::OperationCancelled));
+        assert!(service.client("local").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn lifecycle_database_selection_rejects_credentials_rotated_during_connection() {
+        assert_rotation_cancels_connection(true).await;
+    }
+
+    #[tokio::test]
+    async fn lifecycle_old_open_cannot_replace_a_newer_connection() {
+        let mut first = PausedRedis::start().await;
+        let mut second = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![first.profile()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let older = tokio::spawn(async move { opening_service.open_connection("local").await });
+        first.wait_for_ping().await;
+
+        profiles.save(&[second.profile()]).unwrap();
+        let opening_service = Arc::clone(&service);
+        let newer = tokio::spawn(async move { opening_service.open_connection("local").await });
+        second.wait_for_ping().await;
+        second.resume();
+        newer.await.unwrap().unwrap();
+        first.resume();
+
+        assert_eq!(older.await.unwrap(), Err(AppError::OperationCancelled));
+        assert_eq!(service.profile("local").await.unwrap().port, second.port);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_new_open_cancels_older_attempt_before_it_finishes_connecting() {
+        let mut first = PausedRedis::start().await;
+        let mut second = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![first.profile()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let older = tokio::spawn(async move { opening_service.open_connection("local").await });
+        first.wait_for_ping().await;
+        profiles.save(&[second.profile()]).unwrap();
+        let opening_service = Arc::clone(&service);
+        let newer = tokio::spawn(async move { opening_service.open_connection("local").await });
+        second.wait_for_ping().await;
+
+        first.resume();
+        assert_eq!(older.await.unwrap(), Err(AppError::OperationCancelled));
+        assert!(service.client("local").await.is_err());
+        second.resume();
+        newer.await.unwrap().unwrap();
+        assert_eq!(service.profile("local").await.unwrap().port, second.port);
+    }
+
+    #[tokio::test]
+    async fn lifecycle_publication_expires_capability_probes_started_during_open() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles, Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        server.wait_for_ping().await;
+        let token = service.capture_capability_token("local").await;
+        server.resume();
+        opening.await.unwrap().unwrap();
+
+        assert!(
+            !service
+                .cache_capabilities_if_current(
+                    "local",
+                    token,
+                    ModuleCapabilities::from_modules(Vec::new()),
+                )
+                .await
+        );
+        assert!(!service.capabilities.read().await.contains_key("local"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_close_prevents_pending_database_selection_from_restoring_deleted_profile() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let selecting_service = Arc::clone(&service);
+        let selection = tokio::spawn(async move {
+            selecting_service
+                .select_database(SelectDatabaseInput {
+                    connection_id: "local".into(),
+                    database: 2,
+                })
+                .await
+        });
+        server.wait_for_ping().await;
+
+        profiles.save(&[]).unwrap();
+        service.close_connection("local").await.unwrap();
+        server.resume();
+
+        assert_eq!(selection.await.unwrap(), Err(AppError::OperationCancelled));
+        assert!(profiles.load().unwrap().is_empty());
+        assert!(service.client("local").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn lifecycle_database_selection_does_not_overwrite_profile_edits() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let selecting_service = Arc::clone(&service);
+        let selection = tokio::spawn(async move {
+            selecting_service
+                .select_database(SelectDatabaseInput {
+                    connection_id: "local".into(),
+                    database: 2,
+                })
+                .await
+        });
+        server.wait_for_ping().await;
+        let mut edited = server.profile();
+        edited.name = "Updated while connecting".into();
+        profiles.save(&[edited.clone()]).unwrap();
+        server.resume();
+
+        assert_eq!(selection.await.unwrap(), Err(AppError::OperationCancelled));
+        assert_eq!(profiles.load().unwrap(), vec![edited]);
+        assert!(service.client("local").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn lifecycle_database_selection_preserves_unrelated_profile_edits() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let selecting_service = Arc::clone(&service);
+        let selection = tokio::spawn(async move {
+            selecting_service
+                .select_database(SelectDatabaseInput {
+                    connection_id: "local".into(),
+                    database: 2,
+                })
+                .await
+        });
+        server.wait_for_ping().await;
+        let mut unrelated = valid_profile();
+        unrelated.id = "other".into();
+        profiles
+            .save(&[server.profile(), unrelated.clone()])
+            .unwrap();
+        server.resume();
+
+        assert_eq!(selection.await.unwrap().unwrap().database, 2);
+        let saved = profiles.load().unwrap();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved[1], unrelated);
+        assert_eq!(saved[0].database, 2);
     }
 
     #[test]

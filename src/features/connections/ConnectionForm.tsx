@@ -5,7 +5,7 @@ import {
   saveConnection,
   testConnection,
 } from "../../lib/tauri";
-import type { ConnectionProfile, SaveConnectionInput } from "../../lib/types";
+import type { ConnectionProfile, SaveConnectionInput, SentinelConfig, SshConfig } from "../../lib/types";
 import {
   formValuesFromProfile,
   savedButOpenFailedMessage,
@@ -36,6 +36,26 @@ function buildConnectionInput(
   const host = values.host.trim();
   const port = Number(values.port);
   const database = Number(values.database);
+  let ssh: SshConfig | null = null;
+  if (values.ssh_enabled) {
+    if (values.tls || values.topology === "sentinel") return { error: "SSH 暂不支持与 TLS 或 Sentinel 组合。" };
+    const sshPort = Number(values.ssh_port);
+    if (!values.ssh_host.trim() || !values.ssh_username.trim() || !Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) return { error: "请输入有效的 SSH 主机、端口和用户名。" };
+    ssh = { host: values.ssh_host.trim(), port: sshPort, username: values.ssh_username.trim(), identity_file: values.ssh_identity_file.trim() || null, known_hosts_file: values.ssh_known_hosts_file.trim() || null };
+  }
+  let sentinel: SentinelConfig | null = null;
+  if (values.topology === "sentinel") {
+    const nodes = values.sentinel_nodes.split(/[\n,]+/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const match = /^(?:\[([^\]]+)\]|([^:\s]+)):(\d+)$/.exec(line);
+      return match ? { host: match[1] || match[2], port: Number(match[3]) } : null;
+    });
+    if (!values.sentinel_master_name.trim()) return { error: "请输入 Sentinel 主节点名称。" };
+    if (!nodes.length || nodes.length > 32 || nodes.some((node) => !node || node.port < 1 || node.port > 65535)) {
+      return { error: "请填写 1 到 32 个有效 Sentinel 节点，每行 host:port；IPv6 使用 [地址]:端口。" };
+    }
+    sentinel = { master_name: values.sentinel_master_name.trim(), nodes: nodes.filter((node) => node !== null), username: values.sentinel_username.trim() || null,
+      has_password: Boolean(values.sentinel_password) || Boolean(initial?.sentinel?.has_password && !values.clear_sentinel_password), tls: values.sentinel_tls };
+  }
 
   if (!name) {
     return { error: "请输入连接名称。" };
@@ -101,6 +121,8 @@ function buildConnectionInput(
   return {
     input: {
       profile: {
+        ...(ssh || initial?.ssh ? { ssh } : {}),
+        ...(sentinel || initial?.sentinel ? { sentinel } : {}),
         id: initial?.id ?? crypto.randomUUID(),
         name,
         host,
@@ -122,6 +144,7 @@ function buildConnectionInput(
           Boolean(initial?.has_client_certificate && !values.clear_client_certificate),
       },
       password,
+      ...(sentinel ? { sentinel_password: values.sentinel_password || null } : {}),
       ca_certificate: caCertificate,
       client_certificate: clientCertificate,
       client_key: clientKey,
@@ -181,7 +204,7 @@ export function ConnectionForm({
     setTestStatus(null);
     try {
       const info = await testConnection(validation.input);
-      setTestStatus(`连接成功，Redis ${info.server_version}`);
+      setTestStatus(`连接成功，Redis ${info.server_version}${info.resolved_endpoint ? `，主节点 ${info.resolved_endpoint.host}:${info.resolved_endpoint.port}` : ""}`);
     } catch (caught) {
       setError(toUserFacingError(caught, "测试连接失败，请检查配置。"));
     } finally {
@@ -254,6 +277,13 @@ export function ConnectionForm({
       >
         <div className="form-grid">
           <label className="field">
+            <span>连接拓扑</span>
+            <select value={values.topology} onChange={(event) => updateValue("topology", event.target.value)} disabled={busy}>
+              <option value="standalone">Standalone</option>
+              <option value="sentinel">Sentinel</option>
+            </select>
+          </label>
+          <label className="field">
             <span>连接名称</span>
             <input
               autoComplete="off"
@@ -265,7 +295,7 @@ export function ConnectionForm({
             />
           </label>
 
-          <label className="field">
+          {values.topology === "standalone" && <label className="field">
             <span>主机</span>
             <input
               autoComplete="off"
@@ -275,9 +305,9 @@ export function ConnectionForm({
               disabled={busy}
               required
             />
-          </label>
+          </label>}
 
-          <label className="field">
+          {values.topology === "standalone" && <label className="field">
             <span>端口</span>
             <input
               type="number"
@@ -289,7 +319,7 @@ export function ConnectionForm({
               disabled={busy}
               required
             />
-          </label>
+          </label>}
 
           <label className="field">
             <span>用户名</span>
@@ -329,6 +359,32 @@ export function ConnectionForm({
           </label>
         </div>
 
+        <section className="connection-tls-panel" aria-label="SSH 配置">
+          <label className="checkbox-field"><input type="checkbox" checked={values.ssh_enabled} onChange={(event) => updateBoolean("ssh_enabled", event.target.checked)} disabled={busy} /><span>启用 SSH 隧道</span></label>
+          {values.ssh_enabled && <>
+            <p>使用 macOS/Linux 系统 OpenSSH 和 ssh-agent，或提供私钥文件绝对路径。请先通过可信渠道核验主机密钥并写入 known_hosts；应用不会自动信任未知主机。仅支持 Standalone 非 TLS 连接，暂不支持 Windows。</p>
+            <div className="form-grid">
+              <label className="field"><span>SSH 主机</span><input value={values.ssh_host} onChange={(event) => updateValue("ssh_host", event.target.value)} disabled={busy} /></label>
+              <label className="field"><span>SSH 端口</span><input type="number" min={1} max={65535} value={values.ssh_port} onChange={(event) => updateValue("ssh_port", event.target.value)} disabled={busy} /></label>
+              <label className="field"><span>SSH 用户名</span><input autoComplete="username" value={values.ssh_username} onChange={(event) => updateValue("ssh_username", event.target.value)} disabled={busy} /></label>
+              <label className="field"><span>SSH 私钥文件路径</span><input value={values.ssh_identity_file} onChange={(event) => updateValue("ssh_identity_file", event.target.value)} placeholder="可选，留空使用 ssh-agent" disabled={busy} /></label>
+              <label className="field"><span>SSH 已知主机文件路径</span><input value={values.ssh_known_hosts_file} onChange={(event) => updateValue("ssh_known_hosts_file", event.target.value)} placeholder="可选，默认 ~/.ssh/known_hosts" disabled={busy} /></label>
+            </div>
+          </>}
+        </section>
+        {values.topology === "sentinel" && <section className="connection-tls-panel" aria-label="Sentinel 配置">
+          <h3>Sentinel</h3>
+          <p>重新连接时发现当前主节点；主从切换后请重新连接，正在运行的会话不会自动迁移。</p>
+          <div className="form-grid">
+            <label className="field"><span>Sentinel 主节点名称</span><input value={values.sentinel_master_name} onChange={(event) => updateValue("sentinel_master_name", event.target.value)} disabled={busy} placeholder="mymaster" /></label>
+            <label className="field"><span>Sentinel 种子节点</span><textarea value={values.sentinel_nodes} onChange={(event) => updateValue("sentinel_nodes", event.target.value)} disabled={busy} rows={3} /></label>
+            <label className="field"><span>Sentinel 用户名</span><input autoComplete="username" value={values.sentinel_username} onChange={(event) => updateValue("sentinel_username", event.target.value)} disabled={busy} placeholder="可选，与 Redis 用户名独立" /></label>
+            <label className="field"><span>Sentinel 密码</span><input type="password" autoComplete="new-password" value={values.sentinel_password} onChange={(event) => updateValue("sentinel_password", event.target.value)} disabled={busy} placeholder={initial?.sentinel?.has_password ? "留空保留已保存密码" : "可选"} /></label>
+          </div>
+          {initial?.sentinel?.has_password && <label className="checkbox-field"><input type="checkbox" checked={values.clear_sentinel_password} onChange={(event) => updateBoolean("clear_sentinel_password", event.target.checked)} disabled={busy} /><span>清除已保存的 Sentinel 密码</span></label>}
+          <label className="checkbox-field"><input type="checkbox" checked={values.sentinel_tls} onChange={(event) => updateBoolean("sentinel_tls", event.target.checked)} disabled={busy} /><span>Sentinel 启用 TLS</span></label>
+          <p className="field-hint">上方用户名和密码用于 Redis 主节点。Sentinel TLS 与主节点 TLS 独立启用，共用下方证书和校验设置。</p>
+        </section>}
         <section className="connection-tls-panel" aria-labelledby="tls-panel-title">
           <div className="connection-tls-heading">
             <div>
@@ -349,7 +405,7 @@ export function ConnectionForm({
             <span>启用 TLS（rediss）</span>
           </label>
 
-          {values.tls || initial?.has_ca_certificate || initial?.has_client_certificate ? (
+          {values.tls || (values.topology === "sentinel" && values.sentinel_tls) || initial?.has_ca_certificate || initial?.has_client_certificate ? (
             <div className="connection-tls-fields">
               <label className="checkbox-field">
                 <input

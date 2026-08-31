@@ -421,6 +421,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
 
       <div className="browser-layout">
         <KeyList
+          key={connectionId}
           pattern={state.pattern}
           keyType={state.keyType}
           keys={state.keys}

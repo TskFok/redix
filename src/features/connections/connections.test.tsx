@@ -104,6 +104,52 @@ describe("Redis 连接管理页面", () => {
     expect(screen.getByLabelText("密码")).toHaveAttribute("type", "password");
   });
 
+  it("保存 Sentinel 种子与独立凭据并说明重新连接语义", async () => {
+    saveConnectionMock.mockImplementation(async (input: SaveConnectionInput) => input.profile);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm();
+    fillStandaloneForm();
+    fireEvent.change(screen.getByLabelText("连接拓扑"), { target: { value: "sentinel" } });
+    fireEvent.change(screen.getByLabelText("Sentinel 主节点名称"), { target: { value: "primary" } });
+    fireEvent.change(screen.getByLabelText("Sentinel 种子节点"), { target: { value: "sentinel-a:26379\n[::1]:26380" } });
+    fireEvent.change(screen.getByLabelText("Sentinel 用户名"), { target: { value: "watcher" } });
+    fireEvent.change(screen.getByLabelText("Sentinel 密码"), { target: { value: "sentinel-secret" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "redis-secret" } });
+    fireEvent.click(screen.getByLabelText("Sentinel 启用 TLS"));
+    expect(screen.getByLabelText("启用 TLS")).not.toBeChecked();
+    expect(screen.getByLabelText("验证服务端证书")).toBeInTheDocument();
+    expect(screen.getByLabelText("CA 名称")).toBeInTheDocument();
+    expect(screen.getByText(/重新连接时发现当前主节点/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(saveConnectionMock).toHaveBeenCalled());
+    expect(saveConnectionMock.mock.calls[0][0]).toMatchObject({
+      profile: { sentinel: { master_name: "primary", nodes: [{ host: "sentinel-a", port: 26379 }, { host: "::1", port: 26380 }], username: "watcher", has_password: true } },
+      password: "redis-secret", sentinel_password: "sentinel-secret",
+    });
+    expect(await screen.findByText("Sentinel · primary")).toBeInTheDocument();
+  });
+
+  it("SSH 仅保存路径元数据并拒绝与 TLS 或 Sentinel 同用", async () => {
+    saveConnectionMock.mockImplementation(async (input: SaveConnectionInput) => input.profile);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm();
+    fillStandaloneForm();
+    fireEvent.click(screen.getByLabelText("启用 SSH 隧道"));
+    fireEvent.change(screen.getByLabelText("SSH 主机"), { target: { value: "bastion.example" } });
+    fireEvent.change(screen.getByLabelText("SSH 用户名"), { target: { value: "operator" } });
+    fireEvent.change(screen.getByLabelText("SSH 私钥文件路径"), { target: { value: "/Users/operator/.ssh/id_ed25519" } });
+    expect(screen.getByText(/known_hosts/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("启用 TLS"));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("SSH 暂不支持与 TLS 或 Sentinel 组合");
+    expect(saveConnectionMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByLabelText("启用 TLS"));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(saveConnectionMock).toHaveBeenCalled());
+    expect(saveConnectionMock.mock.calls[0][0].profile.ssh).toMatchObject({ host: "bastion.example", port: 22, username: "operator", identity_file: "/Users/operator/.ssh/id_ed25519" });
+    expect(await screen.findByText("SSH · bastion.example:22")).toBeInTheDocument();
+  });
+
   it("导出连接时调用 typed IPC 并显示成功反馈", async () => {
     exportConnectionsMock.mockResolvedValue({ version: 1, connections: [] });
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);

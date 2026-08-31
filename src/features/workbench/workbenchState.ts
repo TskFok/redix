@@ -1,5 +1,5 @@
 import type {
-  CommandDisplayFormat,
+  WorkbenchResultFormat,
   CommandDefinition,
   CommandExecutionItem,
   CommandHistoryEntry,
@@ -11,7 +11,7 @@ export interface WorkbenchPageState {
   command: string;
   commands: string[];
   continueOnError: boolean;
-  format: CommandDisplayFormat;
+  format: WorkbenchResultFormat;
   history: CommandHistoryEntry[];
   result: CommandResult | null;
   batchResults: CommandExecutionItem[];
@@ -58,7 +58,7 @@ export function isCommandReady(connectionId: string | null, command: string): bo
   return (
     typeof connectionId === "string" &&
     connectionId.trim().length > 0 &&
-    normalizeCommand(command).length > 0
+    normalizeCommandList(command).length > 0
   );
 }
 
@@ -70,7 +70,7 @@ export function normalizeCommandList(command: string): string[] {
   return command
     .split(/\r?\n/)
     .map((item) => item.trim())
-    .filter((item) => item.length > 0);
+    .filter((item) => item.length > 0 && !/^(#|\/\/)/.test(item));
 }
 
 export function prependCommandHistory(

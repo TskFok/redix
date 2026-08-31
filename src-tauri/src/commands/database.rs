@@ -45,5 +45,8 @@ pub async fn select_database(
     state: tauri::State<'_, AppState>,
     input: SelectDatabaseInput,
 ) -> Result<crate::domain::ConnectionProfile, AppError> {
-    state.redis.select_database(input).await
+    let connection_id = input.connection_id.clone();
+    let profile = state.redis.select_database(input).await?;
+    state.cli.close_connection(&connection_id).await;
+    Ok(profile)
 }

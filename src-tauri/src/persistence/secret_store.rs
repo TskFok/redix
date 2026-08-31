@@ -3,6 +3,8 @@ use crate::error::AppError;
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ConnectionSecrets {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sentinel_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ca_certificate: Option<String>,
@@ -15,6 +17,7 @@ pub struct ConnectionSecrets {
 impl ConnectionSecrets {
     pub fn is_empty(&self) -> bool {
         self.password.is_none()
+            && self.sentinel_password.is_none()
             && self.ca_certificate.is_none()
             && self.client_certificate.is_none()
             && self.client_key.is_none()
@@ -90,6 +93,7 @@ fn decode_stored_secret(value: &str) -> Result<ConnectionSecrets, AppError> {
     let parsed = serde_json::from_str::<serde_json::Value>(value).ok();
     if let Some(object) = parsed.as_ref().and_then(serde_json::Value::as_object) {
         let known_keys = [
+            "sentinel_password",
             "password",
             "ca_certificate",
             "client_certificate",

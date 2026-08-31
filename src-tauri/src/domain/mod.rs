@@ -1,4 +1,5 @@
 pub mod array;
+pub mod cli;
 pub mod connection_transfer;
 pub mod database;
 pub mod database_analysis;
@@ -14,6 +15,7 @@ pub mod vector_set;
 pub mod workbench;
 
 pub use array::*;
+pub use cli::*;
 pub use connection_transfer::*;
 pub use database::*;
 pub use database_analysis::*;

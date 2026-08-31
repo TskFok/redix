@@ -6,6 +6,7 @@ import type {
   JsonValue,
 } from "../../lib/types";
 import { formatJsonValue, formatTtl } from "./browserState";
+import { JsonTree } from "./JsonTree";
 
 export type JsonPathMutation =
   | { kind: "set"; path: string; value: JsonValue }
@@ -38,6 +39,7 @@ export function JsonPathEditor({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
   const [readResult, setReadResult] = useState<JsonPathValue | null>(null);
+  const [blockedReason, setBlockedReason] = useState<string | null>(null);
   const mountedRef = useRef(false);
   const readRequestRef = useRef(0);
 
@@ -50,6 +52,9 @@ export function JsonPathEditor({
   }, []);
 
   useEffect(() => {
+    readRequestRef.current += 1;
+    setPath("$");
+    setBlockedReason(null);
     setJsonDraft(formatJsonValue(value));
     setValidationError(null);
     setOperationError(null);
@@ -57,6 +62,7 @@ export function JsonPathEditor({
   }, [value]);
 
   const validatePath = () => {
+    if (blockedReason) return null;
     const trimmedPath = path.trim();
     if (trimmedPath === "") {
       setValidationError("JSON Path 不能为空。");
@@ -171,13 +177,27 @@ export function JsonPathEditor({
         <span className="editor-type">json</span>
       </div>
 
+      <JsonTree value={value} selectedPath={path} busy={busy} onSelect={(node) => {
+        readRequestRef.current += 1;
+        setPath(node.path);
+        setJsonDraft(formatJsonValue(node.value));
+        setBlockedReason(node.blockedReason);
+        setValidationError(null);
+        setOperationError(null);
+        setReadResult(null);
+      }} />
+
+      {blockedReason ? <p className="browser-helper" role="status">{blockedReason}</p> : null}
+
       <label className="field">
         <span>JSON Path</span>
         <input
           aria-label="JSON Path"
           value={path}
           onChange={(event) => {
+            readRequestRef.current += 1;
             setPath(event.target.value);
+            setBlockedReason(null);
             setValidationError(null);
             setOperationError(null);
             setReadResult(null);
@@ -221,7 +241,7 @@ export function JsonPathEditor({
           type="button"
           className="button button-secondary"
           onClick={() => void handleRead()}
-          disabled={busy}
+          disabled={busy || blockedReason !== null}
         >
           读取路径
         </button>
@@ -229,7 +249,7 @@ export function JsonPathEditor({
           type="button"
           className="button button-primary"
           onClick={() => void mutate("set")}
-          disabled={busy}
+          disabled={busy || blockedReason !== null}
         >
           保存路径
         </button>
@@ -237,7 +257,7 @@ export function JsonPathEditor({
           type="button"
           className="button button-secondary"
           onClick={() => void mutate("append")}
-          disabled={busy}
+          disabled={busy || blockedReason !== null}
         >
           数组追加
         </button>
@@ -245,7 +265,7 @@ export function JsonPathEditor({
           type="button"
           className="button button-danger"
           onClick={() => void mutate("delete")}
-          disabled={busy}
+          disabled={busy || blockedReason !== null}
         >
           删除路径
         </button>

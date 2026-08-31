@@ -9,6 +9,7 @@ import QueryLibraryPage from "./features/query-library/QueryLibraryPage";
 import SearchPage from "./features/search/SearchPage";
 import SettingsPage from "./features/settings/SettingsPage";
 import WorkbenchPage from "./features/workbench/WorkbenchPage";
+import CliPage from "./features/cli/CliPage";
 import { getAppSettings } from "./lib/tauri";
 import type { AppSettings, ConnectionProfile, Workspace } from "./lib/types";
 import { DEFAULT_APP_SETTINGS } from "./features/settings/settingsState";
@@ -57,6 +58,7 @@ const navigationItems: NavigationItem[] = [
     description: "实例概览",
     icon: "database",
   },
+  { id: "cli", label: "CLI", description: "持久命令会话", icon: "workbench" },
   {
     id: "database-analysis",
     label: "数据库分析",
@@ -88,6 +90,7 @@ const sectionDescriptions: Record<AppSection, string> = {
   browser: "使用 SCAN 浏览键和值",
   "search-query": "管理 RedisSearch 索引并查询键",
   workbench: "直接执行 Redis 命令并查看返回值",
+  cli: "独立持久连接与事务会话",
   database: "查看实例指标和数据库键空间",
   "database-analysis": "显式扫描并汇总键空间与内存",
   observability: "查看 Slow Log、Pub/Sub 和 Profiler",
@@ -322,6 +325,9 @@ export default function App() {
               activeDatabase={activeProfile.database}
               onProfileChanged={handleProfileChanged}
             />
+          ) : null}
+          {activeProfile && activeSection === "cli" ? (
+            <CliPage connectionId={activeProfile.id} database={activeProfile.database} />
           ) : null}
           {activeProfile && activeSection === "database-analysis" ? (
             <DatabaseAnalysisPage

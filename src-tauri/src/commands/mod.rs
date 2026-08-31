@@ -1,5 +1,6 @@
 pub mod array;
 pub mod browser;
+pub mod cli;
 pub mod connections;
 pub mod database;
 pub mod json;

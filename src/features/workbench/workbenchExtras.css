@@ -1,0 +1,66 @@
+.workbench-page .command-parameter-help {
+  max-height: 230px;
+  overflow: auto;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.workbench-page .command-parameter-help dl {
+  margin: 8px 0;
+}
+
+.workbench-page .command-parameter-help dd {
+  margin-left: 12px;
+  color: var(--color-muted);
+}
+
+.workbench-page .resp-tree,
+.workbench-page .resp-tree ul {
+  list-style: none;
+  padding-left: 16px;
+  overflow-wrap: anywhere;
+}
+
+.workbench-page .resp-tree {
+  max-height: 70vh;
+  overflow: auto;
+  padding: 10px 0;
+  font-size: 12px;
+  line-height: 1.8;
+}
+
+.workbench-page .resp-tree .button {
+  padding: 4px 8px;
+  text-align: left;
+  white-space: normal;
+}
+
+.workbench-page .workbench-history-list > li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.workbench-page .workbench-panel-heading {
+  flex-wrap: wrap;
+}
+
+.workbench-page .workbench-result-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.workbench-page .workbench-result-panel th,
+.workbench-page .workbench-result-panel td {
+  padding: 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border);
+  overflow-wrap: anywhere;
+}

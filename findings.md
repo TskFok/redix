@@ -462,3 +462,12 @@
 - 参考项目 Workbench/CLI 还包含独立 CLI 会话、Redis 命令帮助/自动补全、查询结果历史、嵌套结果视图和插件可视化；其中远程插件运行时、AI/Copilot、云端和 Telemetry 属于明确排除项，只保留可在本地 typed IPC 上复现的命令帮助、CLI/结果体验。
 - 本轮应采用垂直批次而不是一次性移植整个 Electron/NestJS 项目：先完成可独立验证的模块能力批次（Search/Query、Vector Set、Array、JSON 深层编辑），再评估 Workbench/CLI，最后单独设计 SSH/Sentinel/Cluster；每批维持固定错误码、能力降级、RESP2/RESP3 parser、结果/输入上限、TDD 和默认 ignored 的真实 Redis/Redis Stack 流程。
 - 硬排除继续包括 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry、远程插件/插件市场、云登录/账户/端点/发现和 SQL；Browser/Analysis/批量操作继续禁止 `KEYS`，且不在循环遍历中查询 SQL。
+
+## 2026-08-31 代码对比
+
+- Redix 当前实现为 Tauri 2 + Rust redis 1.5 + React 19；参考 RedisInsight 为 Electron/NestJS/React，不能直接移植运行时。
+- 参考 API 模块包括 cli/workbench、browser、redis-sentinel、ssh、cluster-monitor、database-discovery 等。
+- 已有 Search 为 NOCONTENT 的有限分页查询；Array/Vector Set 已有独立编辑器，不重复实现。
+- Workbench 当前 normalizeCommandList 直接按行拆分、目录静态、结果仅格式输出，缺少模块帮助和复杂结果折叠。
+- 连接 profile 仅 host/port/database/TLS；Cluster/Sentinel/SSH 在旧 MVP 范围文件中被标为未实现，不应误报为已对齐。
+- Redis Cloud 明确排除；旧文档中的其他历史排除项不是本轮新授权的替代品。

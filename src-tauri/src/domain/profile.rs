@@ -5,7 +5,29 @@ fn default_verify_server_cert() -> bool {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ConnectionEndpoint {
+    pub host: String,
+    pub port: u16,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SentinelConfig {
+    pub master_name: String,
+    pub nodes: Vec<ConnectionEndpoint>,
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub has_password: bool,
+    #[serde(default)]
+    pub tls: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ConnectionProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<SshConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sentinel: Option<SentinelConfig>,
     pub id: String,
     pub name: String,
     pub host: String,
@@ -27,6 +49,46 @@ pub struct ConnectionProfile {
     pub has_client_certificate: bool,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct SshConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    #[serde(default)]
+    pub identity_file: Option<String>,
+    #[serde(default)]
+    pub known_hosts_file: Option<String>,
+}
+
+impl SshConfig {
+    pub fn validate(&self) -> Result<(), AppError> {
+        let safe_host = self.host.parse::<std::net::Ipv6Addr>().is_ok()
+            || (!self.host.is_empty()
+                && !self.host.starts_with('-')
+                && self.host.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
+                }));
+        if !safe_host
+            || self.port == 0
+            || self.username.is_empty()
+            || !self
+                .username
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+            || self
+                .identity_file
+                .iter()
+                .chain(self.known_hosts_file.iter())
+                .any(|path| {
+                    !std::path::Path::new(path).is_absolute() || path.contains(['\n', '\r', '\0'])
+                })
+        {
+            return Err(AppError::InvalidConnection);
+        }
+        Ok(())
+    }
+}
+
 impl ConnectionProfile {
     pub fn validate(&self) -> Result<(), AppError> {
         if self.id.trim().is_empty()
@@ -38,6 +100,26 @@ impl ConnectionProfile {
             return Err(AppError::InvalidConnection);
         }
 
+        if let Some(sentinel) = &self.sentinel {
+            if sentinel.master_name.trim().is_empty()
+                || sentinel.nodes.is_empty()
+                || sentinel.nodes.len() > 32
+                || sentinel
+                    .nodes
+                    .iter()
+                    .any(|node| node.host.trim().is_empty() || node.port == 0)
+            {
+                return Err(AppError::InvalidConnection);
+            }
+        }
+
+        if let Some(ssh) = &self.ssh {
+            ssh.validate()?;
+            if self.tls || self.sentinel.is_some() {
+                return Err(AppError::InvalidConnection);
+            }
+        }
+
         Ok(())
     }
 }
@@ -47,6 +129,8 @@ pub struct SaveConnectionInput {
     pub profile: ConnectionProfile,
     #[serde(default)]
     pub password: Option<String>,
+    #[serde(default)]
+    pub sentinel_password: Option<String>,
     #[serde(default)]
     pub ca_certificate: Option<String>,
     #[serde(default)]

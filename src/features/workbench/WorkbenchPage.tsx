@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
   executeCommand,
@@ -6,15 +6,18 @@ import {
   getCommandCatalog,
   listCommandHistory,
   saveCommandHistory,
+  deleteCommandHistory,
+  clearCommandHistory,
 } from "../../lib/tauri";
 import type {
   CommandDefinition,
   CommandDisplayFormat,
   CommandExecutionItem,
+  CommandHistoryEntry,
 } from "../../lib/types";
 import CommandInput from "./CommandInput";
 import CommandResult from "./CommandResult";
-import CommandSuggestions, { filterCommandCatalog } from "./CommandSuggestions";
+import CommandSuggestions, { CommandParameterHelp, currentCommandDefinition, currentCommandLine, filterCommandCatalog } from "./CommandSuggestions";
 import {
   initialWorkbenchPageState,
   isCommandReady,
@@ -28,6 +31,7 @@ import {
   historyEntriesFromExecution,
   prependHistoryEntries,
 } from "./workbenchHistory";
+import "./workbenchExtras.css";
 
 interface WorkbenchPageProps {
   connectionId: string | null;
@@ -50,12 +54,26 @@ export function WorkbenchPage({
     continueOnError: defaultContinueOnError,
   }));
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
+  const [cursor, setCursor] = useState(0);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pendingSelectionRef = useRef<number | null>(null);
+  const historyQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const mountedRef = useRef(false);
   const requestRef = useRef(0);
 
   const normalizedConnectionId = connectionId?.trim() ?? "";
   const hasConnection = normalizedConnectionId.length > 0;
-  const suggestions = filterCommandCatalog(state.command, state.catalog);
+  const suggestions = filterCommandCatalog(state.command, state.catalog, cursor);
+  const commandHelp = currentCommandDefinition(state.command, cursor, state.catalog);
+
+  useLayoutEffect(() => {
+    const position = pendingSelectionRef.current;
+    if (position === null) return;
+    pendingSelectionRef.current = null;
+    inputRef.current?.focus();
+    inputRef.current?.setSelectionRange(position, position);
+  }, [state.command]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -69,6 +87,8 @@ export function WorkbenchPage({
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
     setSuggestionIndex(-1);
+    setCursor(0);
+    setHistoryBusy(false);
     setState({
       ...initialWorkbenchPageState,
       format: defaultFormat,
@@ -117,6 +137,7 @@ export function WorkbenchPage({
       return;
     }
     setSuggestionIndex(-1);
+    setCursor(initialCommand.length);
     setState((current) => ({
       ...current,
       command: initialCommand,
@@ -127,10 +148,13 @@ export function WorkbenchPage({
   }, [initialCommand, onCommandConsumed]);
 
   const handleSuggestionSelect = (suggestion: CommandDefinition) => {
-    const lines = state.command.split(/\r?\n/);
-    const lastIndex = lines.length - 1;
-    lines[lastIndex] = suggestion.name;
-    const command = lines.join("\n");
+    const line = currentCommandLine(state.command, cursor);
+    const indentation = line.text.match(/^\s*/)?.[0] ?? "";
+    const trailing = line.text.endsWith("\r") ? "\r" : "";
+    const command = state.command.slice(0, line.start) + indentation + suggestion.name + trailing + state.command.slice(line.end);
+    const nextCursor = line.start + indentation.length + suggestion.name.length;
+    pendingSelectionRef.current = nextCursor;
+    setCursor(nextCursor);
     setSuggestionIndex(-1);
     setState((current) => ({
       ...current,
@@ -164,10 +188,14 @@ export function WorkbenchPage({
     requestId: number,
   ) => {
     try {
-      await saveCommandHistory({
-        connection_id: activeConnectionId,
-        entries: history.filter((entry) => filterHistoryEntry(entry.command)),
-      });
+      const pending = historyQueueRef.current.catch(() => undefined).then(() =>
+        saveCommandHistory({
+          connection_id: activeConnectionId,
+          entries: history.filter((entry) => filterHistoryEntry(entry.command)),
+        }),
+      );
+      historyQueueRef.current = pending;
+      await pending;
     } catch (caught) {
       if (mountedRef.current && requestRef.current === requestId) {
         setState((current) => ({
@@ -183,6 +211,7 @@ export function WorkbenchPage({
       normalizedConnectionId.length === 0 ||
       !isCommandReady(connectionId, state.command) ||
       state.loading
+      || historyBusy
     ) {
       return;
     }
@@ -251,6 +280,7 @@ export function WorkbenchPage({
   };
 
   const handleHistorySelect = (command: string) => {
+    setCursor(command.length);
     setState((current) => ({
       ...current,
       command,
@@ -260,6 +290,7 @@ export function WorkbenchPage({
   };
 
   const handleCommandChange = (command: string) => {
+    setCursor(command.length);
     setSuggestionIndex(-1);
     setState((current) => ({
       ...current,
@@ -269,7 +300,33 @@ export function WorkbenchPage({
     }));
   };
 
-  const canExecute = isCommandReady(connectionId, state.command);
+  const handleDeleteHistory = async (entry?: CommandHistoryEntry) => {
+    if (!hasConnection || historyBusy || state.loading) return;
+    const requestId = requestRef.current;
+    const activeConnectionId = normalizedConnectionId;
+    setHistoryBusy(true);
+    setState((current) => ({ ...current, error: null }));
+    const pending = historyQueueRef.current.catch(() => undefined).then(() => entry
+      ? deleteCommandHistory({ connection_id: activeConnectionId, command: entry.command, created_at: entry.created_at })
+      : clearCommandHistory({ connection_id: activeConnectionId }));
+    historyQueueRef.current = pending;
+    try {
+      await pending;
+      if (mountedRef.current && requestRef.current === requestId) {
+        setState((current) => ({ ...current, history: entry
+          ? current.history.filter((item) => item.command !== entry.command || item.created_at !== entry.created_at)
+          : [] }));
+      }
+    } catch (caught) {
+      if (mountedRef.current && requestRef.current === requestId) {
+        setState((current) => ({ ...current, error: normalizeWorkbenchError(caught) }));
+      }
+    } finally {
+      if (mountedRef.current && requestRef.current === requestId) setHistoryBusy(false);
+    }
+  };
+
+  const canExecute = isCommandReady(connectionId, state.command) && !historyBusy;
 
   return (
     <section
@@ -314,6 +371,8 @@ export function WorkbenchPage({
               </span>
             </div>
             <CommandInput
+              inputRef={inputRef}
+              onCursorChange={(position) => { if (position !== cursor) { setCursor(position); setSuggestionIndex(-1); } }}
               value={state.command}
               canExecute={canExecute}
               loading={state.loading}
@@ -326,6 +385,7 @@ export function WorkbenchPage({
               activeIndex={suggestionIndex}
               onSelect={handleSuggestionSelect}
             />
+            <CommandParameterHelp command={commandHelp} />
             <label className="command-continue field">
               <span>
                 <input
@@ -351,6 +411,7 @@ export function WorkbenchPage({
                 <h2 id="command-history-title">命令历史</h2>
               </div>
               <span className="panel-hint">按连接保存，不保存敏感命令</span>
+              <button type="button" className="button button-quiet" disabled={historyBusy || state.loading || state.history.length === 0} onClick={() => void handleDeleteHistory()}>清空历史</button>
             </div>
             {state.history.length > 0 ? (
               <ol className="workbench-history-list" aria-label="命令历史">
@@ -371,6 +432,7 @@ export function WorkbenchPage({
                         })}
                       </time>
                     </button>
+                    <button type="button" className="button button-quiet" disabled={historyBusy || state.loading} aria-label={`删除历史 ${entry.command}`} onClick={() => void handleDeleteHistory(entry)}>删除</button>
                   </li>
                 ))}
               </ol>

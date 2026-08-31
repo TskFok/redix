@@ -2,6 +2,8 @@ use redix_lib::domain::ConnectionProfile;
 
 pub fn valid_profile() -> ConnectionProfile {
     ConnectionProfile {
+        ssh: None,
+        sentinel: None,
         id: "local".into(),
         name: "Local".into(),
         host: "127.0.0.1".into(),

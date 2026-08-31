@@ -29,6 +29,7 @@ export interface SearchState {
   selectedIndex: string | null;
   info: SearchIndexInfo | null;
   query: string;
+  includeContent: boolean;
   offset: number;
   result: SearchQueryResult | null;
   loading: boolean;
@@ -41,6 +42,7 @@ export const initialSearchState: SearchState = {
   selectedIndex: null,
   info: null,
   query: "*",
+  includeContent: false,
   offset: 0,
   result: null,
   loading: false,

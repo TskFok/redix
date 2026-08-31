@@ -554,3 +554,21 @@ complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust doma
 | 实现计划占位符扫描命令再次包含未转义 `???`，`rg` 报 repetition operator 错误 | 1 | 改用固定字符串扫描和不含 `???` 的正则重跑；计划内容已修正 |
 | 恢复中核对后台进程时 `ps` 受到桌面沙箱权限限制 | 1 | 改用后续命令的退出状态和工作区状态判断，无生产文件受影响 |
 | 深入对照目标 `FT.INFO` 转换器后发现真实回复把 `key_type`/`prefixes` 放在 `index_definition` 嵌套结构中 | 1 | 先补 nested fixture 让 parser 定向测试 RED，再增加兼容解析并通过 6 个 Search parser 测试 |
+
+## 2026-08-31 非 Cloud 差异续作
+
+- 状态：本轮交付与验证完成；总体非 Cloud 对齐仍有差异，见 `docs/redisinsight-feature-matrix.md`
+- 用户要求：对比当前项目与本地 RedisInsight，补全缺失功能，排除 Redis Cloud；当前 main 分支，不创建分支。
+- 延续既有非 Cloud 设计和已批准的分批方向，不重做已交付模块。
+- [x] 核对两仓结构、现有功能、历史设计与实际边界
+- [x] Workbench：模块命令帮助、当前行补全、嵌套结果查看、历史管理
+- [x] Browser：键前缀树、JSON 树形定位与编辑集成
+- [x] 连接：Sentinel 发现和主节点连接，受限 OpenSSH 安全转发
+- [x] Stream：Pending 消息 Claim
+- [x] Search：可选文档字段结果、RESP2/RESP3、分页和旧请求保护
+- [x] 运维观察：有界显示暂停、筛选及显式文件导出
+- [x] 独立 CLI：持久事务与 SELECT、取消/超时/StrictMode 会话隔离
+- [x] 核实其他差异并补充功能矩阵；Cluster 等仍列为未覆盖
+- [x] 收口交叉审查：配置事务锁和 CLI 部分失败/格式化超限
+- [x] 全量前后端、前端/原生 release 构建、格式、安全范围与真实 Redis 验证；Stack 未配置明确跳过
+- 共享代码由主任务协调；不自动提交或推送。

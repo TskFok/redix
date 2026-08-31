@@ -33,6 +33,9 @@ import {
   parsePubSubTopics,
   toUserFacingObservabilityError,
 } from "./observabilityState";
+import { buildProfilerExport, buildPubSubExport, buildSlowLogExport, downloadObservabilityExport, filterProfilerEvents, filterPubSubMessages, filterSlowLogs, type ObservabilityExport } from "./observabilityExport";
+import { usePausedFeed } from "./usePausedFeed";
+import "./observabilityExtras.css";
 
 const PUBSUB_MESSAGE_EVENT = "redix://pubsub/message";
 const PUBSUB_STATUS_EVENT = "redix://pubsub/status";
@@ -46,6 +49,10 @@ interface ObservabilityPageProps {
 }
 
 export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
+  return <ObservabilitySessionPage key={connectionId} connectionId={connectionId} />;
+}
+
+function ObservabilitySessionPage({ connectionId }: ObservabilityPageProps) {
   const [tab, setTab] = useState<ObservabilityTab>("slowlog");
   const [slowLogs, setSlowLogs] = useState<SlowLogEntry[]>([]);
   const [slowLogConfig, setSlowLogConfig] = useState<SlowLogConfig | null>(null);
@@ -71,6 +78,12 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
   const sessionRef = useRef<PubSubSession | null>(null);
   const profilerSessionRef = useRef<ProfilerSession | null>(null);
   const requestRef = useRef(0);
+  const activeRef = useRef(true);
+
+  useEffect(() => {
+    activeRef.current = true;
+    return () => { activeRef.current = false; };
+  }, []);
 
   useEffect(() => {
     let disposed = false;
@@ -283,6 +296,10 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
         session_id: sessionId,
         topics,
       });
+      if (!activeRef.current) {
+        await stopPubSub({ connection_id: session.connection_id, session_id: session.session_id });
+        return;
+      }
       sessionRef.current = session;
       setPubSubSession(session);
       setPubSubStatus("running");
@@ -326,6 +343,10 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
         connection_id: connectionId,
         session_id: sessionId,
       });
+      if (!activeRef.current) {
+        await stopProfiler({ connection_id: session.connection_id, session_id: session.session_id });
+        return;
+      }
       profilerSessionRef.current = session;
       setProfilerSession(session);
       setProfilerStatus("running");
@@ -458,6 +479,7 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
         />
       ) : tab === "pubsub" ? (
         <PubSubPanel
+          key={`pubsub-${pubSubSession?.session_id ?? "idle"}`}
           activeSession={pubSubSession}
           busy={pubSubBusy}
           messages={pubSubMessages}
@@ -478,6 +500,7 @@ export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
         />
       ) : (
         <ProfilerPanel
+          key={`profiler-${profilerSession?.session_id ?? "idle"}`}
           activeSession={profilerSession}
           busy={profilerBusy}
           events={profilerEvents}
@@ -522,6 +545,8 @@ function SlowLogPanel({
   onClear,
   onSaveConfig,
 }: SlowLogPanelProps) {
+  const [query, setQuery] = useState("");
+  const filteredLogs = filterSlowLogs(logs, query);
   return (
     <div className="observability-content">
       <section className="observability-panel" aria-labelledby="slow-log-title">
@@ -531,6 +556,8 @@ function SlowLogPanel({
             <h3 id="slow-log-title">慢命令记录</h3>
           </div>
           <div className="observability-toolbar">
+            <ExportButton label="导出 Slow Log CSV" disabled={loading || filteredLogs.length === 0} output={() => buildSlowLogExport(logs, "csv", query)} />
+            <ExportButton label="导出 Slow Log JSON" disabled={loading || filteredLogs.length === 0} output={() => buildSlowLogExport(logs, "json", query)} />
             <label className="observability-inline-field">
               <span>读取数量</span>
               <select
@@ -557,13 +584,15 @@ function SlowLogPanel({
         <p className="panel-hint observability-panel-hint">
           Redis 服务器维护环形慢日志；清空后只会影响当前实例的 Slow Log。
         </p>
+        <label className="field"><span>筛选慢日志</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="命令、来源或客户端" /></label>
+        <p className="panel-hint">仅导出当前筛选结果。命令参数可能包含敏感数据，请妥善保管导出文件。</p>
 
         {loading ? (
           <p className="loading-state" role="status">
             正在读取 Slow Log…
           </p>
-        ) : logs.length === 0 ? (
-          <p className="empty-state-compact">当前没有慢命令记录。</p>
+        ) : filteredLogs.length === 0 ? (
+          <p className="empty-state-compact">{logs.length === 0 ? "当前没有慢命令记录。" : "没有匹配的慢命令记录。"}</p>
         ) : (
           <div className="observability-table-wrap">
             <table className="observability-table">
@@ -577,7 +606,7 @@ function SlowLogPanel({
                 </tr>
               </thead>
               <tbody>
-                {logs.map((entry) => (
+                {filteredLogs.map((entry) => (
                   <tr key={entry.id}>
                     <td>{formatSlowLogTime(entry.time)}</td>
                     <td className="observability-mono">{formatSlowLogDuration(entry.duration_us)}</td>
@@ -626,7 +655,7 @@ function SlowLogPanel({
               onChange={(event) => onSlowerThanChange(event.target.value)}
               disabled={busy}
             />
-            <small>微秒阈值；-1 表示记录所有命令。</small>
+            <small>微秒阈值；0 表示记录所有命令，负数表示禁用。</small>
           </label>
         </div>
         <div className="observability-panel-actions">
@@ -679,6 +708,9 @@ function PubSubPanel({
   onStop,
   onTopicTextChange,
 }: PubSubPanelProps) {
+  const [query, setQuery] = useState("");
+  const feed = usePausedFeed(messages, onClearMessages);
+  const filteredMessages = filterPubSubMessages(feed.displayed, query);
   return (
     <div className="observability-content">
       <section className="observability-panel" aria-labelledby="pubsub-title">
@@ -780,13 +812,17 @@ function PubSubPanel({
             <h3 id="pubsub-message-list-title">消息流</h3>
           </div>
           <div className="observability-toolbar">
-            <span className="observability-config-summary">{messages.length} / 5000 条</span>
-            <button type="button" className="button button-quiet button-compact" onClick={onClearMessages} disabled={messages.length === 0}>
+            <span className="observability-config-summary">{messages.length} / 5000 条 · 显示 {filteredMessages.length} 条</span>
+            <button type="button" className="button button-quiet button-compact" onClick={feed.toggle}>{feed.paused ? "恢复显示" : "暂停显示"}</button>
+            <ExportButton label="导出消息 JSON" disabled={filteredMessages.length === 0} output={() => buildPubSubExport(feed.displayed, query)} />
+            <button type="button" className="button button-quiet button-compact" onClick={feed.clear} disabled={messages.length === 0 && feed.displayed.length === 0}>
               清空视图
             </button>
           </div>
         </div>
-        {messages.length === 0 ? (
+        <label className="field"><span>筛选消息</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="频道、模式或消息内容" /></label>
+        <p className="panel-hint">{feed.paused ? "已暂停显示；后台继续接收，恢复后显示最新缓存。" : "缓存最多保留最新 5000 条消息。"} 仅导出当前筛选的可见快照，消息可能含敏感数据；不会自动保存。</p>
+        {filteredMessages.length === 0 ? (
           <p className="empty-state-compact">启动订阅后，收到的频道消息会显示在这里。</p>
         ) : (
           <div className="observability-table-wrap pubsub-message-table-wrap">
@@ -800,7 +836,7 @@ function PubSubPanel({
                 </tr>
               </thead>
               <tbody>
-                {[...messages].reverse().map((message, index) => (
+                {[...filteredMessages].reverse().map((message, index) => (
                   <tr key={`${message.received_at_ms}-${message.channel}-${index}`}>
                     <td className="observability-mono">{formatPubSubTime(message.received_at_ms)}</td>
                     <td className="observability-mono">{message.channel}</td>
@@ -839,6 +875,9 @@ function ProfilerPanel({
   onStop,
 }: ProfilerPanelProps) {
   const running = activeSession !== null && status === "running";
+  const [query, setQuery] = useState("");
+  const feed = usePausedFeed(events, onClearEvents);
+  const filteredEvents = filterProfilerEvents(feed.displayed, query);
 
   return (
     <div className="observability-content">
@@ -859,7 +898,7 @@ function ProfilerPanel({
         <div className="profiler-controls">
           <div>
             <p className="panel-hint observability-panel-hint">
-              Profiler 只在当前页面保留实时事件，不会写入日志文件或持久化历史。
+              Profiler 只在当前页面保留实时事件，不会自动写入日志文件或持久化历史。命令参数可能包含敏感数据；仅在点击导出后保存本地文件。
             </p>
             {activeSession ? (
               <p className="observability-session-note">会话 {activeSession.session_id}</p>
@@ -884,18 +923,22 @@ function ProfilerPanel({
             <h3 id="profiler-event-list-title">命令流</h3>
           </div>
           <div className="observability-toolbar">
-            <span className="observability-config-summary">{events.length} / 10000 条</span>
+            <span className="observability-config-summary">{events.length} / 10000 条 · 显示 {filteredEvents.length} 条</span>
+            <button type="button" className="button button-quiet button-compact" onClick={feed.toggle}>{feed.paused ? "恢复显示" : "暂停显示"}</button>
+            <ExportButton label="导出 Profiler LOG" disabled={filteredEvents.length === 0} output={() => buildProfilerExport(feed.displayed, query)} />
             <button
               type="button"
               className="button button-quiet button-compact"
-              onClick={onClearEvents}
-              disabled={events.length === 0}
+              onClick={feed.clear}
+              disabled={events.length === 0 && feed.displayed.length === 0}
             >
               清空视图
             </button>
           </div>
         </div>
-        {events.length === 0 ? (
+        <label className="field"><span>筛选命令</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="命令、来源或 DB 编号" /></label>
+        <p className="panel-hint">{feed.paused ? "已暂停显示；后台继续接收，MONITOR 仍在运行。恢复后显示最新缓存。" : "缓存最多保留最新 10000 条命令。"} 导出仅包含当前筛选的可见快照。</p>
+        {filteredEvents.length === 0 ? (
           <p className="empty-state-compact">开始监控后，当前实例收到的命令会显示在这里。</p>
         ) : (
           <div className="observability-table-wrap profiler-event-table-wrap">
@@ -909,7 +952,7 @@ function ProfilerPanel({
                 </tr>
               </thead>
               <tbody>
-                {[...events].reverse().map((event, index) => (
+                {[...filteredEvents].reverse().map((event, index) => (
                   <tr key={`${event.received_at_ms}-${event.session_id}-${index}`}>
                     <td className="observability-mono">{formatProfilerTime(event.time)}</td>
                     <td className="observability-mono">DB{event.database}</td>
@@ -935,6 +978,17 @@ function createSessionId(prefix = "pubsub"): string {
     return globalThis.crypto.randomUUID();
   }
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function ExportButton({ label, disabled, output }: { label: string; disabled: boolean; output: () => ObservabilityExport }) {
+  const [error, setError] = useState(false);
+  return <>
+    <button type="button" className="button button-quiet button-compact" disabled={disabled} onClick={() => {
+      setError(false);
+      try { downloadObservabilityExport(output()); } catch { setError(true); }
+    }}>{label}</button>
+    {error ? <span role="alert">无法下载文件，请重试。</span> : null}
+  </>;
 }
 
 export default ObservabilityPage;

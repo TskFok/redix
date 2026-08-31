@@ -7,6 +7,8 @@ pub enum AppError {
     InvalidConnection,
     #[error("无法连接到 Redis 服务器")]
     ConnectionFailed,
+    #[error("SSH 隧道建立失败，请检查 ssh-agent、私钥及 known_hosts")]
+    SshTunnelFailed,
     #[error("Redis 身份验证失败")]
     AuthenticationFailed,
     #[error("不支持的 Redis 数据类型")]
@@ -30,6 +32,7 @@ impl AppError {
         match self {
             Self::InvalidConnection => "INVALID_CONNECTION",
             Self::ConnectionFailed => "CONNECTION_FAILED",
+            Self::SshTunnelFailed => "SSH_TUNNEL_FAILED",
             Self::AuthenticationFailed => "AUTHENTICATION_FAILED",
             Self::UnsupportedDataType => "UNSUPPORTED_DATA_TYPE",
             Self::UnsupportedFeature => "UNSUPPORTED_FEATURE",
@@ -45,6 +48,7 @@ impl AppError {
         match self {
             Self::InvalidConnection => "连接配置无效",
             Self::ConnectionFailed => "无法连接到 Redis 服务器",
+            Self::SshTunnelFailed => "SSH 隧道建立失败，请检查 ssh-agent、私钥及 known_hosts",
             Self::AuthenticationFailed => "Redis 身份验证失败",
             Self::UnsupportedDataType => "不支持的 Redis 数据类型",
             Self::UnsupportedFeature => "当前 Redis 功能不可用",

@@ -423,3 +423,37 @@
 - 最终验证矩阵：`npm run test:frontend` 为 17 个文件/153 个测试通过；`npm run build`、`npm run check:non-cloud`、`npm run test:rust` 均通过；Rust 普通测试为 81 lib + 6 commands + 7 database analysis + 34 domain + 15 persistence，通过；`cargo fmt --manifest-path src-tauri/Cargo.toml -- --check` 与 `git diff --check` 通过。
 - 前端测试仍输出两条 jsdom `Not implemented: navigation to another Document` 提示，但退出码为 0 且无失败测试，归类为既有测试环境噪音。
 - 按当前项目约定直接保留在 `main` 工作区，本轮未创建新分支、未 push、未擅自创建提交；参考仓库未修改。
+
+## 2026-08-31 非 Cloud 功能补齐
+
+- 已读取技能 using-superpowers、brainstorming、planning-with-files、writing-plans、test-driven-development、dispatching-parallel-agents。
+- 当前 main 工作区开始时干净，参考仓库只读。
+- 已恢复旧设计和计划，采用分模块实现与统一回归；不再重复已有模块批次。
+
+- Stream Claim：已记录三个前端 RED（缺目标消费者输入）与 Rust DTO 缺失 RED；实现 typed XCLAIM JUSTID 后前端 8/8 GREEN。Rust 验证暂遇并行 Sentinel 新字段引起的中间态编译错误，等待其完成再统一回归。
+- JSON/键树：代理完成特殊路径编码、深度/渲染上限和连接切换清理，新增22测试与原路径7测试通过，Browser 原回归50通过。
+- Workbench：代理完成模块目录、光标行补全、树/表结果和历史删除；定向前端25通过、Rust workbench 5通过；继续文件能力/观察导出。
+- 参考 Claim 语义采用 Redis 官方 XCLAIM 文档 https://redis.io/docs/latest/commands/xclaim/ ，JUSTID 仅返回成功转移 ID、不启用 FORCE；真实集成检查所有权和 min-idle-time。
+
+- 已使用 systematic-debugging 定位真实回归失败：批量删除正确，read_key 对 TYPE none 返回现有 KEY_NOT_FOUND，但旧 ignored 集成仍断言 COMMAND_FAILED。仅修正测试期待为 AppError::KeyNotFound，未改生产删除行为。
+- 隔离临时 Redis 第一轮：分析、保存失败回滚、SlowLog/PubSub、Stream Claim 流程均通过；三项 Stack 流程明确未配置跳过；普通全流程因上述旧断言失败，修正后重跑。
+- 本地 Vite 首次启动受沙箱 EPERM 阻止，已按权限流程启动仅本机开发服务器；浏览器观察 Sentinel 表单渲染正常（纯浏览器无 Tauri IPC，未声称真实桌面端端到端通过）。
+
+- 第二/第三次隔离 Redis 全流程：发现并修正第二处删除后的旧 COMMAND_FAILED 断言；随后8测试函数全通过，其中5个真实普通Redis流程执行，3个Stack流程明确跳过。新增 npm run test:redis:local 可重复启动/清理隔离Redis，主动移除继承的REDIX_TEST_REDIS*地址并验证新进程PID，避免使用用户已有实例。
+- 第一轮前端全量25文件216测试通过；生产构建79模块通过；non-cloud扫描通过。错误记录：误以node --test运行Vitest脚本导致runner config错误，改用npm test -- scripts/check-non-cloud-scope.test.mjs后2/2通过。
+- 已采用 requesting-code-review 交叉审查：Search删除期间切换状态竞态交由Search代理修复；连接open/select关闭代次与SSH就绪判断交由连接代理强化；CLI代理同时加强在途open取消。
+
+### 继续验证（2026-08-31）
+
+- Search 删除动作与查询加载状态分离，删除/创建期间禁用冲突操作；新增创建后的旧列表成功/失败响应测试，先2项RED，再引入列表请求序号，12项Search页面测试GREEN。
+- SSH 改为严格认证的 OpenSSH master + 私有0700控制socket，只有 `-O forward` 成功才视为就绪；本机OpenSSH不支持本地端口0，显式端口若被抢占必须失败，不再用TCP探测判断。真实临时sshd验证2项通过，覆盖未知/变化host、端口占用、正常转发、socket失效、超时/取消与子进程回收；Windows稳定拒绝。
+- CLI 修复网络await期间持registry锁、在途open取消及同ID旧响应污染；StrictMode每次effect使用不同UUID，旧cleanup不影响新会话。CLI前端8项、Rust10项（其中真实临时Redis8项）通过，多轮事务/SELECT、超时断开和关闭后socket消失已验证。
+- 连接open/select在开始即分配代次，发布和close统一锁保护，新增7项确定性TCP/RESP gate测试通过；继续补跨command的profile/secret共享事务锁，避免保存/删除/切库rollback互相覆盖。
+- 前端全量首次230项中1项失败，原因为新Sentinel测试误写既有标签“CA 证书名称”（实际“CA 名称”）；只校正测试定位后28文件230项全通过。生产构建83模块通过，non-cloud/diff检查通过。纯浏览器不提供Tauri IPC，未声称完整桌面E2E。
+
+- 配置事务扩展完成：保存/删除/导入（含部分保存失败回滚）与open/select快照及发布统一锁序；新增9项回归，旧profile或旧凭据不再发布。完整Rust普通测试194项通过，21项默认ignored另行按所需服务执行。
+- CLI交叉审查两项P2均已复现并修复：EXEC嵌套错误逐项脱敏同时保留成功项；格式化后超过256KiB的输出用提示替换，保留旧历史。最终CLI前端10项，真实临时Redis9项通过。
+- 统一回归期间JSON大数组测试与Rust编译争抢资源触发5秒超时；同一测试单独18项通过（1.6秒），确认大量重复可访问名称查询开销，循环改用控件明确的aria-label定位，仍保留500节点上限断言，不提高超时、不削弱生产约束。随后前端28文件232项全通过。
+- 最终真实验证：隔离普通Redis5项通过、3项Stack测试明确skip；CLI9项、Sentinel2项、SSH2项通过。cargo fmt --check、non-cloud与git diff --check通过；前端构建83模块通过。既有Array未用函数与测试辅助函数warning仍存在，不属于失败。
+- 已关闭本任务10:54启动的Vite临时开发服务器；参考仓库状态干净。原生release二进制构建（无安装包/签名）验证进行中。
+- 原生release构建已通过：`CARGO_NET_OFFLINE=true npm run tauri:build -- --no-bundle`，耗时2m13s，生成 `src-tauri/target/release/redix`；未签名、安装、打包或发布。当前main改动未提交/推送，本轮功能与验证收口，总体未覆盖能力按差异矩阵继续跟踪。

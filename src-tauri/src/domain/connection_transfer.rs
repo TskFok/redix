@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::ConnectionProfile;
+use super::{ConnectionEndpoint, ConnectionProfile, SentinelConfig, SshConfig};
 use crate::error::AppError;
 
 pub const CONNECTION_EXPORT_VERSION: u32 = 1;
@@ -14,6 +14,10 @@ pub struct ConnectionExportDocument {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionExportProfile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh: Option<SshConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sentinel: Option<SentinelExportConfig>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -25,6 +29,14 @@ pub struct ConnectionExportProfile {
     pub client_certificate_name: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SentinelExportConfig {
+    pub master_name: String,
+    pub nodes: Vec<ConnectionEndpoint>,
+    pub username: Option<String>,
+    pub tls: bool,
+}
+
 impl ConnectionExportDocument {
     pub fn from_profiles(profiles: &[ConnectionProfile]) -> Self {
         Self {
@@ -32,6 +44,16 @@ impl ConnectionExportDocument {
             connections: profiles
                 .iter()
                 .map(|profile| ConnectionExportProfile {
+                    ssh: profile.ssh.clone(),
+                    sentinel: profile
+                        .sentinel
+                        .as_ref()
+                        .map(|sentinel| SentinelExportConfig {
+                            master_name: sentinel.master_name.clone(),
+                            nodes: sentinel.nodes.clone(),
+                            username: sentinel.username.clone(),
+                            tls: sentinel.tls,
+                        }),
                     name: profile.name.clone(),
                     host: profile.host.clone(),
                     port: profile.port,
@@ -75,6 +97,8 @@ pub struct NormalizedImportDocument {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NormalizedImportEntry {
+    pub ssh: Option<SshConfig>,
+    pub sentinel: Option<SentinelConfig>,
     pub source_index: usize,
     pub name: String,
     pub host: String,
@@ -163,6 +187,16 @@ fn normalize_entry(source_index: usize, value: Value) -> NormalizedImportEntry {
     let sensitive_fields = object.map(count_sensitive_fields).unwrap_or(0);
 
     NormalizedImportEntry {
+        ssh: object
+            .and_then(|object| object.get("ssh"))
+            .and_then(|value| serde_json::from_value::<SshConfig>(value.clone()).ok()),
+        sentinel: object
+            .and_then(|object| object.get("sentinel"))
+            .and_then(|value| serde_json::from_value::<SentinelConfig>(value.clone()).ok())
+            .map(|mut sentinel| {
+                sentinel.has_password = false;
+                sentinel
+            }),
         source_index,
         name,
         host,
@@ -262,6 +296,7 @@ fn count_sensitive_fields(object: &Map<String, Value>) -> usize {
     let mut count = 0;
     for key in [
         "password",
+        "sentinel_password",
         "auth",
         "authPassword",
         "clientKey",
@@ -270,6 +305,16 @@ fn count_sensitive_fields(object: &Map<String, Value>) -> usize {
         if object.get(key).is_some_and(has_non_empty_value) {
             count += 1;
         }
+    }
+    if let Some(sentinel) = object.get("sentinel").and_then(Value::as_object) {
+        count += count_sensitive_fields(sentinel);
+    }
+    if let Some(ssh) = object.get("ssh").and_then(Value::as_object) {
+        count += count_sensitive_fields(ssh);
+        count += ["privateKey", "private_key", "passphrase"]
+            .iter()
+            .filter(|key| ssh.get(**key).is_some_and(has_non_empty_value))
+            .count();
     }
     for key in [
         "ca_certificate",
@@ -302,6 +347,16 @@ fn has_non_empty_value(value: &Value) -> bool {
 }
 
 fn unsupported_connection_type(object: &Map<String, Value>) -> Option<String> {
+    if let Some(value) = object.get("ssh").filter(|value| !value.is_null()) {
+        if serde_json::from_value::<SshConfig>(value.clone()).is_err() {
+            return Some("ssh".to_owned());
+        }
+    }
+    if let Some(value) = object.get("sentinel").filter(|value| !value.is_null()) {
+        if serde_json::from_value::<SentinelConfig>(value.clone()).is_err() {
+            return Some("sentinel".to_owned());
+        }
+    }
     if let Some(connection_type) = first_string(object, &["connectionType", "type"]) {
         let normalized = connection_type.to_ascii_lowercase();
         if !matches!(normalized.as_str(), "standalone" | "single" | "tcp") {
@@ -394,6 +449,8 @@ mod tests {
 
     fn profile_with_tls_and_secret_flags() -> ConnectionProfile {
         ConnectionProfile {
+            ssh: None,
+            sentinel: None,
             id: "secret-id".into(),
             name: "TLS Redis".into(),
             host: "redis.example".into(),

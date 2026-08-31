@@ -119,6 +119,8 @@ impl ImportKeysInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ConnectionInfo {
     pub server_version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_endpoint: Option<super::ConnectionEndpoint>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

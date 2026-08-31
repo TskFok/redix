@@ -4,8 +4,11 @@ import type {
 } from "../../lib/types";
 
 export function filterHistoryEntry(command: string): boolean {
-  const commandName = command.trim().split(/\s+/)[0]?.toUpperCase() ?? "";
-  return !["AUTH", "HELLO", "ACL", "CONFIG"].includes(commandName);
+  // Match the backend tokenizer for quoted/escaped command names. Be conservative
+  // when quoting is malformed: such commands should never enter persistent history.
+  const token = command.trim().match(/^(?:"[^"]*"|'[^']*'|\\.|[^\s"'\\])+/)?.[0] ?? "";
+  const commandName = token.replace(/\\(.)/g, "$1").replace(/["']/g, "").toUpperCase();
+  return commandName.length > 0 && !["AUTH", "HELLO", "ACL", "CONFIG"].includes(commandName);
 }
 
 export function historyEntriesFromExecution(

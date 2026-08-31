@@ -419,7 +419,7 @@ describe("Redis Workbench 工作区", () => {
     await screen.findByText("2");
 
     const history = screen.getByRole("list", { name: "命令历史" });
-    const historyItems = history.querySelectorAll("button");
+    const historyItems = history.querySelectorAll('button[aria-label^="回填命令"]');
     expect(historyItems[0]).toHaveTextContent("DBSIZE");
     expect(historyItems[1]).toHaveTextContent("PING");
 

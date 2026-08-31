@@ -158,3 +158,11 @@ pub async fn import_keys(
 ) -> Result<u64, AppError> {
     state.redis.import_keys(input).await
 }
+
+#[tauri::command]
+pub async fn claim_stream_pending_entries(
+    state: tauri::State<'_, AppState>,
+    input: crate::domain::ClaimStreamPendingEntriesInput,
+) -> Result<Vec<String>, AppError> {
+    state.redis.claim_stream_pending_entries(input).await
+}

@@ -168,3 +168,76 @@ impl DeleteStreamConsumerInput {
         validate_stream_name(&self.consumer)
     }
 }
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ClaimStreamPendingEntriesInput {
+    pub connection_id: String,
+    pub key: String,
+    pub group: String,
+    pub consumer: String,
+    pub min_idle_ms: u64,
+    pub entries: Vec<String>,
+}
+
+impl ClaimStreamPendingEntriesInput {
+    pub fn validate(&self) -> Result<(), AppError> {
+        validate_connection_and_key(&self.connection_id, &self.key)?;
+        validate_stream_name(&self.group)?;
+        validate_stream_name(&self.consumer)?;
+        if self.min_idle_ms > 9_007_199_254_740_991
+            || self.entries.is_empty()
+            || self.entries.len() > MAX_ACK_ENTRIES
+            || self.entries.iter().any(|id| !valid_stream_id(id))
+        {
+            return Err(AppError::InvalidInput);
+        }
+        Ok(())
+    }
+}
+
+fn valid_stream_id(id: &str) -> bool {
+    id.split_once('-').is_some_and(|(ms, seq)| {
+        [ms, seq].iter().all(|part| {
+            !part.is_empty()
+                && part.bytes().all(|byte| byte.is_ascii_digit())
+                && part.parse::<u64>().is_ok()
+        })
+    })
+}
+
+#[cfg(test)]
+mod claim_tests {
+    use super::*;
+
+    fn input() -> ClaimStreamPendingEntriesInput {
+        ClaimStreamPendingEntriesInput {
+            connection_id: "local".into(),
+            key: "events".into(),
+            group: "workers".into(),
+            consumer: "replacement".into(),
+            min_idle_ms: 1000,
+            entries: vec!["1-0".into()],
+        }
+    }
+
+    #[test]
+    fn claim_requires_concrete_bounded_ids_and_consumer() {
+        assert!(input().validate().is_ok());
+        for id in ["*", "1", "1-0-2", "-1-0", "18446744073709551616-0", "1- 0"] {
+            let mut value = input();
+            value.entries = vec![id.into()];
+            assert!(value.validate().is_err(), "{id}");
+        }
+        let mut value = input();
+        value.entries = vec![];
+        assert!(value.validate().is_err());
+        value.entries = vec!["1-0".into(); 501];
+        assert!(value.validate().is_err());
+        value = input();
+        value.consumer = " ".into();
+        assert!(value.validate().is_err());
+        value = input();
+        value.min_idle_ms = u64::MAX;
+        assert!(value.validate().is_err());
+    }
+}

@@ -14,6 +14,7 @@ use crate::{
 pub async fn list_connections(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<ConnectionProfile>, AppError> {
+    let _transaction = state.redis.profile_transaction().await;
     state.profiles.load()
 }
 
@@ -32,6 +33,7 @@ pub(crate) async fn save_connection_inner(
     let mut profile = input.profile.clone();
     profile.validate()?;
 
+    let _transaction = state.redis.profile_transaction().await;
     let connection_id = profile.id.clone();
     let old_profiles = state.profiles.load()?;
     let old_profile = old_profiles.iter().find(|item| item.id == connection_id);
@@ -90,6 +92,7 @@ pub(crate) async fn delete_connection_inner(
     state: &AppState,
     connection_id: &str,
 ) -> Result<(), AppError> {
+    let _transaction = state.redis.profile_transaction().await;
     let old_profiles = state.profiles.load()?;
     if !old_profiles
         .iter()
@@ -118,6 +121,7 @@ pub(crate) async fn delete_connection_inner(
             .map_err(|_| AppError::PersistenceFailed)?;
         return Err(error);
     }
+    state.cli.close_connection(connection_id).await;
 
     Ok(())
 }
@@ -132,6 +136,7 @@ pub async fn export_connections(
 pub(crate) async fn export_connections_inner(
     state: &AppState,
 ) -> Result<ConnectionExportDocument, AppError> {
+    let _transaction = state.redis.profile_transaction().await;
     let profiles = state.profiles.load()?;
     Ok(ConnectionExportDocument::from_profiles(&profiles))
 }
@@ -170,6 +175,8 @@ pub(crate) async fn import_connections_inner(
         }
 
         let profile = ConnectionProfile {
+            ssh: entry.ssh,
+            sentinel: entry.sentinel,
             id: uuid::Uuid::new_v4().to_string(),
             name: entry.name.clone(),
             host: entry.host,
@@ -198,9 +205,17 @@ pub(crate) async fn import_connections_inner(
     }
 
     if !imported.is_empty() {
-        let mut profiles = state.profiles.load()?;
+        let _transaction = state.redis.profile_transaction().await;
+        let old_profiles = state.profiles.load()?;
+        let mut profiles = old_profiles.clone();
         profiles.extend(imported.iter().cloned());
-        state.profiles.save(&profiles)?;
+        if state.profiles.save(&profiles).is_err() {
+            state
+                .profiles
+                .save(&old_profiles)
+                .map_err(|_| AppError::PersistenceFailed)?;
+            return Err(AppError::PersistenceFailed);
+        }
     }
 
     Ok(ImportConnectionsResult {
@@ -222,6 +237,28 @@ fn resolve_secrets(
     old_secret: Option<&ConnectionSecrets>,
 ) -> Result<Option<ConnectionSecrets>, AppError> {
     let mut secrets = old_secret.cloned().unwrap_or_default();
+
+    if let Some(sentinel) = profile.sentinel.as_mut() {
+        match input.sentinel_password.as_deref() {
+            Some(password) if !password.is_empty() => {
+                secrets.sentinel_password = Some(password.to_owned())
+            }
+            Some(_) => return Err(AppError::InvalidInput),
+            None if sentinel.has_password => {
+                if !old_profile
+                    .and_then(|old| old.sentinel.as_ref())
+                    .is_some_and(|old| old.has_password)
+                    || secrets.sentinel_password.is_none()
+                {
+                    return Err(AppError::InvalidConnection);
+                }
+            }
+            None => secrets.sentinel_password = None,
+        }
+        sentinel.has_password = secrets.sentinel_password.is_some();
+    } else {
+        secrets.sentinel_password = None;
+    }
 
     match input.password.as_deref() {
         Some(password) if !password.is_empty() => secrets.password = Some(password.to_owned()),
@@ -349,6 +386,7 @@ pub async fn test_connection(
     state: tauri::State<'_, AppState>,
     input: TestConnectionInput,
 ) -> Result<ConnectionInfo, AppError> {
+    let transaction = state.redis.profile_transaction().await;
     let old_profiles = state.profiles.load()?;
     let old_profile = old_profiles
         .iter()
@@ -361,6 +399,7 @@ pub async fn test_connection(
     let mut profile = input.profile.clone();
     let secrets = resolve_secrets(&mut profile, &input, old_profile, old_secret.as_ref())?
         .unwrap_or_default();
+    drop(transaction);
     state.redis.test_connection(&profile, &secrets).await
 }
 
@@ -377,7 +416,9 @@ pub async fn close_connection(
     state: tauri::State<'_, AppState>,
     connection_id: String,
 ) -> Result<(), AppError> {
-    state.redis.close_connection(&connection_id).await
+    state.redis.close_connection(&connection_id).await?;
+    state.cli.close_connection(&connection_id).await;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -546,6 +587,8 @@ mod tests {
 
     fn profile(id: &str, name: &str, has_password: bool) -> ConnectionProfile {
         ConnectionProfile {
+            ssh: None,
+            sentinel: None,
             id: id.into(),
             name: name.into(),
             host: "127.0.0.1".into(),
@@ -578,6 +621,7 @@ mod tests {
 
     fn save_input(profile: ConnectionProfile, password: Option<&str>) -> SaveConnectionInput {
         SaveConnectionInput {
+            sentinel_password: None,
             profile,
             password: password.map(str::to_owned),
             ca_certificate: None,
@@ -586,6 +630,146 @@ mod tests {
             clear_ca_certificate: false,
             clear_client_certificate: false,
         }
+    }
+
+    struct PausedFailingProfiles {
+        inner: RecordingProfileRepository,
+        gate: Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                std::sync::mpsc::Receiver<()>,
+            )>,
+        >,
+    }
+
+    impl ProfileRepository for PausedFailingProfiles {
+        fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
+            self.inner.load()
+        }
+
+        fn save(&self, profiles: &[ConnectionProfile]) -> Result<(), AppError> {
+            let gate = self.gate.lock().unwrap().take();
+            if let Some((entered, resume)) = gate {
+                self.inner.save(profiles)?;
+                entered.send(()).unwrap();
+                resume
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+                return Err(AppError::PersistenceFailed);
+            }
+            self.inner.save(profiles)
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn profile_transaction_rollback_cannot_overwrite_a_concurrent_save() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let profiles = Arc::new(PausedFailingProfiles {
+            inner: RecordingProfileRepository::new(vec![profile("local", "Original", true)]),
+            gate: Mutex::new(Some((entered_tx, resume_rx))),
+        });
+        let secrets = Arc::new(RecordingSecretStore::new(Some("original")));
+        let state = Arc::new(AppState::new(profiles.clone(), secrets.clone()));
+        let first_state = Arc::clone(&state);
+        let first = tokio::spawn(async move {
+            save_connection_inner(
+                &first_state,
+                save_input(profile("local", "Rejected", true), Some("rejected")),
+            )
+            .await
+        });
+        entered_rx.await.unwrap();
+        let second_state = Arc::clone(&state);
+        let mut second = tokio::spawn(async move {
+            save_connection_inner(
+                &second_state,
+                save_input(profile("local", "Winner", true), Some("winner")),
+            )
+            .await
+        });
+
+        // An unguarded save completes here; a transaction correctly waits for rollback.
+        let early_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut second).await;
+        resume_tx.send(()).unwrap();
+        assert_eq!(first.await.unwrap(), Err(AppError::PersistenceFailed));
+        match early_result {
+            Ok(result) => {
+                result.unwrap().unwrap();
+            }
+            Err(_) => {
+                second.await.unwrap().unwrap();
+            }
+        }
+
+        assert_eq!(
+            profiles.load().unwrap(),
+            vec![profile("local", "Winner", true)]
+        );
+        assert_eq!(secrets.current().as_deref(), Some("winner"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn profile_transaction_delete_rollback_preserves_a_concurrent_import() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let original = profile("local", "Original", false);
+        let profiles = Arc::new(PausedFailingProfiles {
+            inner: RecordingProfileRepository::new(vec![original.clone()]),
+            gate: Mutex::new(Some((entered_tx, resume_rx))),
+        });
+        let state = Arc::new(AppState::new(
+            profiles.clone(),
+            Arc::new(RecordingSecretStore::new(None)),
+        ));
+        let first_state = Arc::clone(&state);
+        let first =
+            tokio::spawn(async move { delete_connection_inner(&first_state, "local").await });
+        entered_rx.await.unwrap();
+        let second_state = Arc::clone(&state);
+        let mut second = tokio::spawn(async move {
+            import_connections_inner(&second_state, ImportConnectionsInput {
+                content: serde_json::json!({"connections":[{"name":"Imported","host":"127.0.0.1","port":6379}]}).to_string(),
+            }).await
+        });
+
+        let early_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut second).await;
+        resume_tx.send(()).unwrap();
+        assert_eq!(first.await.unwrap(), Err(AppError::PersistenceFailed));
+        let imported = match early_result {
+            Ok(result) => result.unwrap().unwrap().imported,
+            Err(_) => second.await.unwrap().unwrap().imported,
+        };
+        assert_eq!(
+            profiles.load().unwrap(),
+            vec![original, imported[0].clone()]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn profile_transaction_import_rolls_back_a_partial_save_failure() {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+        let original = profile("local", "Original", false);
+        let profiles = Arc::new(PausedFailingProfiles {
+            inner: RecordingProfileRepository::new(vec![original.clone()]),
+            gate: Mutex::new(Some((entered_tx, resume_rx))),
+        });
+        let state = AppState::new(profiles.clone(), Arc::new(RecordingSecretStore::new(None)));
+        let import = tokio::spawn(async move {
+            import_connections_inner(&state, ImportConnectionsInput {
+                content: serde_json::json!({"connections":[{"name":"Imported","host":"127.0.0.1","port":6379}]}).to_string(),
+            }).await
+        });
+        entered_rx.await.unwrap();
+        resume_tx.send(()).unwrap();
+        assert_eq!(
+            import.await.unwrap().unwrap_err(),
+            AppError::PersistenceFailed
+        );
+        assert_eq!(profiles.load().unwrap(), vec![original]);
     }
 
     #[tokio::test]
@@ -744,6 +928,47 @@ mod tests {
             .operations()
             .iter()
             .any(|operation| matches!(operation, SecretOperation::Delete)));
+    }
+
+    #[tokio::test]
+    async fn sentinel_secrets_remain_in_secret_store_and_can_be_cleared_without_touching_redis_password(
+    ) {
+        let (state, profiles, secrets) = state_with(Vec::new(), None);
+        let mut input = save_input(profile("sentinel", "Sentinel", false), Some("redis-only"));
+        input.profile.sentinel = Some(crate::domain::SentinelConfig {
+            master_name: "primary".into(),
+            nodes: vec![crate::domain::ConnectionEndpoint {
+                host: "127.0.0.1".into(),
+                port: 26379,
+            }],
+            username: Some("watcher".into()),
+            has_password: false,
+            tls: false,
+        });
+        input.sentinel_password = Some("sentinel-only".into());
+        let saved = save_connection_inner(&state, input).await.unwrap();
+        assert!(saved.sentinel.as_ref().unwrap().has_password);
+        let secret = secrets.read("sentinel").unwrap().unwrap();
+        assert_eq!(secret.password.as_deref(), Some("redis-only"));
+        assert_eq!(secret.sentinel_password.as_deref(), Some("sentinel-only"));
+        let exported =
+            serde_json::to_string(&export_connections_inner(&state).await.unwrap()).unwrap();
+        assert!(!exported.contains("password"));
+        assert!(!serde_json::to_string(&profiles.current())
+            .unwrap()
+            .contains("sentinel-only"));
+        let retained = save_connection_inner(&state, save_input(saved, None))
+            .await
+            .unwrap();
+        assert_eq!(secrets.read("sentinel").unwrap().unwrap(), secret);
+        let mut cleared = retained;
+        cleared.sentinel.as_mut().unwrap().has_password = false;
+        save_connection_inner(&state, save_input(cleared, None))
+            .await
+            .unwrap();
+        let secret = secrets.read("sentinel").unwrap().unwrap();
+        assert_eq!(secret.password.as_deref(), Some("redis-only"));
+        assert_eq!(secret.sentinel_password, None);
     }
 
     #[tokio::test]

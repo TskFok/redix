@@ -42,6 +42,8 @@ fn sensitive_commands_are_not_saved_to_history() {
 #[test]
 fn rejects_empty_host_zero_port_and_database_above_fifteen() {
     let profile = ConnectionProfile {
+        ssh: None,
+        sentinel: None,
         id: "local".into(),
         name: "Local".into(),
         host: "".into(),
@@ -811,6 +813,7 @@ fn search_query_input_enforces_query_offset_and_limit() {
         query: "*".into(),
         offset: 100_000,
         limit: 200,
+        include_content: false,
     };
 
     for invalid in [

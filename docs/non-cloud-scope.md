@@ -4,21 +4,22 @@
 
 ## 允许项
 
-- 本地 Redis Standalone TCP/TLS 连接和连接配置管理。
+- 自管理 Redis Standalone TCP/TLS、Sentinel 主节点发现/重连和受限 OpenSSH 隧道连接；SSH 仅支持 macOS/Linux 的 Standalone 非 TLS，严格 known_hosts，使用 ssh-agent/identity file，无交互密码；认证后的私有控制 socket 确认转发成功。
 - 连接配置导入导出；普通导出只包含可迁移 profile 元数据，不包含密码、CA PEM、客户端证书或私钥。
 - 使用系统钥匙串保存本地连接密码；前端 DTO 和连接列表不暴露密码。
 - Standalone TLS 的启用/关闭、服务端证书校验、自定义 CA 和 mTLS；TLS 材料继续保存在本机安全存储，不写普通 JSON 文档。
 - Browser 使用 `SCAN`、`MATCH`、`COUNT` 分页列出键，并读取键类型、TTL 和值。
 - Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新和校验后的本地 JSON 导入导出。
 - String、Hash、List、Set、Sorted Set、Stream 的基础读取、编辑、删除和 TTL 操作；Stream 单次读取最多 500 条记录。
-- Stream Consumer Group 支持创建/删除 Group、读取消费者与 Pending 列表、确认 Pending 条目和删除消费者；Pending 单次最多读取 500 条。
+- Stream Consumer Group 支持创建/删除 Group、读取消费者与 Pending 列表、确认 Pending 条目、删除消费者和显式 XCLAIM；Claim 单次最多 500 个具体 ID，指定消费者与最小空闲毫秒，不使用 FORCE。Pending 单次最多读取 500 条。
 - RedisJSON 根文档的读取和编辑，以及路径级 `JSON.GET`/`JSON.SET`/`JSON.DEL`/`JSON.ARRAPPEND`；未安装 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE` 错误。
 - Redis Array 第一批本地能力：连续/稀疏创建、`ARGETRANGE`/`ARSCAN` 读取、`ARSET` 编辑与追加、`ARDEL`/`ARDELRANGE` 删除、`ARGREP` 搜索和 `AROP` 聚合；数组索引保持十进制字符串，范围、批量和响应大小受固定上限约束。
 - Redis Vector Set 第一批本地能力：`VADD` 创建与批量添加、`VCARD`/`VINFO` 摘要、`VRANGE` 分页、`VEMB`/`VGETATTR` 读取、`VSETATTR` 属性编辑、`VREM` 删除、FP32 向量下载和 `VSIM` 相似度查询；维度、元素数、属性、top-k 和响应大小受固定上限约束。
 - 连接级 `MODULE LIST` 与命令集能力探测、session 级缓存；探测失败或未检测到 RedisJSON、Array 或 Vector Set 时，不阻断普通 Browser 流程，只让对应模块操作稳定降级为不可用提示。
-- RedisSearch / Query 第一批本地能力：在检测到 Search 2.0+ 时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引管理、受限的 `FT.SEARCH ... NOCONTENT LIMIT` 分页查询，以及 Browser Hash/JSON 键详情中的索引关联摘要；输入、索引数量、结果数量和响应大小均有固定上限，查询文本不持久化。模块缺失或版本不满足时仅 Search / Query 工作区局部降级。
+- RedisSearch / Query 第一批本地能力：在检测到 Search 2.0+ 时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引管理、受限的 `FT.SEARCH ... LIMIT` 分页查询（默认 NOCONTENT，可选择返回文档字段），以及 Browser Hash/JSON 键详情中的索引关联摘要；输入、索引数量、结果数量和响应大小均有固定上限，查询文本不持久化。模块缺失或版本不满足时仅 Search / Query 工作区局部降级。
 - Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
 - Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
+- 独立 CLI 使用专用持久 socket，保留 MULTI/EXEC、WATCH 和 SELECT 状态；与 Browser 隔离，离开页面、关闭主连接或切库时清理。每条命令 5 秒超时、无自动重试，最多 16 会话、16 KiB 命令、256 KiB 单次展示输出与 200 条/2 MiB 前端记录；不持久化命令或输出。
 - Database 工作区读取本地实例与数据库键空间概览，并支持安全的数据库切换；指标不可用时按字段降级，不暴露 Redis 原始错误。
 - Instance 详情按 INFO 分组展示客户端、内存、统计、持久化、复制指标及 commandstats；全部为当前连接的只读请求。
 - Database Analysis 仅支持当前本地 Standalone 数据库的显式触发扫描：使用 `SCAN` 与固定批次 pipeline 汇总键空间、内存和过期时间；默认上限为 100000 个键，只读且不落盘，不会因连接或进入页面自动开始。
@@ -29,15 +30,15 @@
 - Profiler 支持 Standalone 独立 `MONITOR` socket、启动/停止、实时命令事件和前端展示；每个连接最多一个会话，前端最多保留 10000 条事件，并在关闭/切库/卸载时清理任务；启动前显示性能风险提示。
 - React/Tauri 本地 UI、前端测试、Rust 单元测试和本地构建工具链。
 
-## 明确排除项
+## 排除项与尚未覆盖能力
 
 - Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry 及其他云托管 Redis 产品。
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
-- Cluster、Sentinel、拓扑发现或拓扑 fan-out、SSH、远程托管实例和云资源管理。
+- 尚未实现 Cluster、跨节点拓扑 fan-out、Sentinel 无缝故障转移、SSH 密码认证及 SSH+TLS/Sentinel 组合；云资源管理仍不属于产品入口。
 - 尚未实现的 Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档/路径第一批、RedisSearch / Query、Array、Vector Set 与 Stream 基础能力除外）。
-- Stream 实时消费、阻塞式 `XREADGROUP`、`XCLAIM`/`XAUTOCLAIM`、Claim 流程、Profiler 日志文件/历史持久化/拓扑 fan-out 和超过 500 条记录的分页编辑。
+- Stream 实时消费、阻塞式 `XREADGROUP`、`XAUTOCLAIM`、高级 Claim FORCE/IDLE/RETRYCOUNT 选项、Profiler 自动历史持久化/拓扑 fan-out 和超过 500 条记录的分页编辑。
 - Monaco、远程插件、远程插件运行时、云端命令目录和 SQL。
-- CLI 独立会话，以及其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
+- 其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
 
 ## 人工审查清单
 
@@ -61,6 +62,18 @@ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 git diff --check
 ```
 
+### 隔离本机服务测试
+
+下面的命令创建并清理临时服务，不使用现有 Redis 数据库；需要本机监听权限和相应可执行文件。普通测试默认跳过这些依赖外部服务的用例。
+
+```bash
+npm run test:redis:local
+cargo test --manifest-path src-tauri/Cargo.toml --test cli --test sentinel -- --ignored --nocapture --test-threads=1
+cargo test --manifest-path src-tauri/Cargo.toml --lib redis::ssh::tests -- --ignored --nocapture --test-threads=1
+```
+
+CLI/Sentinel 需要 `redis-server`；SSH 需要 `ssh`、`sshd`、`ssh-keygen`，可通过 `REDIX_TEST_SSHD_BIN` 指定测试用 sshd 路径。SSH 本机验证不代表已通过 Linux/Windows 原生端到端测试。
+
 ### Redis Stack 集成补充
 
 - RedisJSON 路径 ignored 集成测试使用可选环境变量 `REDIX_TEST_REDIS_STACK_URL`。
@@ -82,3 +95,11 @@ Array / Vector Set ignored 流程同样使用 `REDIX_TEST_REDIS_STACK_URL`，会
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration redis_stack_array_and_vector_set_flow_when_redis_stack_is_available -- --ignored --nocapture
 ```
+
+## 2026-08-31 增补
+
+- JSON 树与键前缀树只操作已有读取/扫描结果，保留路径白名单与节点上限。
+- Workbench 增加模块目录、当前行补全与注释、树/表结果以及历史删除；敏感命令过滤使用与执行一致的 tokenizer。
+- 观察面板支持用户显式导出 Profiler LOG、Pub/Sub JSON、Slow Log CSV/JSON；不自动落盘，导出前显示敏感参数风险提示，CSV 做公式转义。
+- 暂停显示不会停止后台订阅/MONITOR，缓存上限保持 5000/10000。
+- 本文历史“排除”中尚未实现的非 Cloud 能力，统一在 `docs/redisinsight-feature-matrix.md` 记录为待补差异，不能视作已完成。

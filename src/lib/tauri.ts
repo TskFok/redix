@@ -514,3 +514,17 @@ export function listCommandHistory(connectionId: string): Promise<CommandHistory
 export function saveCommandHistory(input: SaveCommandHistoryInput): Promise<void> {
   return call<void>("save_command_history", { input });
 }
+
+export function deleteCommandHistory(input: import("./types").DeleteCommandHistoryInput): Promise<void> {
+  return call<void>("delete_command_history", { input });
+}
+
+export function clearCommandHistory(input: import("./types").ClearCommandHistoryInput): Promise<void> {
+  return call<void>("clear_command_history", { input });
+}
+
+export function claimStreamPendingEntries(
+  input: import("./types").ClaimStreamPendingEntriesInput,
+): Promise<string[]> {
+  return call<string[]>("claim_stream_pending_entries", { input });
+}

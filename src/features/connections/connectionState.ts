@@ -13,6 +13,19 @@ export interface ConnectionPageState {
 }
 
 export interface ConnectionFormValues {
+  ssh_enabled: boolean;
+  ssh_host: string;
+  ssh_port: string;
+  ssh_username: string;
+  ssh_identity_file: string;
+  ssh_known_hosts_file: string;
+  topology: "standalone" | "sentinel";
+  sentinel_master_name: string;
+  sentinel_nodes: string;
+  sentinel_username: string;
+  sentinel_password: string;
+  sentinel_tls: boolean;
+  clear_sentinel_password: boolean;
   name: string;
   host: string;
   port: string;
@@ -50,6 +63,19 @@ export function formValuesFromProfile(
   profile?: ConnectionProfile,
 ): ConnectionFormValues {
   return {
+    ssh_enabled: Boolean(profile?.ssh),
+    ssh_host: profile?.ssh?.host ?? "",
+    ssh_port: String(profile?.ssh?.port ?? 22),
+    ssh_username: profile?.ssh?.username ?? "",
+    ssh_identity_file: profile?.ssh?.identity_file ?? "",
+    ssh_known_hosts_file: profile?.ssh?.known_hosts_file ?? "",
+    topology: profile?.sentinel ? "sentinel" : "standalone",
+    sentinel_master_name: profile?.sentinel?.master_name ?? "",
+    sentinel_nodes: profile?.sentinel?.nodes.map((node) => `${node.host.includes(":") ? `[${node.host}]` : node.host}:${node.port}`).join("\n") ?? "127.0.0.1:26379",
+    sentinel_username: profile?.sentinel?.username ?? "",
+    sentinel_password: "",
+    sentinel_tls: profile?.sentinel?.tls ?? false,
+    clear_sentinel_password: false,
     name: profile?.name ?? "",
     host: profile?.host ?? "127.0.0.1",
     port: profile ? String(profile.port) : "6379",
@@ -83,6 +109,7 @@ export function replaceProfile(
 const errorMessages: Record<string, string> = {
   INVALID_CONNECTION: "连接配置无效，请检查主机、端口和数据库。",
   CONNECTION_FAILED: "无法连接到 Redis 服务器，请检查网络和凭据。",
+  SSH_TUNNEL_FAILED: "SSH 隧道建立失败，请检查 ssh-agent、私钥和 known_hosts；应用不会自动信任未知主机。",
   AUTHENTICATION_FAILED: "Redis 身份验证失败，请检查用户名和密码。",
   PERSISTENCE_FAILED: "本地连接保存失败，请稍后重试。",
   UNSUPPORTED_DATA_TYPE: "当前 Redis 数据类型暂不支持。",

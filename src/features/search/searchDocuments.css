@@ -1,0 +1,8 @@
+.search-content-toggle { display: flex; align-items: center; gap: 8px; margin-block: 12px; color: var(--color-text); font-size: 13px; }
+.search-content-toggle input { accent-color: var(--color-primary); }
+.search-document-table-wrap { overflow: auto; max-width: 100%; }
+.search-document-table-wrap th, .search-document-table-wrap td { min-width: 100px; max-width: 400px; vertical-align: top; }
+.search-document-value pre { min-width: 100px; max-width: 380px; max-height: 240px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font: 12px/1.5 "JetBrains Mono", monospace; color: var(--color-text-code); }
+.search-document-table-wrap details { min-width: 200px; }
+.search-document-table-wrap summary { cursor: pointer; color: var(--color-primary); }
+.search-document-table-wrap dd { margin: 6px 0 14px; }

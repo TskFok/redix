@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ModuleCapabilities } from "../../lib/types";
@@ -56,7 +56,7 @@ const indexInfo = {
 };
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   getModuleCapabilitiesMock.mockResolvedValue(readyCapabilities);
   listSearchIndexesMock.mockResolvedValue({ indexes: [{ name: "idx:users" }] });
   getSearchIndexMock.mockResolvedValue(indexInfo);
@@ -74,9 +74,142 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
 });
 
 describe("RedisSearch / Query 页面", () => {
+  it("文档模式显示异构字段、JSON 与空值，并按服务端游标分页", async () => {
+    searchKeysMock.mockResolvedValueOnce({
+      total: 20, offset: 0, next_offset: 2, max_results: 100,
+      keys: [
+        { key: "doc:1", key_type: "hash", fields: [{ name: "name", value: "Alice" }, { name: "optional", value: null }] },
+        { key: "doc:2", key_type: "json", fields: [{ name: "$", value: '{"enabled":true}' }] },
+      ],
+    }).mockResolvedValueOnce({ total: 20, offset: 2, next_offset: null, max_results: 100, keys: [{ key: "doc:3", key_type: "none", fields: null }] });
+    render(<SearchPage connectionId="local" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "返回文档内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    expect(await screen.findByText("Alice")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "name" })).toBeInTheDocument();
+    expect(screen.getByText("null")).toBeInTheDocument();
+    expect(screen.getByText('{"enabled":true}')).toBeInTheDocument();
+    expect(searchKeysMock).toHaveBeenLastCalledWith({ connection_id: "local", index: "idx:users", query: "*", offset: 0, limit: 100, include_content: true });
+    fireEvent.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByText("doc:3")).toBeInTheDocument();
+    expect(screen.getByText("文档已过期或内容不可用")).toBeInTheDocument();
+    expect(searchKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ offset: 2, include_content: true }));
+    expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+  });
+
+  it("切换内容模式取消旧查询，旧响应不能污染新模式结果", async () => {
+    let resolve!: (value: unknown) => void;
+    searchKeysMock.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    render(<SearchPage connectionId="local" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "返回文档内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    fireEvent.click(screen.getByRole("checkbox", { name: "返回文档内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    expect(await screen.findByText("user:1")).toBeInTheDocument();
+    await act(async () => resolve({ total: 1, offset: 0, next_offset: null, max_results: null, keys: [{ key: "stale:doc", key_type: "hash", fields: [{ name: "secret", value: "stale" }] }] }));
+    expect(screen.queryByText("stale:doc")).not.toBeInTheDocument();
+    expect(screen.getByText("user:1")).toBeInTheDocument();
+    expect(searchKeysMock).toHaveBeenLastCalledWith({ connection_id: "local", index: "idx:users", query: "*", offset: 0, limit: 100 });
+  });
+
+  it("更改查询清除旧分页结果", async () => {
+    render(<SearchPage connectionId="local" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await screen.findByText("user:1");
+    fireEvent.change(screen.getByRole("textbox", { name: "查询语句" }), { target: { value: "@name:Bob" } });
+    expect(screen.queryByText("user:1")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "下一页" })).not.toBeInTheDocument();
+  });
+
+  it("切换连接清除内容模式和旧请求结果", async () => {
+    let resolve!: (value: unknown) => void;
+    searchKeysMock.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const { rerender } = render(<SearchPage connectionId="old" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "返回文档内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    rerender(<SearchPage connectionId="new" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    expect(screen.getByRole("checkbox", { name: "返回文档内容" })).not.toBeChecked();
+    await act(async () => resolve({ total: 1, offset: 0, next_offset: null, max_results: null, keys: [{ key: "old:doc", key_type: "hash", fields: [] }] }));
+    expect(screen.queryByText("old:doc")).not.toBeInTheDocument();
+  });
+
+  it("切换索引后旧内容响应不可覆盖新查询", async () => {
+    listSearchIndexesMock.mockResolvedValue({ indexes: [{ name: "idx:users" }, { name: "idx:orders" }] });
+    let reject!: (reason: unknown) => void;
+    searchKeysMock.mockImplementationOnce(() => new Promise((_done, fail) => { reject = fail; }));
+    render(<SearchPage connectionId="local" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "返回文档内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "当前索引" }), { target: { value: "idx:orders" } });
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    await screen.findByText("user:1");
+    await act(async () => reject({ code: "COMMAND_FAILED" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(searchKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ index: "idx:orders", offset: 0 }));
+  });
+
+  it("刷新索引列表自动切换索引时丢弃旧内容响应", async () => {
+    listSearchIndexesMock.mockResolvedValueOnce({ indexes: [{ name: "idx:users" }] }).mockResolvedValueOnce({ indexes: [{ name: "idx:orders" }] });
+    let resolve!: (value: unknown) => void;
+    searchKeysMock.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    render(<SearchPage connectionId="local" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "返回文档内容" }));
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新索引" }));
+    await screen.findByRole("option", { name: "idx:orders" });
+    await act(async () => resolve({ total: 1, offset: 0, next_offset: null, max_results: null, keys: [{ key: "stale:users", key_type: "hash", fields: [] }] }));
+    expect(screen.queryByText("stale:users")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "查询" })).toBeEnabled();
+  });
+
+  it("删除索引期间阻止切换索引、内容模式和再次查询或删除", async () => {
+    listSearchIndexesMock.mockResolvedValue({ indexes: [{ name: "idx:users" }, { name: "idx:orders" }] });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    let resolve!: () => void;
+    deleteSearchIndexMock.mockImplementationOnce(() => new Promise<void>((done) => { resolve = done; }));
+    render(<SearchPage connectionId="local" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    fireEvent.click(screen.getByRole("button", { name: "删除当前索引" }));
+    expect(screen.getByRole("combobox", { name: "当前索引" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "返回文档内容" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "查询中…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "删除当前索引" })).toBeDisabled();
+    await act(async () => resolve());
+  });
+
+  it.each(["成功", "失败"])("创建后忽略较早索引列表请求的%s响应", async (outcome) => {
+    let resolve!: (value: unknown) => void;
+    let reject!: (reason: unknown) => void;
+    listSearchIndexesMock.mockImplementationOnce(() => new Promise((done, fail) => {
+      resolve = done;
+      reject = fail;
+    })).mockResolvedValueOnce({ indexes: [{ name: "idx:orders" }] });
+    render(<SearchPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "新建索引" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "索引名称" }), { target: { value: "idx:orders" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "字段 1" }), { target: { value: "customer" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建索引" }));
+    await screen.findByRole("option", { name: "idx:orders" });
+    await act(async () => {
+      if (outcome === "成功") resolve({ indexes: [{ name: "idx:users" }] });
+      else reject({ code: "COMMAND_FAILED" });
+    });
+    expect(screen.getByRole("option", { name: "idx:orders" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "idx:users" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("加载索引、查询结果并显示索引详情", async () => {
     render(<SearchPage connectionId="local" />);
 
@@ -116,6 +249,7 @@ describe("RedisSearch / Query 页面", () => {
       expect(screen.getByRole("status")).toHaveTextContent("当前连接不支持 RedisSearch。");
     });
     expect(listSearchIndexesMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("checkbox", { name: "返回文档内容" })).not.toBeInTheDocument();
   });
 
   it("通过表单创建索引并刷新列表", async () => {

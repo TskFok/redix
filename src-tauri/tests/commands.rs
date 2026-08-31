@@ -82,6 +82,7 @@ fn exposes_all_tauri_command_adapters() {
     let _ = browser::get_stream_consumers;
     let _ = browser::get_stream_pending_entries;
     let _ = browser::acknowledge_stream_pending_entries;
+    let _ = browser::claim_stream_pending_entries;
     let _ = browser::delete_stream_consumer;
     let _ = browser::export_keys;
     let _ = browser::import_keys;
@@ -128,6 +129,8 @@ fn exposes_all_tauri_command_adapters() {
     let _ = workbench::get_command_catalog;
     let _ = workbench::list_command_history;
     let _ = workbench::save_command_history;
+    let _ = workbench::delete_command_history;
+    let _ = workbench::clear_command_history;
 }
 
 #[test]

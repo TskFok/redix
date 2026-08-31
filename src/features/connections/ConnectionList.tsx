@@ -52,9 +52,10 @@ export function ConnectionList({
                 <h2>{profile.name}</h2>
                 <p className="connection-address">
                   <code>
-                    {profile.host}:{profile.port}
+                    {profile.sentinel ? `Sentinel · ${profile.sentinel.master_name}` : `${profile.host}:${profile.port}`}
                   </code>
                 </p>
+                {profile.ssh && <p className="connection-address">SSH · {profile.ssh.host}:{profile.ssh.port}</p>}
               </div>
               <span className={`connection-status${isActive ? " status-active" : ""}`}>
                 <span className="status-dot" aria-hidden="true" />

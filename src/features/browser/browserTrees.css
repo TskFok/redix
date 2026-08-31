@@ -1,0 +1,47 @@
+.key-view-switch {
+  display: flex;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.key-view-switch button[aria-pressed="true"] {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  background: var(--color-surface-selected);
+}
+
+.key-tree-panel { min-height: 0; overflow: auto; }
+.key-tree { display: block; margin-top: 8px; }
+.key-tree li { margin-block: 4px; }
+.key-tree-children { list-style: none; padding-inline-start: 14px; border-inline-start: 1px solid var(--color-border); }
+.key-tree-folder {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface-interactive);
+  text-align: left;
+  cursor: pointer;
+}
+.key-tree-folder code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.key-tree-count { margin-inline-start: auto; color: var(--color-muted); font-size: 11px; }
+.key-tree-folder:hover { background: var(--color-surface-selected); }
+.json-tree-panel { min-width: 0; margin-block: 12px; }
+.json-node-tree { list-style: none; margin: 8px 0; padding: 8px; max-height: 360px; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface-interactive); }
+.json-tree-row { display: flex; align-items: center; min-height: 30px; width: max-content; min-width: 100%; }
+.tree-disclosure, .tree-disclosure-spacer { flex: 0 0 28px; width: 28px; }
+.tree-disclosure, .json-tree-select, .tree-more { color: var(--color-text); border: 0; background: transparent; cursor: pointer; min-height: 28px; }
+.json-tree-select { display: flex; align-items: center; gap: 10px; padding: 4px 8px; text-align: left; }
+.json-tree-select[aria-pressed="true"] { background: var(--color-surface-selected); color: var(--color-primary); }
+.json-tree-label { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.json-tree-preview, .tree-readonly { color: var(--color-muted); font-size: 12px; }
+.json-tree-preview { white-space: pre; }
+.tree-readonly { padding-inline: 6px; }
+.tree-more { color: var(--color-primary); }
+.key-tree-folder:focus-visible, .tree-disclosure:focus-visible, .json-tree-select:focus-visible, .tree-more:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.json-tree-panel button:disabled { cursor: default; opacity: 0.55; }

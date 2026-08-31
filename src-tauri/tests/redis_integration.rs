@@ -301,6 +301,7 @@ async fn redis_stack_search_flow_when_redis_stack_is_available() {
                 query: "hello".into(),
                 offset: 0,
                 limit: 20,
+                include_content: false,
             })
             .await
             .map_err(|error| error.code().to_owned())?;
@@ -768,6 +769,8 @@ fn integration_profile(url: &str) -> (ConnectionProfile, Option<String>) {
     };
     let password = info.redis_settings().password().map(str::to_owned);
     let profile = ConnectionProfile {
+        ssh: None,
+        sentinel: None,
         id: "integration".into(),
         name: "Integration".into(),
         host,
@@ -1286,8 +1289,10 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         return Err("batch delete did not report two deleted keys".into());
     }
     for key in [&keys.batch_a, &keys.batch_b] {
-        if !matches!(service.get_key("integration", key).await, Err(error) if error.code() == "COMMAND_FAILED")
-        {
+        if !matches!(
+            service.get_key("integration", key).await,
+            Err(AppError::KeyNotFound)
+        ) {
             return Err("batch-deleted key is still readable".into());
         }
     }
@@ -1343,10 +1348,10 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
             .await
             .map_err(|error| error.code().to_owned())?;
         match service.get_key("integration", key).await {
-            Err(error) if error.code() == "COMMAND_FAILED" => {}
+            Err(error) if error.code() == "KEY_NOT_FOUND" => {}
             Err(error) => {
                 return Err(format!(
-                    "deleted key returned {} instead of COMMAND_FAILED",
+                    "deleted key returned {} instead of KEY_NOT_FOUND",
                     error.code()
                 ))
             }
@@ -1862,6 +1867,46 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].consumer, "consumer-1");
         assert_eq!(pending[0].deliveries, 1);
+
+        let claim_input = redix_lib::domain::ClaimStreamPendingEntriesInput {
+            connection_id: "integration".into(),
+            key: keys.stream.clone(),
+            group: "workers".into(),
+            consumer: "replacement".into(),
+            min_idle_ms: 0,
+            entries: pending.iter().map(|entry| entry.id.clone()).collect(),
+        };
+        let claimed = service
+            .claim_stream_pending_entries(claim_input.clone())
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if claimed.len() != pending.len() {
+            return Err("XCLAIM did not return selected IDs".into());
+        }
+        let owned = service
+            .get_stream_pending_entries(GetStreamPendingEntriesInput {
+                connection_id: "integration".into(),
+                key: keys.stream.clone(),
+                group: "workers".into(),
+                count: 100,
+                consumer: Some("replacement".into()),
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if owned.len() != pending.len() || owned.iter().any(|entry| entry.consumer != "replacement")
+        {
+            return Err("XCLAIM did not transfer pending ownership".into());
+        }
+        let skipped = service
+            .claim_stream_pending_entries(redix_lib::domain::ClaimStreamPendingEntriesInput {
+                min_idle_ms: 9_007_199_254_740_991,
+                ..claim_input
+            })
+            .await
+            .map_err(|error| error.code().to_owned())?;
+        if !skipped.is_empty() {
+            return Err("XCLAIM ignored min-idle-time".into());
+        }
 
         let acknowledged = service
             .acknowledge_stream_pending_entries(AcknowledgeStreamPendingEntriesInput {

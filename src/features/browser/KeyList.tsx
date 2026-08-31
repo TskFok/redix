@@ -1,5 +1,6 @@
+import { useState } from "react";
 import type { KeySummary } from "../../lib/types";
-import { formatSize, formatTtl, keyTypeLabel } from "./browserState";
+import { KeyRow, KeyTree } from "./KeyTree";
 
 interface KeyListProps {
   pattern: string;
@@ -36,6 +37,7 @@ export function KeyList({
   onToggleSelect,
   onLoadMore,
 }: KeyListProps) {
+  const [view, setView] = useState<"flat" | "tree">("flat");
   return (
     <section className="browser-list-panel" aria-labelledby="key-list-title">
       <div className="browser-panel-heading">
@@ -84,6 +86,11 @@ export function KeyList({
         </select>
       </label>
 
+      <div className="key-view-switch" role="group" aria-label="键显示方式">
+        <button type="button" className="button button-secondary" aria-pressed={view === "flat"} onClick={() => setView("flat")}>平铺</button>
+        <button type="button" className="button button-secondary" aria-pressed={view === "tree"} onClick={() => setView("tree")}>树形</button>
+      </div>
+
       {loading ? (
         <p className="loading-state browser-loading" role="status" aria-live="polite">
           正在扫描键…
@@ -92,6 +99,9 @@ export function KeyList({
 
       {keys.length === 0 && !loading ? (
         <p className="browser-empty-list">没有匹配的键。</p>
+      ) : view === "tree" ? (
+        <KeyTree key={JSON.stringify([pattern, keyType])} keys={keys} selectedKey={selectedKey}
+          selectedKeys={selectedKeys} loading={loading} onSelect={onSelect} onToggleSelect={onToggleSelect} />
       ) : (
         <ul className="key-list" aria-label="Redis 键列表">
           {keys.map((summary) => {
@@ -99,39 +109,8 @@ export function KeyList({
             const checked = selectedKeys.includes(summary.key);
             return (
               <li key={summary.key}>
-                <div className={`key-row${selected ? " key-row-selected" : ""}`}>
-                  <input
-                    className="key-row-checkbox"
-                    type="checkbox"
-                    aria-label={`选择键 ${summary.key}`}
-                    checked={checked}
-                    onChange={() => onToggleSelect(summary.key)}
-                    disabled={loading}
-                  />
-                  <button
-                    type="button"
-                    className="key-row-open"
-                    aria-label={summary.key}
-                    aria-pressed={selected}
-                    onClick={() => onSelect(summary.key)}
-                    disabled={loading}
-                  >
-                    <span className="key-row-main">
-                      <code title={summary.key}>{summary.key}</code>
-                      <span className="key-row-type">{keyTypeLabel(summary.key_type)}</span>
-                    </span>
-                    <span className="key-row-meta">
-                      <span>
-                        <span className="sr-only">TTL </span>
-                        {formatTtl(summary.ttl_ms)}
-                      </span>
-                      <span>
-                        <span className="sr-only">大小 </span>
-                        {formatSize(summary.size)}
-                      </span>
-                    </span>
-                  </button>
-                </div>
+                <KeyRow summary={summary} selected={selected} checked={checked} loading={loading}
+                  onSelect={onSelect} onToggleSelect={onToggleSelect} />
               </li>
             );
           })}

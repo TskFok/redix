@@ -2,6 +2,7 @@ export type Workspace =
   | "browser"
   | "search-query"
   | "workbench"
+  | "cli"
   | "database"
   | "database-analysis"
   | "observability"
@@ -9,6 +10,8 @@ export type Workspace =
   | "settings";
 
 export interface ConnectionProfile {
+  ssh?: SshConfig | null;
+  sentinel?: SentinelConfig | null;
   id: string;
   name: string;
   host: string;
@@ -25,6 +28,7 @@ export interface ConnectionProfile {
 }
 
 export interface SaveConnectionInput {
+  sentinel_password?: string | null;
   profile: ConnectionProfile;
   password: string | null;
   ca_certificate: string | null;
@@ -35,6 +39,8 @@ export interface SaveConnectionInput {
 }
 
 export interface ConnectionExportProfile {
+  ssh?: SshConfig | null;
+  sentinel?: Omit<SentinelConfig, "has_password"> | null;
   name: string;
   host: string;
   port: number;
@@ -70,6 +76,28 @@ export interface ImportConnectionsResult {
 
 export interface ConnectionInfo {
   server_version: string;
+  resolved_endpoint?: ConnectionEndpoint | null;
+}
+
+export interface ConnectionEndpoint {
+  host: string;
+  port: number;
+}
+
+export interface SentinelConfig {
+  master_name: string;
+  nodes: ConnectionEndpoint[];
+  username: string | null;
+  has_password: boolean;
+  tls: boolean;
+}
+
+export interface SshConfig {
+  host: string;
+  port: number;
+  username: string;
+  identity_file: string | null;
+  known_hosts_file: string | null;
 }
 
 export interface ModuleSummary {
@@ -157,11 +185,18 @@ export interface SearchQueryInput {
   query: string;
   offset: number;
   limit: number;
+  include_content?: boolean;
 }
 
 export interface SearchKeyResult {
   key: string;
   key_type: string;
+  fields?: SearchDocumentField[] | null;
+}
+
+export interface SearchDocumentField {
+  name: string;
+  value: JsonValue;
 }
 
 export interface SearchQueryResult {
@@ -912,6 +947,18 @@ export interface CommandResult {
   value: unknown;
 }
 
+export type WorkbenchResultFormat = CommandDisplayFormat | "tree" | "table";
+
+export interface DeleteCommandHistoryInput {
+  connection_id: string;
+  command: string;
+  created_at: string;
+}
+
+export interface ClearCommandHistoryInput {
+  connection_id: string;
+}
+
 export interface CommandExecutionItem {
   command: string;
   result: CommandResult | null;
@@ -934,4 +981,13 @@ export interface SaveCommandHistoryInput {
 export interface IpcError {
   code: string;
   message: string;
+}
+
+export interface ClaimStreamPendingEntriesInput {
+  connection_id: string;
+  key: string;
+  group: string;
+  consumer: string;
+  min_idle_ms: number;
+  entries: string[];
 }

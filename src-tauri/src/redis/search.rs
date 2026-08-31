@@ -1,10 +1,12 @@
 use ::redis::{Cmd, Value};
+use std::collections::HashSet;
 
 use crate::{
     domain::{
-        CreateSearchIndexInput, SearchFieldType, SearchIndexAttribute, SearchIndexInfo,
-        SearchIndexSummary, SearchKeyResult, SearchKeyType, SearchQueryResult,
-        MAX_SEARCH_ATTRIBUTES, MAX_SEARCH_INDEXES, MAX_SEARCH_NAME_BYTES, MAX_SEARCH_PAGE,
+        CreateSearchIndexInput, SearchDocumentField, SearchFieldType, SearchIndexAttribute,
+        SearchIndexInfo, SearchIndexSummary, SearchKeyResult, SearchKeyType, SearchQueryResult,
+        MAX_SEARCH_ATTRIBUTES, MAX_SEARCH_FIELDS, MAX_SEARCH_FIELD_BYTES, MAX_SEARCH_INDEXES,
+        MAX_SEARCH_KEY_BYTES, MAX_SEARCH_NAME_BYTES, MAX_SEARCH_OFFSET, MAX_SEARCH_PAGE,
         MAX_SEARCH_PREFIXES, MAX_SEARCH_RESPONSE_BYTES,
     },
     error::AppError,
@@ -95,47 +97,202 @@ pub(crate) fn parse_search_query(
     value: Value,
     offset: u64,
     limit: u32,
+    include_content: bool,
 ) -> Result<SearchQueryResult, AppError> {
     ensure_response_size(&value)?;
-    let values = match unwrap_attribute(value) {
-        Value::Array(values) | Value::Set(values) => values,
+    if offset > MAX_SEARCH_OFFSET || !(1..=MAX_SEARCH_PAGE).contains(&limit) {
+        return Err(AppError::CommandFailed);
+    }
+    let (total, keys) = match unwrap_attribute(value) {
+        Value::Array(values) => parse_search_resp2(values, limit as usize, include_content)?,
+        Value::Map(pairs) => parse_search_resp3(pairs, limit as usize, include_content)?,
         _ => return Err(AppError::CommandFailed),
     };
-    let Some(total) = values.first().and_then(parse_optional_u64) else {
-        return Err(AppError::CommandFailed);
-    };
-    let safe_limit = usize::try_from(limit)
-        .unwrap_or(MAX_SEARCH_PAGE as usize)
-        .min(MAX_SEARCH_PAGE as usize);
-    if values.len().saturating_sub(1) > safe_limit {
+    let next = offset.saturating_add(keys.len() as u64);
+    if total > 9_007_199_254_740_991 || (!keys.is_empty() && next > total) {
         return Err(AppError::CommandFailed);
     }
-
-    let mut keys = Vec::with_capacity(values.len().saturating_sub(1));
-    for value in values.into_iter().skip(1) {
-        let Some(key) = value_to_string(&value, MAX_SEARCH_NAME_BYTES.max(512)) else {
-            return Err(AppError::CommandFailed);
-        };
-        keys.push(SearchKeyResult {
-            key,
-            key_type: String::new(),
-        });
-    }
-    if keys.len() > 200 {
+    let mut seen = HashSet::new();
+    if keys.iter().any(|key| !seen.insert(key.key.as_str())) {
         return Err(AppError::CommandFailed);
     }
-
-    let next_offset = if offset.saturating_add(keys.len() as u64) < total {
-        Some(offset.saturating_add(keys.len() as u64))
-    } else {
-        None
-    };
+    let next_offset =
+        (!keys.is_empty() && next < total && next <= MAX_SEARCH_OFFSET).then_some(next);
     Ok(SearchQueryResult {
         total,
         offset,
         next_offset,
         max_results: None,
         keys,
+    })
+}
+
+fn parse_search_resp2(
+    values: Vec<Value>,
+    limit: usize,
+    content: bool,
+) -> Result<(u64, Vec<SearchKeyResult>), AppError> {
+    let mut values = values.into_iter();
+    let total = search_total(values.next().ok_or(AppError::CommandFailed)?)?;
+    let width = if content { 2 } else { 1 };
+    if values.len() % width != 0 || values.len() / width > limit {
+        return Err(AppError::CommandFailed);
+    }
+    let mut keys = Vec::with_capacity(values.len() / width);
+    while let Some(value) = values.next() {
+        let key = strict_string(value, MAX_SEARCH_KEY_BYTES)?;
+        let fields = if content {
+            parse_document_fields(values.next().ok_or(AppError::CommandFailed)?)?
+        } else {
+            None
+        };
+        keys.push(SearchKeyResult {
+            key,
+            key_type: String::new(),
+            fields,
+        });
+    }
+    Ok((total, keys))
+}
+
+fn parse_search_resp3(
+    pairs: Vec<(Value, Value)>,
+    limit: usize,
+    content: bool,
+) -> Result<(u64, Vec<SearchKeyResult>), AppError> {
+    let mut total = None;
+    let mut results = None;
+    for (key, value) in pairs {
+        match strict_string(key, MAX_SEARCH_NAME_BYTES)?.as_str() {
+            "total_results" if total.is_none() => total = Some(search_total(value)?),
+            "results" if results.is_none() => results = Some(value),
+            "total_results" | "results" => return Err(AppError::CommandFailed),
+            _ => {}
+        }
+    }
+    let total = total.ok_or(AppError::CommandFailed)?;
+    let Value::Array(documents) = unwrap_attribute(results.ok_or(AppError::CommandFailed)?) else {
+        return Err(AppError::CommandFailed);
+    };
+    if documents.len() > limit {
+        return Err(AppError::CommandFailed);
+    }
+    let mut keys = Vec::with_capacity(documents.len());
+    for document in documents {
+        let Value::Map(pairs) = unwrap_attribute(document) else {
+            return Err(AppError::CommandFailed);
+        };
+        let mut key = None;
+        let mut attributes = None;
+        for (name, value) in pairs {
+            match strict_string(name, MAX_SEARCH_NAME_BYTES)?.as_str() {
+                "id" if key.is_none() => key = Some(strict_string(value, MAX_SEARCH_KEY_BYTES)?),
+                "extra_attributes" if attributes.is_none() => attributes = Some(value),
+                "id" | "extra_attributes" => return Err(AppError::CommandFailed),
+                _ => {}
+            }
+        }
+        let fields = if content {
+            parse_document_fields(attributes.unwrap_or(Value::Nil))?
+        } else {
+            None
+        };
+        keys.push(SearchKeyResult {
+            key: key.ok_or(AppError::CommandFailed)?,
+            key_type: String::new(),
+            fields,
+        });
+    }
+    Ok((total, keys))
+}
+
+fn search_total(value: Value) -> Result<u64, AppError> {
+    match unwrap_attribute(value) {
+        Value::Int(total) => u64::try_from(total).map_err(|_| AppError::CommandFailed),
+        _ => Err(AppError::CommandFailed),
+    }
+}
+
+fn strict_string(value: Value, max_bytes: usize) -> Result<String, AppError> {
+    match unwrap_attribute(value) {
+        Value::BulkString(bytes) if bytes.len() <= max_bytes => {
+            String::from_utf8(bytes).map_err(|_| AppError::CommandFailed)
+        }
+        Value::SimpleString(text) | Value::VerbatimString { text, .. }
+            if text.len() <= max_bytes =>
+        {
+            Ok(text)
+        }
+        _ => Err(AppError::CommandFailed),
+    }
+}
+
+fn parse_document_fields(value: Value) -> Result<Option<Vec<SearchDocumentField>>, AppError> {
+    let value = unwrap_attribute(value);
+    if matches!(value, Value::Nil) {
+        return Ok(None);
+    }
+    let pairs = object_pairs(value)?;
+    if pairs.len() > MAX_SEARCH_FIELDS {
+        return Err(AppError::CommandFailed);
+    }
+    let mut seen = HashSet::new();
+    let mut fields = Vec::with_capacity(pairs.len());
+    for (name, value) in pairs {
+        let name = strict_string(name, MAX_SEARCH_NAME_BYTES)?;
+        if !seen.insert(name.clone()) || redis_value_size(&value) > MAX_SEARCH_FIELD_BYTES {
+            return Err(AppError::CommandFailed);
+        }
+        fields.push(SearchDocumentField {
+            name,
+            value: document_json_value(value, 0)?,
+        });
+    }
+    Ok(Some(fields))
+}
+
+fn document_json_value(value: Value, depth: usize) -> Result<serde_json::Value, AppError> {
+    use serde_json::Value as Json;
+    if depth > 16 {
+        return Err(AppError::CommandFailed);
+    }
+    Ok(match unwrap_attribute(value) {
+        Value::Nil => Json::Null,
+        Value::Boolean(value) => Json::Bool(value),
+        Value::Int(value) if value.unsigned_abs() <= 9_007_199_254_740_991 => value.into(),
+        Value::Int(value) => Json::String(value.to_string()),
+        Value::Double(value) => serde_json::Number::from_f64(value)
+            .map(Json::Number)
+            .ok_or(AppError::CommandFailed)?,
+        value @ (Value::BulkString(_) | Value::SimpleString(_) | Value::VerbatimString { .. }) => {
+            Json::String(strict_string(value, MAX_SEARCH_FIELD_BYTES)?)
+        }
+        Value::Array(values) => {
+            if values.len() > 1024 {
+                return Err(AppError::CommandFailed);
+            }
+            Json::Array(
+                values
+                    .into_iter()
+                    .map(|value| document_json_value(value, depth + 1))
+                    .collect::<Result<_, _>>()?,
+            )
+        }
+        Value::Map(pairs) => {
+            if pairs.len() > MAX_SEARCH_FIELDS {
+                return Err(AppError::CommandFailed);
+            }
+            let mut object = serde_json::Map::new();
+            for (name, value) in pairs {
+                let name = strict_string(name, MAX_SEARCH_NAME_BYTES)?;
+                if object.contains_key(&name) {
+                    return Err(AppError::CommandFailed);
+                }
+                object.insert(name, document_json_value(value, depth + 1)?);
+            }
+            Json::Object(object)
+        }
+        _ => return Err(AppError::CommandFailed),
     })
 }
 
@@ -187,33 +344,54 @@ pub(crate) fn build_create_search_index_command(
 }
 
 pub(crate) fn redis_value_size(value: &Value) -> usize {
-    match value {
-        Value::Nil | Value::Okay => 0,
-        Value::Int(_) | Value::Double(_) | Value::Boolean(_) => 8,
-        Value::BulkString(bytes) => bytes.len(),
-        Value::SimpleString(text) => text.len(),
-        Value::Array(values) | Value::Set(values) => values
-            .iter()
-            .map(redis_value_size)
-            .sum::<usize>()
-            .saturating_add(values.len() * 8),
-        Value::Map(entries) => entries
-            .iter()
-            .map(|(key, value)| redis_value_size(key).saturating_add(redis_value_size(value)))
-            .sum::<usize>()
-            .saturating_add(entries.len() * 16),
-        Value::Attribute { data, attributes } => redis_value_size(data).saturating_add(
-            attributes
-                .iter()
-                .map(|(key, value)| redis_value_size(key).saturating_add(redis_value_size(value)))
-                .sum::<usize>(),
-        ),
-        Value::VerbatimString { text, .. } => text.len(),
-        Value::BigNumber(number) => number.to_string().len(),
-        Value::Push { data, .. } => data.iter().map(redis_value_size).sum(),
-        Value::ServerError(_) => 0,
-        _ => 0,
+    let mut pending = vec![(value, 0_usize)];
+    let mut size = 0_usize;
+    let mut visited = 0_usize;
+    while let Some((value, depth)) = pending.pop() {
+        visited += 1;
+        if depth > 32 || visited > 100_000 {
+            return MAX_SEARCH_RESPONSE_BYTES + 1;
+        }
+        let bytes = match value {
+            Value::BulkString(bytes) => bytes.len(),
+            Value::SimpleString(text) | Value::VerbatimString { text, .. } => text.len(),
+            Value::BigNumber(number) => number.to_string().len(),
+            Value::Array(values) | Value::Set(values) | Value::Push { data: values, .. } => {
+                if values.len() + pending.len() > 100_000 {
+                    return MAX_SEARCH_RESPONSE_BYTES + 1;
+                }
+                pending.extend(values.iter().map(|value| (value, depth + 1)));
+                values.len().saturating_mul(8)
+            }
+            Value::Map(pairs) => {
+                if pairs.len().saturating_mul(2) + pending.len() > 100_000 {
+                    return MAX_SEARCH_RESPONSE_BYTES + 1;
+                }
+                for (key, value) in pairs {
+                    pending.push((key, depth + 1));
+                    pending.push((value, depth + 1));
+                }
+                pairs.len().saturating_mul(16)
+            }
+            Value::Attribute { data, attributes } => {
+                if attributes.len().saturating_mul(2) + pending.len() > 100_000 {
+                    return MAX_SEARCH_RESPONSE_BYTES + 1;
+                }
+                pending.push((data, depth + 1));
+                for (key, value) in attributes {
+                    pending.push((key, depth + 1));
+                    pending.push((value, depth + 1));
+                }
+                attributes.len().saturating_mul(16)
+            }
+            _ => 8,
+        };
+        size = size.saturating_add(bytes);
+        if size > MAX_SEARCH_RESPONSE_BYTES {
+            return size;
+        }
     }
+    size
 }
 
 fn ensure_response_size(value: &Value) -> Result<(), AppError> {
@@ -623,6 +801,7 @@ mod tests {
             Value::Array(vec![Value::Int(3), text("doc:1"), text("doc:2")]),
             0,
             2,
+            false,
         )
         .unwrap();
         assert_eq!(result.total, 3);
@@ -637,7 +816,7 @@ mod tests {
             ["doc:1", "doc:2"]
         );
 
-        let empty = parse_search_query(Value::Array(vec![Value::Int(0)]), 0, 200).unwrap();
+        let empty = parse_search_query(Value::Array(vec![Value::Int(0)]), 0, 200, false).unwrap();
         assert_eq!(empty.total, 0);
         assert!(empty.keys.is_empty());
         assert_eq!(empty.next_offset, None);
@@ -648,8 +827,229 @@ mod tests {
                 .collect(),
         );
         assert_eq!(
-            parse_search_query(too_many, 0, 200),
+            parse_search_query(too_many, 0, 200, false),
             Err(AppError::CommandFailed)
+        );
+    }
+
+    #[test]
+    fn search_content_resp2_preserves_fields_null_and_expired_documents() {
+        let value = Value::Array(vec![
+            Value::Int(3),
+            text("doc:1"),
+            Value::Array(vec![text("name"), text("Alice"), text("empty"), Value::Nil]),
+            text("doc:2"),
+            Value::Nil,
+        ]);
+        let result = parse_search_query(value, 0, 2, true).unwrap();
+        let encoded = serde_json::to_value(&result).unwrap();
+        assert_eq!(
+            encoded["keys"][0]["fields"],
+            serde_json::json!([
+                {"name":"name","value":"Alice"}, {"name":"empty","value":null}
+            ])
+        );
+        assert_eq!(encoded["keys"][1]["fields"], serde_json::Value::Null);
+        assert_eq!(result.next_offset, Some(2));
+    }
+
+    #[test]
+    fn search_content_resp3_preserves_nested_attributes_and_nocontent_ids() {
+        let value = Value::Map(vec![
+            (text("total_results"), Value::Int(1)),
+            (
+                text("results"),
+                Value::Array(vec![Value::Map(vec![
+                    (text("id"), text("doc:1")),
+                    (
+                        text("extra_attributes"),
+                        Value::Map(vec![(
+                            text("tags"),
+                            Value::Array(vec![text("redis"), Value::Boolean(true)]),
+                        )]),
+                    ),
+                    (text("values"), Value::Array(vec![])),
+                ])]),
+            ),
+        ]);
+        let result = parse_search_query(
+            Value::Attribute {
+                data: Box::new(value),
+                attributes: vec![],
+            },
+            0,
+            2,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(result).unwrap()["keys"][0]["fields"][0]["value"],
+            serde_json::json!(["redis", true])
+        );
+
+        let ids = Value::Map(vec![
+            (text("total_results"), Value::Int(5)),
+            (
+                text("results"),
+                Value::Array(vec![Value::Map(vec![(text("id"), text("doc:2"))])]),
+            ),
+        ]);
+        assert_eq!(
+            parse_search_query(ids, 0, 1, false).unwrap().keys[0].key,
+            "doc:2"
+        );
+    }
+
+    #[test]
+    fn search_query_empty_page_must_not_repeat_same_offset() {
+        let result =
+            parse_search_query(Value::Array(vec![Value::Int(100)]), 20, 10, false).unwrap();
+        assert_eq!(result.next_offset, None);
+    }
+
+    #[test]
+    fn search_content_input_is_opt_in_and_roundtrips() {
+        let base = serde_json::json!({"connection_id":"local","index":"idx","query":"*","offset":0,"limit":10});
+        let default: crate::domain::SearchQueryInput =
+            serde_json::from_value(base.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(default).unwrap()["include_content"],
+            false
+        );
+        let mut content = base;
+        content["include_content"] = true.into();
+        let enabled: crate::domain::SearchQueryInput = serde_json::from_value(content).unwrap();
+        assert_eq!(
+            serde_json::to_value(enabled).unwrap()["include_content"],
+            true
+        );
+    }
+
+    #[test]
+    fn search_content_rejects_malformed_shapes_duplicate_ids_and_noninteger_totals() {
+        for (reply, content) in [
+            (Value::Array(vec![Value::Double(1.0), text("doc")]), false),
+            (
+                Value::Array(vec![Value::Int(2), text("same"), text("same")]),
+                false,
+            ),
+            (Value::Array(vec![Value::Int(1), Value::Int(123)]), false),
+            (Value::Array(vec![Value::Int(1), text("doc")]), true),
+            (
+                Value::Array(vec![
+                    Value::Int(1),
+                    text("doc"),
+                    Value::Array(vec![text("orphan")]),
+                ]),
+                true,
+            ),
+            (
+                Value::Array(vec![
+                    Value::Int(1),
+                    text("doc"),
+                    Value::Array(vec![text("a"), text("1"), text("a"), text("2")]),
+                ]),
+                true,
+            ),
+            (
+                Value::Map(vec![
+                    (text("total_results"), Value::Int(1)),
+                    (text("results"), Value::Array(vec![Value::Map(vec![])])),
+                ]),
+                true,
+            ),
+            (
+                Value::Map(vec![
+                    (text("total_results"), Value::Int(1)),
+                    (text("total_results"), Value::Int(1)),
+                    (text("results"), Value::Array(vec![])),
+                ]),
+                true,
+            ),
+        ] {
+            assert_eq!(
+                parse_search_query(reply, 0, 2, content),
+                Err(AppError::CommandFailed)
+            );
+        }
+    }
+
+    #[test]
+    fn search_content_bounds_response_fields_bytes_depth_and_page() {
+        let document = |fields: Value| Value::Array(vec![Value::Int(1), text("doc"), fields]);
+        let fields = Value::Array(
+            (0..65)
+                .flat_map(|index| [text(&format!("f{index}")), text("value")])
+                .collect(),
+        );
+        assert!(parse_search_query(document(fields), 0, 1, true).is_err());
+        assert!(parse_search_query(
+            document(Value::Array(vec![
+                text("x"),
+                text(&"x".repeat(256 * 1024 + 1))
+            ])),
+            0,
+            1,
+            true
+        )
+        .is_err());
+        assert!(parse_search_query(
+            document(Value::Array(vec![text("x"), Value::BulkString(vec![0xff])])),
+            0,
+            1,
+            true
+        )
+        .is_err());
+        let mut nested = Value::Nil;
+        for _ in 0..40 {
+            nested = Value::Array(vec![nested]);
+        }
+        assert!(
+            parse_search_query(document(Value::Array(vec![text("x"), nested])), 0, 1, true)
+                .is_err()
+        );
+        let oversized = Value::Array(
+            (0..17)
+                .flat_map(|index| [text(&format!("f{index}")), text(&"x".repeat(256 * 1024))])
+                .collect(),
+        );
+        assert!(parse_search_query(document(oversized), 0, 1, true).is_err());
+        let many = Value::Array(
+            std::iter::once(Value::Int(201))
+                .chain(
+                    (0..201).flat_map(|index| [text(&format!("doc{index}")), Value::Array(vec![])]),
+                )
+                .collect(),
+        );
+        assert!(parse_search_query(many, 0, 200, true).is_err());
+        let boundary = parse_search_query(
+            document(Value::Array(vec![text("x"), text(&"x".repeat(256 * 1024))])),
+            0,
+            1,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            boundary.keys[0].fields.as_ref().unwrap()[0]
+                .value
+                .as_str()
+                .unwrap()
+                .len(),
+            256 * 1024
+        );
+    }
+
+    #[test]
+    fn search_content_never_rounds_large_integer_fields() {
+        let value = Value::Array(vec![
+            Value::Int(1),
+            text("doc"),
+            Value::Array(vec![text("id"), Value::Int(9_007_199_254_740_993)]),
+        ]);
+        let result = parse_search_query(value, 0, 1, true).unwrap();
+        assert_eq!(
+            result.keys[0].fields.as_ref().unwrap()[0].value,
+            serde_json::json!("9007199254740993")
         );
     }
 

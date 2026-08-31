@@ -14,6 +14,7 @@ pub struct AppState {
     pub(crate) profiles: Arc<dyn ProfileRepository>,
     pub(crate) secrets: Arc<dyn SecretStore>,
     pub(crate) redis: redis::RedisService,
+    pub(crate) cli: redis::CliManager,
     pub(crate) data_dir: PathBuf,
 }
 
@@ -29,6 +30,7 @@ impl AppState {
     ) -> Self {
         Self {
             redis: redis::RedisService::new(profiles.clone(), secrets.clone()),
+            cli: redis::CliManager::new(),
             profiles,
             secrets,
             data_dir,
@@ -52,6 +54,9 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::cli::open_cli_session,
+            commands::cli::execute_cli_command,
+            commands::cli::close_cli_session,
             commands::array::create_array,
             commands::array::get_array_summary,
             commands::array::get_array_range,
@@ -93,6 +98,7 @@ pub fn run() {
             commands::browser::get_stream_consumer_groups,
             commands::browser::create_stream_consumer_group,
             commands::browser::delete_stream_consumer_group,
+            commands::browser::claim_stream_pending_entries,
             commands::browser::get_stream_consumers,
             commands::browser::get_stream_pending_entries,
             commands::browser::acknowledge_stream_pending_entries,
@@ -134,6 +140,8 @@ pub fn run() {
             commands::workbench::get_command_catalog,
             commands::workbench::list_command_history,
             commands::workbench::save_command_history,
+            commands::workbench::delete_command_history,
+            commands::workbench::clear_command_history,
         ])
         .run(tauri::generate_context!())
         .expect("运行 Redix Tauri 应用失败");

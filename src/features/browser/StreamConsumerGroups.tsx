@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import {
   acknowledgeStreamPendingEntries,
+  claimStreamPendingEntries,
   createStreamConsumerGroup,
   deleteStreamConsumer,
   deleteStreamConsumerGroup,
@@ -34,6 +35,12 @@ export function StreamConsumerGroups({
   const [consumers, setConsumers] = useState<StreamConsumer[]>([]);
   const [pending, setPending] = useState<StreamPendingEntry[]>([]);
   const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
+  const [claimConsumer, setClaimConsumer] = useState("");
+  const [claimIdle, setClaimIdle] = useState("0");
+  const [claimNotice, setClaimNotice] = useState<string | null>(null);
+  const scopeRef = useRef("");
+  scopeRef.current = JSON.stringify([connectionId, streamKey, selectedGroupName]);
+  const mutationRef = useRef(0);
   const [groupName, setGroupName] = useState("");
   const [lastDeliveredId, setLastDeliveredId] = useState("$");
   const [loading, setLoading] = useState(false);
@@ -48,6 +55,12 @@ export function StreamConsumerGroups({
   const streamKeyRef = useRef(streamKey);
   connectionRef.current = connectionId;
   streamKeyRef.current = streamKey;
+
+  useEffect(() => {
+    mutationRef.current += 1;
+    setBusy(false);
+    setClaimNotice(null);
+  }, [connectionId, streamKey, selectedGroupName]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -105,6 +118,9 @@ export function StreamConsumerGroups({
   useEffect(() => {
     groupsRequestRef.current += 1;
     detailsRequestRef.current += 1;
+    setBusy(false);
+    setClaimConsumer("");
+    setClaimIdle("0");
     setGroups([]);
     setSelectedGroupName("");
     setConsumers([]);
@@ -118,6 +134,7 @@ export function StreamConsumerGroups({
     const token = detailsRequestRef.current + 1;
     detailsRequestRef.current = token;
     setSelectedPendingIds([]);
+    setClaimNotice(null);
     if (!selectedGroupName) {
       setConsumers([]);
       setPending([]);
@@ -260,6 +277,36 @@ export function StreamConsumerGroups({
       setError(browserErrorMessage(caught, "确认 Pending 消息失败，请稍后重试。"));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleClaim = async () => {
+    const minIdleMs = Number(claimIdle);
+    if (!selectedGroup || selectedPendingIds.length === 0) return;
+    if (!claimConsumer.trim() || claimConsumer.length > 256 || !/^\d+$/.test(claimIdle)
+        || !Number.isSafeInteger(minIdleMs) || minIdleMs < 0) {
+      setError("请填写目标消费者和有效的非负整数空闲时间。");
+      return;
+    }
+    if (!window.confirm(`将 ${selectedPendingIds.length} 条 Pending 消息转移给“${claimConsumer}”？这会改变消息所属消费者。`)) return;
+    const scope = scopeRef.current;
+    const token = ++mutationRef.current;
+    const isCurrent = () => mountedRef.current && scopeRef.current === scope && mutationRef.current === token;
+    const entries = [...selectedPendingIds];
+    setBusy(true); setError(null); setClaimNotice(null);
+    try {
+      const claimed = await claimStreamPendingEntries({
+        connection_id: connectionId, key: streamKey, group: selectedGroup.name,
+        consumer: claimConsumer, min_idle_ms: minIdleMs, entries,
+      });
+      if (!isCurrent()) return;
+      setSelectedPendingIds([]);
+      await refresh();
+      if (isCurrent()) setClaimNotice(`已转移 ${claimed.length} / ${entries.length} 条；不满足空闲条件或已不在 Pending 的消息不会转移。`);
+    } catch (caught) {
+      if (isCurrent()) setError(browserErrorMessage(caught, "转移 Pending 消息失败，请稍后重试。"));
+    } finally {
+      if (isCurrent()) setBusy(false);
     }
   };
 
@@ -440,6 +487,21 @@ export function StreamConsumerGroups({
               </button>
             </div>
           </div>
+          <div className="stream-group-create">
+            <label className="field"><span>目标消费者</span>
+              <input aria-label="目标消费者" value={claimConsumer} maxLength={256}
+                onChange={(event) => setClaimConsumer(event.target.value)} disabled={busy} />
+            </label>
+            <label className="field"><span>最小空闲时间（毫秒）</span>
+              <input aria-label="最小空闲时间（毫秒）" type="number" min="0" step="1" value={claimIdle}
+                onChange={(event) => setClaimIdle(event.target.value)} disabled={busy} />
+            </label>
+            <button type="button" className="button button-secondary" onClick={() => void handleClaim()}
+              disabled={busy || detailsLoading || !selectedGroup || !claimConsumer.trim() || selectedPendingIds.length === 0}>
+              转移选中 Pending
+            </button>
+          </div>
+          {claimNotice ? <p role="status">{claimNotice}</p> : null}
           {pending.length === 0 ? (
             <p className="stream-empty-state">
               {detailsLoading ? "正在加载 Pending…" : "当前 Group 没有 Pending 消息。"}

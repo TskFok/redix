@@ -1,14 +1,16 @@
 use crate::{
     domain::{
-        filter_history_entry, CommandDefinition, CommandExecutionItem, CommandHistoryDocument,
-        CommandHistoryEntry, CommandResult, ExecuteCommandInput, ExecuteCommandsInput,
-        SaveCommandHistoryInput,
+        filter_history_entry, ClearCommandHistoryInput, CommandDefinition, CommandExecutionItem,
+        CommandHistoryDocument, CommandHistoryEntry, CommandResult, DeleteCommandHistoryInput,
+        ExecuteCommandInput, ExecuteCommandsInput, SaveCommandHistoryInput,
     },
     error::AppError,
     persistence::JsonDocumentStore,
     redis::RedisOperations,
     AppState,
 };
+
+static HISTORY_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[tauri::command]
 pub async fn execute_command(
@@ -46,6 +48,9 @@ pub fn list_command_history(
     }
 
     let store = history_store(state.inner());
+    let _guard = HISTORY_LOCK
+        .lock()
+        .map_err(|_| AppError::PersistenceFailed)?;
     let document = store.load_or_default::<CommandHistoryDocument>()?;
     let mut entries = document
         .entries
@@ -64,11 +69,14 @@ pub fn save_command_history(
     input: SaveCommandHistoryInput,
 ) -> Result<(), AppError> {
     input.validate()?;
+    let _guard = HISTORY_LOCK
+        .lock()
+        .map_err(|_| AppError::PersistenceFailed)?;
     let store = history_store(state.inner());
     let mut document = store.load_or_default::<CommandHistoryDocument>()?;
-    document
-        .entries
-        .retain(|entry| entry.connection_id != input.connection_id);
+    document.entries.retain(|entry| {
+        entry.connection_id != input.connection_id && filter_history_entry(entry).is_some()
+    });
     document
         .entries
         .extend(input.entries.iter().filter_map(filter_history_entry));
@@ -78,6 +86,34 @@ pub fn save_command_history(
             .cmp(&left.created_at)
             .then_with(|| right.command.cmp(&left.command))
     });
+    store.save(&document)
+}
+
+#[tauri::command]
+pub fn delete_command_history(
+    state: tauri::State<'_, AppState>,
+    input: DeleteCommandHistoryInput,
+) -> Result<(), AppError> {
+    let _guard = HISTORY_LOCK
+        .lock()
+        .map_err(|_| AppError::PersistenceFailed)?;
+    let store = history_store(state.inner());
+    let mut document = store.load_or_default::<CommandHistoryDocument>()?;
+    document.delete_entry(&input)?;
+    store.save(&document)
+}
+
+#[tauri::command]
+pub fn clear_command_history(
+    state: tauri::State<'_, AppState>,
+    input: ClearCommandHistoryInput,
+) -> Result<(), AppError> {
+    let _guard = HISTORY_LOCK
+        .lock()
+        .map_err(|_| AppError::PersistenceFailed)?;
+    let store = history_store(state.inner());
+    let mut document = store.load_or_default::<CommandHistoryDocument>()?;
+    document.clear_connection(&input)?;
     store.save(&document)
 }
 

@@ -1,21 +1,22 @@
 import { useState } from "react";
 
 import type {
-  CommandDisplayFormat,
+  WorkbenchResultFormat,
   CommandExecutionItem,
   CommandResult as CommandResultValue,
   IpcError,
 } from "../../lib/types";
+import { RespTable, RespTree } from "./RespResult";
 
 interface CommandResultProps {
   result: CommandResultValue | null;
   error: IpcError | null;
   batchResults?: CommandExecutionItem[];
-  format?: CommandDisplayFormat;
-  onFormatChange?: (format: CommandDisplayFormat) => void;
+  format?: WorkbenchResultFormat;
+  onFormatChange?: (format: WorkbenchResultFormat) => void;
 }
 
-export function formatResult(value: unknown, format: CommandDisplayFormat = "text"): string {
+export function formatResult(value: unknown, format: WorkbenchResultFormat = "text"): string {
   if (typeof value === "string") {
     return format === "json" ? JSON.stringify(value, null, 2) : value;
   }
@@ -86,12 +87,14 @@ export function CommandResult({
                 aria-label="结果格式"
                 value={format}
                 onChange={(event) =>
-                  onFormatChange?.(event.target.value as CommandDisplayFormat)
+                  onFormatChange?.(event.target.value as WorkbenchResultFormat)
                 }
               >
                 <option value="raw">Raw</option>
                 <option value="text">Text</option>
                 <option value="json">JSON</option>
+                <option value="tree">树形</option>
+                <option value="table">表格</option>
               </select>
             </label>
           ) : null}
@@ -118,7 +121,7 @@ export function CommandResult({
                 <span>{item.error_code ? `错误：${item.error_code}` : "成功"}</span>
               </div>
               {item.result ? (
-                <pre className="command-result-pre">
+                format === "tree" ? <RespTree key={JSON.stringify(item.result.value)} value={item.result.value} /> : format === "table" ? <RespTable key={JSON.stringify(item.result.value)} value={item.result.value} /> : <pre className="command-result-pre">
                   {formatResult(item.result.value, format)}
                 </pre>
               ) : null}
@@ -126,6 +129,7 @@ export function CommandResult({
           ))}
         </ol>
       ) : result && formattedResult !== null ? (
+        format === "tree" ? <RespTree key={formattedResult} value={result.value} /> : format === "table" ? <RespTable key={formattedResult} value={result.value} /> :
         <details className="command-result-details" open={!isLargeResult}>
           <summary className="command-result-summary">
             {isLargeResult ? "查看完整结果" : "返回值"}

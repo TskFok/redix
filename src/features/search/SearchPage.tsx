@@ -16,7 +16,6 @@ import type {
   SearchKeyType,
 } from "../../lib/types";
 import {
-  nextSearchOffset,
   replaceSearchResults,
   resetSearchState,
   searchCapabilityState,
@@ -25,6 +24,8 @@ import {
   type SearchProbeState,
   type SearchState,
 } from "./searchState";
+import { SearchDocumentTable } from "./SearchDocumentTable";
+import "./searchDocuments.css";
 
 interface SearchPageProps {
   connectionId: string;
@@ -146,16 +147,17 @@ function IndexInfo({ info }: { info: SearchIndexInfo | null }) {
   );
 }
 
-function SearchResults({ result, onNext, busy }: {
+function SearchResults({ result, onNext, busy, includeContent }: {
   result: SearchQueryResult | null;
   onNext: () => void;
   busy: boolean;
+  includeContent: boolean;
 }) {
   if (!result) {
     return <p className="empty-state-compact">输入查询语句后查看匹配键。</p>;
   }
 
-  const nextOffset = nextSearchOffset(result.total, result.offset, result.keys.length);
+  const nextOffset = result.next_offset;
   const pageSummary = result.keys.length > 0
     ? `${result.offset + 1}–${result.offset + result.keys.length}`
     : "无结果";
@@ -165,7 +167,7 @@ function SearchResults({ result, onNext, busy }: {
         <span>匹配 {formatCount(result.total)} 个文档</span>
         <span>当前页 {pageSummary}</span>
       </div>
-      {result.keys.length > 0 ? (
+      {result.keys.length > 0 && includeContent ? <SearchDocumentTable documents={result.keys} /> : result.keys.length > 0 ? (
         <div className="database-table-wrap">
           <table className="database-table search-results-table">
             <thead>
@@ -213,18 +215,32 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   const [createDraft, setCreateDraft] = useState<SearchCreateDraft>(() => newCreateDraft());
   const [createError, setCreateError] = useState<string | null>(null);
   const [createBusy, setCreateBusy] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
   const mountedRef = useRef(false);
   const connectionRequestRef = useRef(0);
+  const indexRequestRef = useRef(0);
   const infoRequestRef = useRef(0);
   const searchRequestRef = useRef(0);
 
   const capability = searchCapabilityState(probe);
+  const mutationBusy = createBusy || deleteBusy;
+
+  const changeQuery = (changes: Partial<Pick<SearchState, "query" | "includeContent" | "selectedIndex">>) => {
+    if (mutationBusy) return;
+    searchRequestRef.current += 1;
+    setState((current) => ({ ...current, ...changes, result: null, offset: 0, loading: false, requestToken: null, error: null,
+      info: "selectedIndex" in changes ? null : current.info }));
+  };
 
   const loadIndexes = useCallback(async (requestId: number) => {
+    const indexRequestId = ++indexRequestRef.current;
+    const isCurrent = () => mountedRef.current
+      && connectionRequestRef.current === requestId
+      && indexRequestRef.current === indexRequestId;
     setIndexLoading(true);
     try {
       const result = await listSearchIndexes(connectionId);
-      if (!mountedRef.current || connectionRequestRef.current !== requestId) {
+      if (!isCurrent()) {
         return;
       }
       setState((current) => {
@@ -245,14 +261,14 @@ export function SearchPage({ connectionId }: SearchPageProps) {
         };
       });
     } catch (caught) {
-      if (mountedRef.current && connectionRequestRef.current === requestId) {
+      if (isCurrent()) {
         setState((current) => ({
           ...current,
           error: searchErrorMessage(caught, "读取索引列表失败，请稍后重试。"),
         }));
       }
     } finally {
-      if (connectionRequestRef.current === requestId) {
+      if (isCurrent()) {
         setIndexLoading(false);
       }
     }
@@ -266,9 +282,12 @@ export function SearchPage({ connectionId }: SearchPageProps) {
     searchRequestRef.current += 1;
     setProbe({ status: "loading", capabilities: null });
     setState(resetSearchState());
+    setIndexLoading(false);
     setShowCreate(false);
     setCreateDraft(newCreateDraft());
     setCreateError(null);
+    setCreateBusy(false);
+    setDeleteBusy(false);
 
     void getModuleCapabilities(connectionId)
       .then((capabilities) => {
@@ -302,6 +321,8 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   useEffect(() => {
     const requestId = infoRequestRef.current + 1;
     infoRequestRef.current = requestId;
+    searchRequestRef.current += 1;
+    setState((current) => ({ ...current, loading: false, requestToken: null }));
     if (capability.status !== "ready" || !state.selectedIndex) {
       setInfoLoading(false);
       setState((current) => (current.info === null ? current : { ...current, info: null }));
@@ -336,7 +357,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   }, [capability.status, connectionId, state.selectedIndex]);
 
   const runSearch = async (requestedOffset: number) => {
-    if (capability.status !== "ready" || !state.selectedIndex) {
+    if (mutationBusy || capability.status !== "ready" || !state.selectedIndex) {
       return;
     }
     const query = state.query.trim();
@@ -367,6 +388,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
         query,
         offset: requestedOffset,
         limit: SEARCH_PAGE_SIZE,
+        ...(state.includeContent ? { include_content: true } : {}),
       });
       if (
         mountedRef.current &&
@@ -379,13 +401,17 @@ export function SearchPage({ connectionId }: SearchPageProps) {
         setState((current) => ({
           ...current,
           loading: false,
-          error: searchErrorMessage(caught, "执行搜索失败，请检查查询语句。"),
+          error: searchErrorMessage(caught, state.includeContent
+            ? "执行搜索失败，请检查查询语句；文档内容过大或含非 UTF-8 字段时，请关闭文档内容后重试。"
+            : "执行搜索失败，请检查查询语句。"),
         }));
       }
     }
   };
 
   const handleCreate = async () => {
+    if (mutationBusy) return;
+    const requestGeneration = connectionRequestRef.current;
     const index = createDraft.index.trim();
     const fields = createDraft.fields
       .map((field) => ({ ...field, name: field.name.trim() }))
@@ -417,24 +443,28 @@ export function SearchPage({ connectionId }: SearchPageProps) {
     setCreateError(null);
     try {
       await createSearchIndex(input);
+      if (!mountedRef.current || connectionRequestRef.current !== requestGeneration) return;
       setShowCreate(false);
       setCreateDraft(newCreateDraft());
-      await loadIndexes(connectionRequestRef.current);
+      await loadIndexes(requestGeneration);
     } catch (caught) {
-      setCreateError(searchErrorMessage(caught, "创建索引失败，请检查索引定义。"));
+      if (mountedRef.current && connectionRequestRef.current === requestGeneration) setCreateError(searchErrorMessage(caught, "创建索引失败，请检查索引定义。"));
     } finally {
-      setCreateBusy(false);
+      if (mountedRef.current && connectionRequestRef.current === requestGeneration) setCreateBusy(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!state.selectedIndex || !window.confirm(`确定删除索引“${state.selectedIndex}”吗？`)) {
+    if (mutationBusy || state.loading || !state.selectedIndex || !window.confirm(`确定删除索引“${state.selectedIndex}”吗？`)) {
       return;
     }
     const index = state.selectedIndex;
+    const requestGeneration = connectionRequestRef.current;
+    setDeleteBusy(true);
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
       await deleteSearchIndex({ connection_id: connectionId, index });
+      if (!mountedRef.current || connectionRequestRef.current !== requestGeneration) return;
       setState((current) => ({
         ...current,
         indexes: current.indexes.filter((item) => item.name !== index),
@@ -444,37 +474,38 @@ export function SearchPage({ connectionId }: SearchPageProps) {
         loading: false,
         requestToken: null,
       }));
-      await loadIndexes(connectionRequestRef.current);
+      await loadIndexes(requestGeneration);
     } catch (caught) {
+      if (!mountedRef.current || connectionRequestRef.current !== requestGeneration) return;
       setState((current) => ({
         ...current,
         loading: false,
         error: searchErrorMessage(caught, "删除索引失败，请稍后重试。"),
       }));
+    } finally {
+      if (mountedRef.current && connectionRequestRef.current === requestGeneration) setDeleteBusy(false);
     }
   };
 
   const pageError = state.error ?? createError;
-  const nextOffset = state.result
-    ? nextSearchOffset(state.result.total, state.result.offset, state.result.keys.length)
-    : null;
+  const nextOffset = state.result?.next_offset ?? null;
 
   return (
-    <section className="search-page" aria-labelledby="search-query-page-title" aria-busy={indexLoading || infoLoading || state.loading || createBusy}>
+    <section className="search-page" aria-labelledby="search-query-page-title" aria-busy={indexLoading || infoLoading || state.loading || mutationBusy}>
       <div className="page-heading search-page-heading">
         <div>
           <p className="eyebrow">REDISEARCH / QUERY</p>
           <h2 id="search-query-page-title">RedisSearch / Query</h2>
           <p className="page-description">
-            管理 RedisSearch 索引，使用 FT.SEARCH 查询 Hash 或 JSON 文档。查询仅返回键名，避免把大文档加载到界面。
+            管理 RedisSearch 索引，使用 FT.SEARCH 查询 Hash 或 JSON 文档。默认仅返回键名，也可选择加载文档内容。
           </p>
         </div>
         {capability.status === "ready" ? (
           <div className="page-heading-actions">
-            <button type="button" className="button button-secondary" onClick={() => void loadIndexes(connectionRequestRef.current)} disabled={indexLoading || createBusy}>
+            <button type="button" className="button button-secondary" onClick={() => void loadIndexes(connectionRequestRef.current)} disabled={indexLoading || mutationBusy}>
               {indexLoading ? "刷新中…" : "刷新索引"}
             </button>
-            <button type="button" className="button button-primary" onClick={() => { setShowCreate(true); setCreateError(null); }} disabled={createBusy}>
+            <button type="button" className="button button-primary" onClick={() => { setShowCreate(true); setCreateError(null); }} disabled={mutationBusy}>
               新建索引
             </button>
           </div>
@@ -494,25 +525,25 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                   <p className="eyebrow">FT.CREATE</p>
                   <h3 id="search-create-title">创建索引</h3>
                 </div>
-                <button type="button" className="button button-quiet" onClick={() => { setShowCreate(false); setCreateError(null); }} disabled={createBusy}>
+                <button type="button" className="button button-quiet" onClick={() => { setShowCreate(false); setCreateError(null); }} disabled={mutationBusy}>
                   取消
                 </button>
               </div>
               <div className="form-grid search-create-grid">
                 <label className="field">
                   <span>索引名称</span>
-                  <input aria-label="索引名称" value={createDraft.index} onChange={(event) => setCreateDraft((current) => ({ ...current, index: event.target.value }))} disabled={createBusy} spellCheck={false} />
+                  <input aria-label="索引名称" value={createDraft.index} onChange={(event) => setCreateDraft((current) => ({ ...current, index: event.target.value }))} disabled={mutationBusy} spellCheck={false} />
                 </label>
                 <label className="field">
                   <span>键类型</span>
-                  <select aria-label="键类型" value={createDraft.key_type} onChange={(event) => setCreateDraft((current) => ({ ...current, key_type: event.target.value as SearchKeyType }))} disabled={createBusy}>
+                  <select aria-label="键类型" value={createDraft.key_type} onChange={(event) => setCreateDraft((current) => ({ ...current, key_type: event.target.value as SearchKeyType }))} disabled={mutationBusy}>
                     <option value="hash">HASH</option>
                     <option value="json">JSON</option>
                   </select>
                 </label>
                 <label className="field field-wide">
                   <span>键前缀</span>
-                  <input aria-label="键前缀" value={createDraft.prefixes} onChange={(event) => setCreateDraft((current) => ({ ...current, prefixes: event.target.value }))} disabled={createBusy} placeholder="多个前缀用逗号分隔，可留空" spellCheck={false} />
+                  <input aria-label="键前缀" value={createDraft.prefixes} onChange={(event) => setCreateDraft((current) => ({ ...current, prefixes: event.target.value }))} disabled={mutationBusy} placeholder="多个前缀用逗号分隔，可留空" spellCheck={false} />
                   <small>留空表示匹配该类型的全部键。</small>
                 </label>
               </div>
@@ -523,27 +554,27 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                     <div className="search-field-row" key={`field-${fieldIndex}`}>
                       <label className="field">
                         <span>字段 {fieldIndex + 1}</span>
-                        <input aria-label={`字段 ${fieldIndex + 1}`} value={field.name} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, name: event.target.value } : item) }))} disabled={createBusy} spellCheck={false} />
+                        <input aria-label={`字段 ${fieldIndex + 1}`} value={field.name} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, name: event.target.value } : item) }))} disabled={mutationBusy} spellCheck={false} />
                       </label>
                       <label className="field">
                         <span>字段类型</span>
-                        <select aria-label={`字段 ${fieldIndex + 1} 类型`} value={field.field_type} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, field_type: event.target.value as SearchFieldType } : item) }))} disabled={createBusy}>
+                        <select aria-label={`字段 ${fieldIndex + 1} 类型`} value={field.field_type} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, field_type: event.target.value as SearchFieldType } : item) }))} disabled={mutationBusy}>
                           {fieldTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
                         </select>
                       </label>
-                      <button type="button" className="button button-quiet" onClick={() => setCreateDraft((current) => ({ ...current, fields: current.fields.length > 1 ? current.fields.filter((_, index) => index !== fieldIndex) : current.fields }))} disabled={createBusy || createDraft.fields.length === 1}>
+                      <button type="button" className="button button-quiet" onClick={() => setCreateDraft((current) => ({ ...current, fields: current.fields.length > 1 ? current.fields.filter((_, index) => index !== fieldIndex) : current.fields }))} disabled={mutationBusy || createDraft.fields.length === 1}>
                         删除字段
                       </button>
                     </div>
                   ))}
                 </div>
-                <button type="button" className="button button-secondary" onClick={() => setCreateDraft((current) => ({ ...current, fields: [...current.fields, { name: "", field_type: "text" }] }))} disabled={createBusy || createDraft.fields.length >= 64}>
+                <button type="button" className="button button-secondary" onClick={() => setCreateDraft((current) => ({ ...current, fields: [...current.fields, { name: "", field_type: "text" }] }))} disabled={mutationBusy || createDraft.fields.length >= 64}>
                   添加字段
                 </button>
               </fieldset>
               {createError ? <p className="inline-error" role="alert">{createError}</p> : null}
               <div className="form-actions">
-                <button type="button" className="button button-primary" onClick={() => void handleCreate()} disabled={createBusy}>
+                <button type="button" className="button button-primary" onClick={() => void handleCreate()} disabled={mutationBusy}>
                   {createBusy ? "创建中…" : "创建索引"}
                 </button>
               </div>
@@ -562,7 +593,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
               {state.indexes.length > 0 ? (
                 <label className="field">
                   <span>当前索引</span>
-                  <select aria-label="当前索引" value={state.selectedIndex ?? ""} onChange={(event) => setState((current) => ({ ...current, selectedIndex: event.target.value || null, info: null, result: null, offset: 0, error: null }))} disabled={indexLoading || state.loading}>
+                  <select aria-label="当前索引" value={state.selectedIndex ?? ""} onChange={(event) => changeQuery({ selectedIndex: event.target.value || null })} disabled={indexLoading || mutationBusy}>
                     {state.indexes.map((index) => <option key={index.name} value={index.name}>{index.name}</option>)}
                   </select>
                 </label>
@@ -570,7 +601,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                 <p className="empty-state-compact">还没有索引，请先新建一个索引。</p>
               )}
               {state.selectedIndex ? (
-                <button type="button" className="button button-danger search-delete-button" onClick={() => void handleDelete()} disabled={state.loading || indexLoading}>
+                <button type="button" className="button button-danger search-delete-button" onClick={() => void handleDelete()} disabled={state.loading || indexLoading || mutationBusy}>
                   删除当前索引
                 </button>
               ) : null}
@@ -583,19 +614,24 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                   <p className="eyebrow">FT.SEARCH</p>
                   <h3 id="search-query-title">查询键</h3>
                 </div>
-                <span className="panel-hint">NOCONTENT · LIMIT {SEARCH_PAGE_SIZE}</span>
+                <span className="panel-hint">{state.includeContent ? "文档内容" : "NOCONTENT"} · LIMIT {SEARCH_PAGE_SIZE}</span>
               </div>
               <div className="search-query-form">
                 <label className="field">
                   <span>查询语句</span>
-                  <input aria-label="查询语句" value={state.query} onChange={(event) => setState((current) => ({ ...current, query: event.target.value, error: null }))} onKeyDown={(event) => { if (event.key === "Enter") void runSearch(0); }} disabled={!state.selectedIndex || state.loading} spellCheck={false} />
+                  <input aria-label="查询语句" value={state.query} onChange={(event) => changeQuery({ query: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") void runSearch(0); }} disabled={!state.selectedIndex || state.loading || mutationBusy} spellCheck={false} />
                   <small>示例：*、@name:Alice、@age:[18 30]</small>
                 </label>
-                <button type="button" className="button button-primary" onClick={() => void runSearch(0)} disabled={!state.selectedIndex || state.loading}>
+                <button type="button" className="button button-primary" onClick={() => void runSearch(0)} disabled={!state.selectedIndex || state.loading || mutationBusy}>
                   {state.loading ? "查询中…" : "查询"}
                 </button>
               </div>
-              <SearchResults result={state.result} busy={state.loading} onNext={() => { if (nextOffset !== null) void runSearch(nextOffset); }} />
+              <label className="search-content-toggle">
+                <input type="checkbox" checked={state.includeContent} onChange={(event) => changeQuery({ includeContent: event.target.checked })} disabled={!state.selectedIndex || mutationBusy} />
+                返回文档内容
+              </label>
+              {state.includeContent ? <p className="browser-helper">最多 64 个字段/文档、256 KiB/字段、4 MiB/响应；支持 UTF-8 文本及 JSON，过大或二进制文档请使用仅键名模式。</p> : null}
+              <SearchResults result={state.result} busy={state.loading || mutationBusy} includeContent={state.includeContent} onNext={() => { if (nextOffset !== null) void runSearch(nextOffset); }} />
             </section>
           </div>
         </>

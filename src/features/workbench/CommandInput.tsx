@@ -5,6 +5,8 @@ interface CommandInputProps {
   onChange: (value: string) => void;
   onSubmit: () => void;
   onKeyDown?: (event: React.KeyboardEvent<HTMLTextAreaElement>) => void;
+  onCursorChange?: (position: number) => void;
+  inputRef?: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 export function CommandInput({
@@ -14,6 +16,8 @@ export function CommandInput({
   onChange,
   onSubmit,
   onKeyDown,
+  onCursorChange,
+  inputRef,
 }: CommandInputProps) {
   const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -37,8 +41,15 @@ export function CommandInput({
         <span>Redis 命令</span>
         <textarea
           id="redis-command-input"
+          ref={inputRef}
           value={value}
-          onChange={(event) => onChange(event.target.value)}
+          onChange={(event) => {
+            onChange(event.target.value);
+            onCursorChange?.(event.target.selectionStart);
+          }}
+          onSelect={(event) => onCursorChange?.(event.currentTarget.selectionStart)}
+          onClick={(event) => onCursorChange?.(event.currentTarget.selectionStart)}
+          onKeyUp={(event) => onCursorChange?.(event.currentTarget.selectionStart)}
           onKeyDown={handleKeyDown}
           aria-describedby="redis-command-helper"
           placeholder="例如：PING 或 GET app:session"
@@ -49,7 +60,7 @@ export function CommandInput({
       </label>
       <div className="command-actions">
         <p id="redis-command-helper" className="command-shortcut">
-          使用 Cmd/Ctrl + Enter 执行
+          使用 Cmd/Ctrl + Enter 执行；每行一条命令，# 或 // 开头为注释
         </p>
         <button
           type="submit"

@@ -1,0 +1,16 @@
+.observability-page .observability-toolbar {
+  flex-wrap: wrap;
+}
+
+.observability-page .observability-panel > .field {
+  margin: 14px 0 8px;
+}
+
+.observability-page .observability-panel-heading > div:first-child {
+  flex-shrink: 0;
+}
+
+.observability-page .observability-panel > .panel-hint {
+  text-align: left;
+  line-height: 1.6;
+}
