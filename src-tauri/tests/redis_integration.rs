@@ -6,16 +6,22 @@ use std::{
 
 use redix_lib::{
     domain::{
-        AcknowledgeStreamPendingEntriesInput, AnalyzeDatabaseInput, AppendJsonArrayInput,
-        ConnectionProfile, CreateKeyInput, CreateSearchIndexInput, CreateStreamConsumerGroupInput,
-        DeleteJsonPathInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
-        DeleteStreamConsumerInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
-        GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        AcknowledgeStreamPendingEntriesInput, AggregateArrayInput, AnalyzeDatabaseInput,
+        AppendArrayInput, AppendJsonArrayInput, ArrayAggregateOperation, ArrayCreateMode,
+        ArrayPredicate, ArrayRangeInput, ConnectionProfile, CreateArrayInput, CreateKeyInput,
+        CreateSearchIndexInput, CreateStreamConsumerGroupInput, CreateVectorSetInput,
+        DeleteArrayElementsInput, DeleteArrayRangeInput, DeleteJsonPathInput, DeleteKeysInput,
+        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, DeleteVectorSetElementsInput,
+        ExecuteCommandsInput, ExportKeysInput, ExportedKey, GetJsonPathInput,
+        GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
         GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
-        KeyInfoInput, KeyValue, PublishPubSubInput, RedisValue, RenameKeyInput, ScanKeysInput,
-        SearchFieldType, SearchIndexFieldInput, SearchIndexInput, SearchKeyType, SearchQueryInput,
-        SelectDatabaseInput, SetJsonPathInput, SetKeyInput, SetKeyTtlInput, SortedSetEntry,
-        StopPubSubInput, StreamEntry, StreamField, UpdateSlowLogConfigInput,
+        KeyInfoInput, KeyValue, ListVectorSetElementsInput, PublishPubSubInput, RedisValue,
+        RenameKeyInput, ScanKeysInput, SearchArrayInput, SearchFieldType, SearchIndexFieldInput,
+        SearchIndexInput, SearchKeyType, SearchQueryInput, SelectDatabaseInput,
+        SetArrayElementInput, SetJsonPathInput, SetKeyInput, SetKeyTtlInput,
+        SetVectorSetAttributesInput, SortedSetEntry, StopPubSubInput, StreamEntry, StreamField,
+        UpdateSlowLogConfigInput, VectorSetElementInput, VectorSetElementPayload,
+        VectorSetKeyInput, VectorSimilarityQueryInput,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -358,6 +364,341 @@ async fn redis_stack_search_flow_when_redis_stack_is_available() {
         (Ok(()), Err(cleanup)) => panic!("Redis Stack Search cleanup failed: {cleanup}"),
         (Err(flow), Err(cleanup)) => {
             panic!("Redis Stack Search flow failed: {flow}; cleanup also failed: {cleanup}")
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "设置 REDIX_TEST_REDIS_STACK_URL 后用 cargo test -- --ignored --nocapture 运行"]
+async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
+    let Ok(url) = std::env::var("REDIX_TEST_REDIS_STACK_URL") else {
+        eprintln!("skipped: REDIX_TEST_REDIS_STACK_URL is not set");
+        return;
+    };
+    let (profile, password) = integration_profile(&url);
+    let secrets = TestSecrets::default();
+    if let Some(password) = password.as_deref() {
+        secrets
+            .write(
+                "integration",
+                &ConnectionSecrets {
+                    password: Some(password.to_owned()),
+                    ..ConnectionSecrets::default()
+                },
+            )
+            .unwrap();
+    }
+    let service = RedisService::new(
+        std::sync::Arc::new(TestProfiles {
+            profiles: vec![profile],
+        }),
+        std::sync::Arc::new(secrets),
+    );
+    service.open_connection("integration").await.unwrap();
+    let suffix = format!(
+        "{}:{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after Unix epoch")
+            .as_nanos()
+    );
+    let array_key = format!("redix:array:integration:{suffix}");
+    let vector_key = format!("redix:vector-set:integration:{suffix}");
+
+    let flow = async {
+        let capabilities = service
+            .get_module_capabilities("integration")
+            .await
+            .map_err(|error| error.code().to_owned())?;
+
+        if capabilities.array_supported {
+            let created = service
+                .create_array(CreateArrayInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                    mode: ArrayCreateMode::Contiguous,
+                    start_index: Some("0".into()),
+                    values: vec!["one".into(), "two".into()],
+                    elements: Vec::new(),
+                    ttl_ms: None,
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if created.key != array_key {
+                return Err("Array create returned an unexpected key".to_owned());
+            }
+
+            let summary = service
+                .get_array_summary(redix_lib::domain::ArrayKeyInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if summary.length != "2" || summary.count != "2" {
+                return Err("Array summary returned unexpected length or count".to_owned());
+            }
+
+            let range = service
+                .get_array_range(ArrayRangeInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                    start: "0".into(),
+                    end: "1".into(),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if range.cells.len() != 2
+                || range.cells[0].value.as_deref() != Some("one")
+                || range.cells[1].value.as_deref() != Some("two")
+            {
+                return Err("Array range returned unexpected cells".to_owned());
+            }
+
+            service
+                .set_array_element(SetArrayElementInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                    index: "1".into(),
+                    value: "updated".into(),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            service
+                .append_array_elements(AppendArrayInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                    values: vec!["three".into()],
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            let used = service
+                .aggregate_array(AggregateArrayInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                    operation: ArrayAggregateOperation::Used,
+                    start: None,
+                    end: None,
+                    values: Vec::new(),
+                    limit: 50,
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if used.value != "3" {
+                return Err("Array USED aggregate returned an unexpected value".to_owned());
+            }
+
+            let search = service
+                .search_array(SearchArrayInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                    start: None,
+                    end: None,
+                    predicates: vec![ArrayPredicate {
+                        criteria: "EXACT".into(),
+                        value: "updated".into(),
+                    }],
+                    combinator: None,
+                    nocase: false,
+                    with_values: true,
+                    limit: 50,
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if search.elements.len() != 1 || search.elements[0].index != "1" {
+                return Err("Array search returned an unexpected match".to_owned());
+            }
+
+            service
+                .delete_array_elements(DeleteArrayElementsInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                    indices: vec!["1".into()],
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            service
+                .delete_array_range(DeleteArrayRangeInput {
+                    connection_id: "integration".into(),
+                    key: array_key.clone(),
+                    start: "0".into(),
+                    end: "0".into(),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+        } else {
+            eprintln!("skipped: Redis Array module is not installed");
+        }
+
+        if capabilities.vector_set_supported {
+            let created = service
+                .create_vector_set(CreateVectorSetInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                    dimension: 3,
+                    quantization: None,
+                    elements: vec![
+                        VectorSetElementPayload {
+                            name: "one".into(),
+                            vector_values: Some(vec![1.0, 0.0, 0.0]),
+                            vector_fp32_base64: None,
+                            attributes: Some(serde_json::json!({"kind": "seed"})),
+                        },
+                        VectorSetElementPayload {
+                            name: "two".into(),
+                            vector_values: Some(vec![0.0, 1.0, 0.0]),
+                            vector_fp32_base64: None,
+                            attributes: None,
+                        },
+                    ],
+                    ttl_ms: None,
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if created.key != vector_key {
+                return Err("Vector Set create returned an unexpected key".to_owned());
+            }
+
+            let summary = service
+                .get_vector_set_summary(VectorSetKeyInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if summary.total != "2" || summary.dimension != Some(3) {
+                return Err("Vector Set summary returned unexpected metadata".to_owned());
+            }
+
+            let page = service
+                .list_vector_set_elements(ListVectorSetElementsInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                    start: None,
+                    end: None,
+                    limit: 2,
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if page.elements.len() != 2 {
+                return Err(
+                    "Vector Set listing returned an unexpected number of elements".to_owned(),
+                );
+            }
+
+            let element = service
+                .get_vector_set_element(VectorSetElementInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                    element: "one".into(),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if element.vector_base64.is_none()
+                || element.attributes != Some(serde_json::json!({"kind": "seed"}))
+            {
+                return Err("Vector Set element returned unexpected data".to_owned());
+            }
+
+            let updated = service
+                .set_vector_set_attributes(SetVectorSetAttributesInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                    element: "one".into(),
+                    attributes: serde_json::json!({"kind": "updated"}),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if updated.attributes != Some(serde_json::json!({"kind": "updated"})) {
+                return Err("Vector Set attributes were not updated".to_owned());
+            }
+
+            let matches = service
+                .search_vector_set(VectorSimilarityQueryInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                    by_element: Some("one".into()),
+                    by_vector: None,
+                    by_vector_base64: None,
+                    count: 2,
+                    with_attributes: true,
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if matches.matches.is_empty() {
+                return Err("Vector Set similarity search returned no matches".to_owned());
+            }
+
+            let embedding = service
+                .download_vector_embedding(VectorSetElementInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                    element: "one".into(),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if embedding.is_empty() {
+                return Err("Vector Set embedding download returned an empty value".to_owned());
+            }
+
+            service
+                .delete_vector_set_attributes(VectorSetElementInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                    element: "one".into(),
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            let deleted = service
+                .delete_vector_set_elements(DeleteVectorSetElementsInput {
+                    connection_id: "integration".into(),
+                    key: vector_key.clone(),
+                    elements: vec!["two".into()],
+                })
+                .await
+                .map_err(|error| error.code().to_owned())?;
+            if deleted != 1 {
+                return Err("Vector Set delete returned an unexpected count".to_owned());
+            }
+        } else {
+            eprintln!("skipped: Redis Vector Set module is not installed");
+        }
+
+        if !capabilities.array_supported && !capabilities.vector_set_supported {
+            eprintln!("skipped: Array and Vector Set commands are unavailable");
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    let cleanup = async {
+        let mut errors = Vec::new();
+        if let Err(error) = service.delete_key("integration", &array_key).await {
+            errors.push(format!("Array cleanup: {}", error.code()));
+        }
+        if let Err(error) = service.delete_key("integration", &vector_key).await {
+            errors.push(format!("Vector Set cleanup: {}", error.code()));
+        }
+        if let Err(error) = service.close_connection("integration").await {
+            errors.push(format!("connection cleanup: {}", error.code()));
+        }
+        if errors.is_empty() {
+            Ok::<(), String>(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+    .await;
+
+    match (flow, cleanup) {
+        (Ok(()), Ok(())) => {}
+        (Err(flow), Ok(())) => panic!("Redis Stack Array/Vector Set flow failed: {flow}"),
+        (Ok(()), Err(cleanup)) => panic!("Redis Stack Array/Vector Set cleanup failed: {cleanup}"),
+        (Err(flow), Err(cleanup)) => {
+            panic!(
+                "Redis Stack Array/Vector Set flow failed: {flow}; cleanup also failed: {cleanup}"
+            )
         }
     }
 }

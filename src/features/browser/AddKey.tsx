@@ -1,21 +1,112 @@
 import { useEffect, useRef, useState } from "react";
 
-import { createKey } from "../../lib/tauri";
+import { createArray, createKey, createVectorSet } from "../../lib/tauri";
 import type {
+  CreateArrayInput,
   CreateKeyInput,
+  CreateVectorSetInput,
   KeyValue,
   RedisValue,
   StreamEntry,
+  VectorSetElementPayload,
 } from "../../lib/types";
 import { browserErrorMessage } from "./browserState";
 
-type CreateValueKind = "string" | "hash" | "list" | "set" | "zset" | "json" | "stream";
+type CreateValueKind =
+  | "string"
+  | "hash"
+  | "list"
+  | "set"
+  | "zset"
+  | "json"
+  | "stream"
+  | "array"
+  | "vectorset";
 
 interface AddKeyProps {
   connectionId: string;
   busy: boolean;
+  arraySupported?: boolean;
+  vectorSetSupported?: boolean;
   onCreated: (detail: KeyValue) => void;
   onCancel: () => void;
+}
+
+function parseArrayCreate(
+  mode: "contiguous" | "sparse",
+  startIndex: string,
+  valuesText: string,
+): Pick<CreateArrayInput, "mode" | "start_index" | "values" | "elements" | "ttl_ms"> {
+  const lines = parseNonEmptyLines(valuesText);
+  if (lines.length === 0) {
+    throw new Error("Array 至少需要一个值或稀疏元素。");
+  }
+  if (mode === "contiguous") {
+    if (startIndex.trim() !== "" && !/^\d{1,20}$/.test(startIndex.trim())) {
+      throw new Error("Array 起始索引必须是 0 到 20 位的非负整数。");
+    }
+    return {
+      mode,
+      start_index: startIndex.trim() || null,
+      values: lines,
+      elements: [],
+      ttl_ms: null,
+    };
+  }
+
+  const elements = lines.map((line) => {
+    const separator = line.indexOf("=");
+    const index = line.slice(0, separator).trim();
+    if (separator <= 0 || !/^\d{1,20}$/.test(index)) {
+      throw new Error("稀疏 Array 每行必须使用 index=value 格式。");
+    }
+    return { index, value: line.slice(separator + 1) };
+  });
+  if (new Set(elements.map((element) => element.index)).size !== elements.length) {
+    throw new Error("Array 索引不能重复。");
+  }
+  return {
+    mode,
+    start_index: null,
+    values: [],
+    elements,
+    ttl_ms: null,
+  };
+}
+
+function parseVectorElements(text: string): VectorSetElementPayload[] {
+  const lines = parseNonEmptyLines(text);
+  if (lines.length === 0) {
+    throw new Error("Vector Set 至少需要一个元素。");
+  }
+  const names = new Set<string>();
+  return lines.map((line) => {
+    const separator = line.indexOf("|");
+    const name = line.slice(0, separator).trim();
+    if (separator <= 0 || name === "" || names.has(name)) {
+      throw new Error("Vector Set 每行必须使用 name|[向量] 格式，名称不能重复。");
+    }
+    names.add(name);
+    let values: unknown;
+    try {
+      values = JSON.parse(line.slice(separator + 1));
+    } catch {
+      throw new Error("Vector Set 向量必须是 JSON 数组。");
+    }
+    if (
+      !Array.isArray(values) ||
+      values.length === 0 ||
+      values.some((value) => typeof value !== "number" || !Number.isFinite(value))
+    ) {
+      throw new Error("Vector Set 向量必须是只包含有限数字的 JSON 数组。");
+    }
+    return {
+      name,
+      vector_values: values,
+      vector_fp32_base64: null,
+      attributes: null,
+    };
+  });
 }
 
 function parseNonEmptyLines(text: string): string[] {
@@ -100,7 +191,14 @@ function parseValue(
   return { SortedSet: { members } };
 }
 
-export function AddKey({ connectionId, busy, onCreated, onCancel }: AddKeyProps) {
+export function AddKey({
+  connectionId,
+  busy,
+  arraySupported = false,
+  vectorSetSupported = false,
+  onCreated,
+  onCancel,
+}: AddKeyProps) {
   const [key, setKey] = useState("");
   const [kind, setKind] = useState<CreateValueKind>("string");
   const [stringValue, setStringValue] = useState("");
@@ -109,6 +207,11 @@ export function AddKey({ connectionId, busy, onCreated, onCancel }: AddKeyProps)
   const [streamText, setStreamText] = useState(
     '[{"id":"*","fields":[{"field":"event","value":""}]}]',
   );
+  const [arrayMode, setArrayMode] = useState<"contiguous" | "sparse">("contiguous");
+  const [arrayStartIndex, setArrayStartIndex] = useState("0");
+  const [vectorDimension, setVectorDimension] = useState("");
+  const [vectorQuantization, setVectorQuantization] = useState("");
+  const [vectorText, setVectorText] = useState("");
   const [ttlText, setTtlText] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -138,9 +241,27 @@ export function AddKey({ connectionId, busy, onCreated, onCancel }: AddKeyProps)
       return;
     }
 
-    let value: RedisValue;
+    let value: RedisValue | null = null;
+    let arrayInput: Pick<
+      CreateArrayInput,
+      "mode" | "start_index" | "values" | "elements" | "ttl_ms"
+    > | null = null;
+    let vectorInput: VectorSetElementPayload[] | null = null;
     try {
-      value = parseValue(kind, stringValue, collectionText, jsonText, streamText);
+      if (kind === "array") {
+        arrayInput = parseArrayCreate(arrayMode, arrayStartIndex, collectionText);
+      } else if (kind === "vectorset") {
+        vectorInput = parseVectorElements(vectorText);
+        const dimension = Number(vectorDimension);
+        if (!Number.isInteger(dimension) || dimension < 1) {
+          throw new Error("Vector Set 维度必须是正整数。");
+        }
+        if (vectorInput.some((element) => element.vector_values?.length !== dimension)) {
+          throw new Error("每个 Vector Set 元素的维度必须与设置值一致。");
+        }
+      } else {
+        value = parseValue(kind, stringValue, collectionText, jsonText, streamText);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "数据格式无效。");
       return;
@@ -150,12 +271,33 @@ export function AddKey({ connectionId, busy, onCreated, onCancel }: AddKeyProps)
     setSubmitting(true);
     setError(null);
     try {
-      const detail = await createKey({
-        connection_id: requestConnectionId,
-        key: normalizedKey,
-        value,
-        ttl_ms: ttlMs,
-      } satisfies CreateKeyInput);
+      let detail: KeyValue;
+      if (kind === "array" && arrayInput) {
+        detail = await createArray({
+          connection_id: requestConnectionId,
+          key: normalizedKey,
+          ...arrayInput,
+          ttl_ms: ttlMs,
+        } satisfies CreateArrayInput);
+      } else if (kind === "vectorset" && vectorInput) {
+        detail = await createVectorSet({
+          connection_id: requestConnectionId,
+          key: normalizedKey,
+          dimension: Number(vectorDimension),
+          quantization: vectorQuantization.trim() || null,
+          elements: vectorInput,
+          ttl_ms: ttlMs,
+        } satisfies CreateVectorSetInput);
+      } else if (value) {
+        detail = await createKey({
+          connection_id: requestConnectionId,
+          key: normalizedKey,
+          value,
+          ttl_ms: ttlMs,
+        } satisfies CreateKeyInput);
+      } else {
+        throw new Error("创建数据格式无效。");
+      }
       if (
         mountedRef.current &&
         connectionRef.current === requestConnectionId
@@ -207,6 +349,8 @@ export function AddKey({ connectionId, busy, onCreated, onCancel }: AddKeyProps)
             <option value="zset">Sorted Set</option>
             <option value="json">JSON</option>
             <option value="stream">Stream</option>
+            {arraySupported ? <option value="array">Array</option> : null}
+            {vectorSetSupported ? <option value="vectorset">Vector Set</option> : null}
           </select>
         </label>
       </div>
@@ -229,7 +373,37 @@ export function AddKey({ connectionId, busy, onCreated, onCancel }: AddKeyProps)
           <textarea value={streamText} onChange={(event) => setStreamText(event.target.value)} disabled={isBusy} spellCheck={false} />
         </label>
       ) : null}
-      {kind !== "string" && kind !== "json" && kind !== "stream" ? (
+      {kind === "array" ? (
+        <>
+          <label className="field">
+            <span>Array 创建模式</span>
+            <select value={arrayMode} onChange={(event) => setArrayMode(event.target.value as "contiguous" | "sparse")} disabled={isBusy}>
+              <option value="contiguous">连续索引</option>
+              <option value="sparse">稀疏索引</option>
+            </select>
+          </label>
+          {arrayMode === "contiguous" ? (
+            <label className="field">
+              <span>Array 起始索引</span>
+              <input aria-label="Array 起始索引" value={arrayStartIndex} onChange={(event) => setArrayStartIndex(event.target.value)} disabled={isBusy} inputMode="numeric" />
+            </label>
+          ) : null}
+          <label className="field">
+            <span>Array 值</span>
+            <textarea aria-label="Array 值" value={collectionText} onChange={(event) => setCollectionText(event.target.value)} disabled={isBusy} placeholder={arrayMode === "sparse" ? "index=value" : "每行一个值"} spellCheck={false} />
+          </label>
+        </>
+      ) : null}
+      {kind === "vectorset" ? (
+        <>
+          <div className="browser-add-key-grid">
+            <label className="field"><span>Vector Set 维度</span><input aria-label="Vector Set 维度" type="number" min="1" step="1" value={vectorDimension} onChange={(event) => setVectorDimension(event.target.value)} disabled={isBusy} /></label>
+            <label className="field"><span>量化类型（可选）</span><input value={vectorQuantization} onChange={(event) => setVectorQuantization(event.target.value)} disabled={isBusy} placeholder="f32" /></label>
+          </div>
+          <label className="field"><span>Vector Set 元素</span><textarea aria-label="Vector Set 元素" value={vectorText} onChange={(event) => setVectorText(event.target.value)} disabled={isBusy} placeholder={'每行 name|[0.1,0.2]'} spellCheck={false} /></label>
+        </>
+      ) : null}
+      {kind !== "string" && kind !== "json" && kind !== "stream" && kind !== "array" && kind !== "vectorset" ? (
         <label className="field">
           <span>{kind === "hash" || kind === "zset" ? "集合值（每行一项）" : "集合值（每行一个）"}</span>
           <textarea

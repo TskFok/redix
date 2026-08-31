@@ -7,6 +7,8 @@ interface KeyListProps {
   keys: KeySummary[];
   selectedKey: string | null;
   selectedKeys: string[];
+  arraySupported?: boolean;
+  vectorSetSupported?: boolean;
   hasMore: boolean;
   loading: boolean;
   onPatternChange: (pattern: string) => void;
@@ -23,6 +25,8 @@ export function KeyList({
   keys,
   selectedKey,
   selectedKeys,
+  arraySupported = false,
+  vectorSetSupported = false,
   hasMore,
   loading,
   onPatternChange,
@@ -75,6 +79,8 @@ export function KeyList({
           <option value="zset">Sorted Set</option>
           <option value="stream">Stream</option>
           <option value="json">JSON</option>
+          {arraySupported ? <option value="array">Array</option> : null}
+          {vectorSetSupported ? <option value="vectorset">Vector Set</option> : null}
         </select>
       </label>
 

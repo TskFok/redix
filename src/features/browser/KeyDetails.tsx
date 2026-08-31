@@ -29,8 +29,10 @@ import {
   type ModuleProbeState,
 } from "./browserState";
 import KeyEditor from "./KeyEditor";
+import ArrayDetails from "./ArrayDetails";
 import JsonPathEditor, { type JsonPathMutation } from "./JsonPathEditor";
 import StreamConsumerGroups from "./StreamConsumerGroups";
+import VectorSetDetails from "./VectorSetDetails";
 import { searchCapabilityState } from "../search/searchState";
 
 interface KeyDetailsProps {
@@ -76,6 +78,7 @@ export function KeyDetails({
   const [searchIndexesLoading, setSearchIndexesLoading] = useState(false);
   const [searchIndexesError, setSearchIndexesError] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState(detail?.key ?? "");
+  const [moduleTtlDraft, setModuleTtlDraft] = useState("");
   const [localInfo, setLocalInfo] = useState<KeyInfo | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(0);
@@ -99,6 +102,7 @@ export function KeyDetails({
     setError(null);
     setJsonPathError(null);
     setRenameDraft(detail?.key ?? "");
+    setModuleTtlDraft(detail && detail.ttl_ms >= 0 ? String(detail.ttl_ms) : "");
     setLocalInfo(null);
     onMetadataChange?.(null);
     onBusyChange?.(false);
@@ -429,6 +433,11 @@ export function KeyDetails({
     isJsonDetail &&
     moduleProbe.status === "ready" &&
     moduleProbe.capabilities.json_supported;
+  const isArrayDetail = "Array" in detail.value;
+  const isVectorSetDetail = "VectorSet" in detail.value;
+  const isModuleDetail = isArrayDetail || isVectorSetDetail;
+  const arraySummary = "Array" in detail.value ? detail.value.Array : null;
+  const vectorSetSummary = "VectorSet" in detail.value ? detail.value.VectorSet : null;
 
   return (
     <section
@@ -502,16 +511,85 @@ export function KeyDetails({
         </dl>
       ) : null}
 
-      <KeyEditor
-        key={JSON.stringify([detail.key, detail.ttl_ms, detail.value])}
-        value={detail.value}
-        ttlMs={detail.ttl_ms}
-        busy={busy}
-        error={error}
-        onSave={handleSave}
-        onDelete={handleDelete}
-        onSetTtl={handleSetTtl}
-      />
+      {isModuleDetail ? (
+        <div className="module-common-actions">
+          <div className="ttl-editor">
+            <label className="field">
+              <span>TTL（毫秒）</span>
+              <input
+                type="number"
+                min="0"
+                step="1"
+                inputMode="numeric"
+                value={moduleTtlDraft}
+                onChange={(event) => setModuleTtlDraft(event.target.value)}
+                placeholder={detail.ttl_ms < 0 ? "当前为永久" : undefined}
+                disabled={busy}
+              />
+            </label>
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={() => {
+                const parsed = moduleTtlDraft.trim() === "" ? Number.NaN : Number(moduleTtlDraft);
+                if (!Number.isInteger(parsed) || parsed < 0) {
+                  setError("TTL 必须是大于等于 0 的整数毫秒。");
+                  return;
+                }
+                void handleSetTtl(parsed);
+              }}
+              disabled={busy}
+            >
+              设置 TTL
+            </button>
+          </div>
+          <button type="button" className="button button-danger" onClick={() => void handleDelete()} disabled={busy}>
+            {busy ? "处理中…" : "删除整个键"}
+          </button>
+        </div>
+      ) : (
+        <KeyEditor
+          key={JSON.stringify([detail.key, detail.ttl_ms, detail.value])}
+          value={detail.value}
+          ttlMs={detail.ttl_ms}
+          busy={busy}
+          error={error}
+          onSave={handleSave}
+          onDelete={handleDelete}
+          onSetTtl={handleSetTtl}
+        />
+      )}
+      {isModuleDetail && error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
+      {isArrayDetail ? (
+        <ArrayDetails
+          key={`${connectionId}:${detail.key}`}
+          connectionId={connectionId}
+          keyName={detail.key}
+          initialSummary={arraySummary ? {
+            key: detail.key,
+            length: arraySummary.length,
+            count: arraySummary.count,
+            next_index: "0",
+          } : undefined}
+          disabled={busy}
+          onBusyChange={onBusyChange}
+        />
+      ) : null}
+      {isVectorSetDetail ? (
+        <VectorSetDetails
+          key={`${connectionId}:${detail.key}`}
+          connectionId={connectionId}
+          keyName={detail.key}
+          initialSummary={vectorSetSummary ? {
+            key: detail.key,
+            total: vectorSetSummary.total,
+            dimension: vectorSetSummary.dimension,
+            quantization: vectorSetSummary.quantization,
+          } : undefined}
+          disabled={busy}
+          onBusyChange={onBusyChange}
+        />
+      ) : null}
       {jsonPathUnsupported ? (
         <p className="json-path-unavailable" role="status">
           {jsonPathUnsupported}

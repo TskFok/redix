@@ -8,6 +8,7 @@ import {
 } from "./browserState";
 import KeyDetails from "./KeyDetails";
 import KeyEditor from "./KeyEditor";
+import AddKey from "./AddKey";
 import type { KeyValue, RedisValue } from "../../lib/types";
 
 const {
@@ -23,6 +24,25 @@ const {
   setKeyMock,
   deleteKeyMock,
   createKeyMock,
+  createArrayMock,
+  createVectorSetMock,
+  getArraySummaryMock,
+  getArrayRangeMock,
+  setArrayElementMock,
+  appendArrayElementsMock,
+  deleteArrayElementsMock,
+  deleteArrayRangeMock,
+  searchArrayMock,
+  aggregateArrayMock,
+  getVectorSetSummaryMock,
+  listVectorSetElementsMock,
+  getVectorSetElementMock,
+  addVectorSetElementsMock,
+  setVectorSetAttributesMock,
+  deleteVectorSetAttributesMock,
+  deleteVectorSetElementsMock,
+  searchVectorSetMock,
+  downloadVectorEmbeddingMock,
   deleteKeysMock,
   exportKeysMock,
   renameKeyMock,
@@ -48,6 +68,25 @@ const {
   setKeyMock: vi.fn(),
   deleteKeyMock: vi.fn(),
   createKeyMock: vi.fn(),
+  createArrayMock: vi.fn(),
+  createVectorSetMock: vi.fn(),
+  getArraySummaryMock: vi.fn(),
+  getArrayRangeMock: vi.fn(),
+  setArrayElementMock: vi.fn(),
+  appendArrayElementsMock: vi.fn(),
+  deleteArrayElementsMock: vi.fn(),
+  deleteArrayRangeMock: vi.fn(),
+  searchArrayMock: vi.fn(),
+  aggregateArrayMock: vi.fn(),
+  getVectorSetSummaryMock: vi.fn(),
+  listVectorSetElementsMock: vi.fn(),
+  getVectorSetElementMock: vi.fn(),
+  addVectorSetElementsMock: vi.fn(),
+  setVectorSetAttributesMock: vi.fn(),
+  deleteVectorSetAttributesMock: vi.fn(),
+  deleteVectorSetElementsMock: vi.fn(),
+  searchVectorSetMock: vi.fn(),
+  downloadVectorEmbeddingMock: vi.fn(),
   deleteKeysMock: vi.fn(),
   exportKeysMock: vi.fn(),
   renameKeyMock: vi.fn(),
@@ -74,6 +113,25 @@ vi.mock("../../lib/tauri", () => ({
   setKey: setKeyMock,
   deleteKey: deleteKeyMock,
   createKey: createKeyMock,
+  createArray: createArrayMock,
+  createVectorSet: createVectorSetMock,
+  getArraySummary: getArraySummaryMock,
+  getArrayRange: getArrayRangeMock,
+  setArrayElement: setArrayElementMock,
+  appendArrayElements: appendArrayElementsMock,
+  deleteArrayElements: deleteArrayElementsMock,
+  deleteArrayRange: deleteArrayRangeMock,
+  searchArray: searchArrayMock,
+  aggregateArray: aggregateArrayMock,
+  getVectorSetSummary: getVectorSetSummaryMock,
+  listVectorSetElements: listVectorSetElementsMock,
+  getVectorSetElement: getVectorSetElementMock,
+  addVectorSetElements: addVectorSetElementsMock,
+  setVectorSetAttributes: setVectorSetAttributesMock,
+  deleteVectorSetAttributes: deleteVectorSetAttributesMock,
+  deleteVectorSetElements: deleteVectorSetElementsMock,
+  searchVectorSet: searchVectorSetMock,
+  downloadVectorEmbedding: downloadVectorEmbeddingMock,
   deleteKeys: deleteKeysMock,
   exportKeys: exportKeysMock,
   renameKey: renameKeyMock,
@@ -160,6 +218,40 @@ describe("Redis Browser", () => {
     setKeyMock.mockResolvedValue(stringDetail);
     deleteKeyMock.mockResolvedValue(undefined);
     createKeyMock.mockResolvedValue(stringDetail);
+    createArrayMock.mockResolvedValue(stringDetail);
+    createVectorSetMock.mockResolvedValue(stringDetail);
+    getArraySummaryMock.mockResolvedValue({
+      key: "events",
+      length: "0",
+      count: "0",
+      next_index: "0",
+    });
+    getArrayRangeMock.mockResolvedValue({
+      start: "0",
+      end: "499",
+      cells: [],
+      has_more: false,
+    });
+    setArrayElementMock.mockResolvedValue({ affected: 1, key_exists: true, next_index: null });
+    appendArrayElementsMock.mockResolvedValue({ affected: 1, key_exists: true, next_index: "0" });
+    deleteArrayElementsMock.mockResolvedValue({ affected: 1, key_exists: true, next_index: null });
+    deleteArrayRangeMock.mockResolvedValue({ affected: 1, key_exists: true, next_index: null });
+    searchArrayMock.mockResolvedValue({ elements: [], total: "0" });
+    aggregateArrayMock.mockResolvedValue({ operation: "SUM", value: "0" });
+    getVectorSetSummaryMock.mockResolvedValue({
+      key: "embeddings",
+      total: "0",
+      dimension: 3,
+      quantization: "f32",
+    });
+    listVectorSetElementsMock.mockResolvedValue({ elements: [], cursor: null, has_more: false });
+    getVectorSetElementMock.mockResolvedValue({ name: "one", score: null, vector_base64: null, attributes: null });
+    addVectorSetElementsMock.mockResolvedValue(undefined);
+    setVectorSetAttributesMock.mockResolvedValue({ name: "one", score: null, vector_base64: null, attributes: null });
+    deleteVectorSetAttributesMock.mockResolvedValue(undefined);
+    deleteVectorSetElementsMock.mockResolvedValue(0);
+    searchVectorSetMock.mockResolvedValue({ matches: [], has_more: false });
+    downloadVectorEmbeddingMock.mockResolvedValue("");
     deleteKeysMock.mockResolvedValue(0);
     renameKeyMock.mockResolvedValue({ ...stringDetail, key: "user:renamed" });
     exportKeysMock.mockResolvedValue([
@@ -219,6 +311,70 @@ describe("Redis Browser", () => {
     expect(getKeyMock).toHaveBeenCalledWith({
       connection_id: "local",
       key: "user:1",
+    });
+  });
+
+  it("Array 和 Vector Set 键路由到专用详情视图", async () => {
+    const onDetailChange = vi.fn();
+    const onDeleted = vi.fn();
+    const moduleProbe = {
+      status: "ready" as const,
+      capabilities: {
+        modules: [
+          { name: "RedisArray", version: "1.0.0" },
+          { name: "RedisVSet", version: "1.0.0" },
+        ],
+        json_supported: false,
+        json_version: null,
+        search_supported: false,
+        search_version: null,
+        array_supported: true,
+        vector_set_supported: true,
+      },
+    };
+
+    const arrayDetail: KeyValue = {
+      key: "events",
+      key_type: "array",
+      ttl_ms: -1,
+      value: { Array: { length: "2", count: "2" } },
+    };
+    const vectorDetail: KeyValue = {
+      key: "embeddings",
+      key_type: "vectorset",
+      ttl_ms: -1,
+      value: { VectorSet: { total: "1", dimension: 3, quantization: "f32" } },
+    };
+
+    const { rerender } = render(
+      <KeyDetails
+        connectionId="local"
+        detail={arrayDetail}
+        loading={false}
+        moduleProbe={moduleProbe}
+        onDetailChange={onDetailChange}
+        onDeleted={onDeleted}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: "Array" })).toBeInTheDocument();
+    expect(getArraySummaryMock).toHaveBeenCalledWith({ connection_id: "local", key: "events" });
+
+    rerender(
+      <KeyDetails
+        connectionId="local"
+        detail={vectorDetail}
+        loading={false}
+        moduleProbe={moduleProbe}
+        onDetailChange={onDetailChange}
+        onDeleted={onDeleted}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: "Vector Set" })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(getVectorSetSummaryMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "embeddings",
+      });
     });
   });
 
@@ -1001,6 +1157,90 @@ describe("Redis Browser", () => {
         ttl_ms: null,
       });
     });
+  });
+
+  it("新增 Array 键使用模块 typed command", async () => {
+    const onCreated = vi.fn();
+    createArrayMock.mockResolvedValue({
+      key: "events",
+      key_type: "array",
+      ttl_ms: -1,
+      value: { Array: { length: "2", count: "2" } },
+    });
+
+    render(
+      <AddKey
+        connectionId="local"
+        busy={false}
+        arraySupported
+        vectorSetSupported={false}
+        onCreated={onCreated}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "events" } });
+    fireEvent.change(screen.getByLabelText("数据类型"), { target: { value: "array" } });
+    fireEvent.change(screen.getByLabelText("Array 起始索引"), { target: { value: "4" } });
+    fireEvent.change(screen.getByLabelText("Array 值"), { target: { value: "a\nb" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+
+    await waitFor(() => {
+      expect(createArrayMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "events",
+        mode: "contiguous",
+        start_index: "4",
+        values: ["a", "b"],
+        elements: [],
+        ttl_ms: null,
+      });
+    });
+    expect(onCreated).toHaveBeenCalled();
+  });
+
+  it("新增 Vector Set 键使用维度和向量 typed command", async () => {
+    const onCreated = vi.fn();
+    createVectorSetMock.mockResolvedValue({
+      key: "embeddings",
+      key_type: "vectorset",
+      ttl_ms: -1,
+      value: { VectorSet: { total: "1", dimension: 3, quantization: "f32" } },
+    });
+
+    render(
+      <AddKey
+        connectionId="local"
+        busy={false}
+        arraySupported={false}
+        vectorSetSupported
+        onCreated={onCreated}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "embeddings" } });
+    fireEvent.change(screen.getByLabelText("数据类型"), { target: { value: "vectorset" } });
+    fireEvent.change(screen.getByLabelText("Vector Set 维度"), { target: { value: "3" } });
+    fireEvent.change(screen.getByLabelText("Vector Set 元素"), { target: { value: "one|[0.1,0.2,0.3]" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+
+    await waitFor(() => {
+      expect(createVectorSetMock).toHaveBeenCalledWith({
+        connection_id: "local",
+        key: "embeddings",
+        dimension: 3,
+        quantization: null,
+        elements: [
+          {
+            name: "one",
+            vector_values: [0.1, 0.2, 0.3],
+            vector_fp32_base64: null,
+            attributes: null,
+          },
+        ],
+        ttl_ms: null,
+      });
+    });
+    expect(onCreated).toHaveBeenCalled();
   });
 
   it("拒绝空键名和后端重复键错误", async () => {

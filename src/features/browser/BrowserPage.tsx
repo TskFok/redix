@@ -352,6 +352,10 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   };
 
   const listBusy = state.loading || detailLoading || detailActionLoading;
+  const arraySupported =
+    moduleProbe.status === "ready" && moduleProbe.capabilities.array_supported;
+  const vectorSetSupported =
+    moduleProbe.status === "ready" && moduleProbe.capabilities.vector_set_supported;
 
   return (
     <section className="browser-page" aria-labelledby="browser-page-title" aria-busy={listBusy}>
@@ -408,6 +412,8 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
         <AddKey
           connectionId={connectionId}
           busy={listBusy}
+          arraySupported={arraySupported}
+          vectorSetSupported={vectorSetSupported}
           onCreated={handleCreated}
           onCancel={() => setShowAddKey(false)}
         />
@@ -420,6 +426,8 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
           keys={state.keys}
           selectedKey={state.selectedKey}
           selectedKeys={state.selectedKeys}
+          arraySupported={arraySupported}
+          vectorSetSupported={vectorSetSupported}
           hasMore={state.hasMore}
           loading={listBusy}
           onPatternChange={handlePatternChange}

@@ -13,7 +13,9 @@
 - String、Hash、List、Set、Sorted Set、Stream 的基础读取、编辑、删除和 TTL 操作；Stream 单次读取最多 500 条记录。
 - Stream Consumer Group 支持创建/删除 Group、读取消费者与 Pending 列表、确认 Pending 条目和删除消费者；Pending 单次最多读取 500 条。
 - RedisJSON 根文档的读取和编辑，以及路径级 `JSON.GET`/`JSON.SET`/`JSON.DEL`/`JSON.ARRAPPEND`；未安装 RedisJSON 模块时返回稳定的 `UNSUPPORTED_DATA_TYPE` 错误。
-- 连接级 `MODULE LIST` 模块能力探测与 session 级缓存；探测失败或未检测到 RedisJSON 时，不阻断普通 Browser 流程，RedisJSON 路径编辑器稳定降级为不可用提示。
+- Redis Array 第一批本地能力：连续/稀疏创建、`ARGETRANGE`/`ARSCAN` 读取、`ARSET` 编辑与追加、`ARDEL`/`ARDELRANGE` 删除、`ARGREP` 搜索和 `AROP` 聚合；数组索引保持十进制字符串，范围、批量和响应大小受固定上限约束。
+- Redis Vector Set 第一批本地能力：`VADD` 创建与批量添加、`VCARD`/`VINFO` 摘要、`VRANGE` 分页、`VEMB`/`VGETATTR` 读取、`VSETATTR` 属性编辑、`VREM` 删除、FP32 向量下载和 `VSIM` 相似度查询；维度、元素数、属性、top-k 和响应大小受固定上限约束。
+- 连接级 `MODULE LIST` 与命令集能力探测、session 级缓存；探测失败或未检测到 RedisJSON、Array 或 Vector Set 时，不阻断普通 Browser 流程，只让对应模块操作稳定降级为不可用提示。
 - RedisSearch / Query 第一批本地能力：在检测到 Search 2.0+ 时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引管理、受限的 `FT.SEARCH ... NOCONTENT LIMIT` 分页查询，以及 Browser Hash/JSON 键详情中的索引关联摘要；输入、索引数量、结果数量和响应大小均有固定上限，查询文本不持久化。模块缺失或版本不满足时仅 Search / Query 工作区局部降级。
 - Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
 - Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
@@ -32,10 +34,10 @@
 - Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry 及其他云托管 Redis 产品。
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
 - Cluster、Sentinel、拓扑发现或拓扑 fan-out、SSH、远程托管实例和云资源管理。
-- Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档/路径第一批、RedisSearch / Query 第一批与 Stream 基础能力除外）。
+- 尚未实现的 Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档/路径第一批、RedisSearch / Query、Array、Vector Set 与 Stream 基础能力除外）。
 - Stream 实时消费、阻塞式 `XREADGROUP`、`XCLAIM`/`XAUTOCLAIM`、Claim 流程、Profiler 日志文件/历史持久化/拓扑 fan-out 和超过 500 条记录的分页编辑。
 - Monaco、远程插件、远程插件运行时、云端命令目录和 SQL。
-- Vector、Array、CLI 独立会话，以及其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
+- CLI 独立会话，以及其他未实现的运营分析能力和模块专用编辑器；Slow Log / Pub/Sub / 基础 Profiler 已按本文件允许项实现。
 
 ## 人工审查清单
 
@@ -73,4 +75,10 @@ RedisSearch / Query ignored 流程同样使用 `REDIX_TEST_REDIS_STACK_URL`：
 
 ```bash
 cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration redis_stack_search_flow_when_redis_stack_is_available -- --ignored --nocapture
+```
+
+Array / Vector Set ignored 流程同样使用 `REDIX_TEST_REDIS_STACK_URL`，会按服务端实际命令能力分别执行并清理唯一测试键：
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --test redis_integration redis_stack_array_and_vector_set_flow_when_redis_stack_is_available -- --ignored --nocapture
 ```
