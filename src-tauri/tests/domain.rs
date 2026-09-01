@@ -156,6 +156,19 @@ fn cluster_rejects_invalid_duplicate_oversized_and_drifting_seeds() {
 }
 
 #[test]
+fn cluster_rejects_an_explicitly_empty_seed_list_with_invalid_connection_code() {
+    let mut profile = valid_profile();
+    profile.cluster = Some(ClusterConfig {
+        nodes: vec![],
+        read_from_replicas: false,
+    });
+
+    let error = profile.validate().unwrap_err();
+    assert_eq!(error, AppError::InvalidConnection);
+    assert_eq!(error.code(), "INVALID_CONNECTION");
+}
+
+#[test]
 fn standalone_tls_and_ssh_are_valid_but_cluster_ssh_is_unsupported_at_target_selection() {
     let mut profile = valid_profile();
     profile.tls = true;

@@ -206,6 +206,34 @@ async fn unsupported_topology_and_new_ssh_combinations_fail_before_network_io() 
     }
 }
 
+#[tokio::test]
+async fn ssh_password_authentication_is_rejected_before_any_client_or_socket_is_created() {
+    let mut profile = support::valid_profile();
+    profile.host = "invalid.example".into();
+    profile.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "operator",
+            "auth_method": "password", "has_password": true
+        }))
+        .unwrap(),
+    );
+    let service = RedisService::new(
+        Arc::new(Profiles(Mutex::new(vec![profile.clone()]))),
+        Arc::new(Secrets(ConnectionSecrets {
+            ssh_password: Some("ssh-secret".into()),
+            ..Default::default()
+        })),
+    );
+
+    assert_eq!(
+        service
+            .test_connection(&profile, &ConnectionSecrets::default())
+            .await
+            .unwrap_err(),
+        AppError::UnsupportedFeature
+    );
+}
+
 struct Profiles(Mutex<Vec<ConnectionProfile>>);
 impl ProfileRepository for Profiles {
     fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
