@@ -5,14 +5,14 @@ use redix_lib::{
         command_catalog, is_sensitive_command, normalize_json_path, parse_info_sections,
         parse_keyspace_line, search_version_supported, validate_json_array_append,
         validate_json_path, AcknowledgeStreamPendingEntriesInput, AppSettings,
-        AppendJsonArrayInput, ArrayCreateMode, ArrayElement, ArrayRangeInput, ConnectionProfile,
-        CreateArrayInput, CreateKeyInput, CreateSearchIndexInput, DeleteKeysInput, ExportedKey,
-        GetJsonPathInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
-        GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput, ModuleCapabilities,
-        ModuleSummary, PubSubTopic, QueryLibraryItemInput, RedisValue, RenameKeyInput,
-        ScanKeysInput, SearchFieldType, SearchIndexFieldInput, SearchKeyType, SearchQueryInput,
-        SelectDatabaseInput, SetJsonPathInput, StartProfilerInput, StartPubSubInput,
-        StopProfilerInput, StreamEntry, StreamField, VectorSetElementPayload,
+        AppendJsonArrayInput, ArrayCreateMode, ArrayElement, ArrayRangeInput, ClusterConfig,
+        ConnectionEndpoint, ConnectionProfile, ConnectionTarget, CreateArrayInput, CreateKeyInput,
+        CreateSearchIndexInput, DeleteKeysInput, ExportedKey, GetJsonPathInput, GetSlowLogsInput,
+        GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput, ImportKeysInput, KeyInfoInput,
+        ModuleCapabilities, ModuleSummary, PubSubTopic, QueryLibraryItemInput, RedisValue,
+        RenameKeyInput, ScanKeysInput, SearchFieldType, SearchIndexFieldInput, SearchKeyType,
+        SearchQueryInput, SelectDatabaseInput, SetJsonPathInput, StartProfilerInput,
+        StartPubSubInput, StopProfilerInput, StreamEntry, StreamField, VectorSetElementPayload,
         VectorSimilarityQueryInput,
     },
     error::AppError,
@@ -44,6 +44,7 @@ fn rejects_empty_host_zero_port_and_database_above_fifteen() {
     let profile = ConnectionProfile {
         ssh: None,
         sentinel: None,
+        cluster: None,
         id: "local".into(),
         name: "Local".into(),
         host: "".into(),
@@ -75,6 +76,41 @@ fn rejects_an_invalid_profile_from_the_shared_fixture() {
 #[test]
 fn accepts_a_valid_connection_profile() {
     assert_eq!(valid_profile().validate(), Ok(()));
+}
+
+#[test]
+fn cluster_profile_is_db_zero_and_cannot_silently_mix_topologies() {
+    let mut profile = valid_profile();
+    profile.cluster = Some(ClusterConfig {
+        nodes: vec![ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port: 7000,
+        }],
+        read_from_replicas: false,
+    });
+    profile.host = "127.0.0.1".into();
+    profile.port = 7000;
+
+    assert_eq!(
+        ConnectionTarget::try_from(&profile).unwrap().kind(),
+        "cluster"
+    );
+
+    profile.database = 1;
+    assert_eq!(profile.validate(), Err(AppError::InvalidConnection));
+
+    profile.database = 0;
+    profile.sentinel = Some(redix_lib::domain::SentinelConfig {
+        master_name: "primary".into(),
+        nodes: vec![ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port: 26379,
+        }],
+        username: None,
+        has_password: false,
+        tls: false,
+    });
+    assert_eq!(profile.validate(), Err(AppError::InvalidConnection));
 }
 
 #[test]

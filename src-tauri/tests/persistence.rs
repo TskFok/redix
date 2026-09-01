@@ -16,8 +16,9 @@ use redix_lib::{
     },
     error::AppError,
     persistence::{
-        ConnectionSecrets, JsonDocumentStore, JsonProfileRepository, ProfileRepository,
-        SecretStore, SystemKeyring, VersionedJsonDocument,
+        decode_stored_secret, migrate_legacy_ssh_paths, ConnectionSecrets, JsonDocumentStore,
+        JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring,
+        VersionedJsonDocument,
     },
 };
 use support::valid_profile;
@@ -27,6 +28,29 @@ static CURRENT_DIRECTORY_LOCK: Mutex<()> = Mutex::new(());
 #[derive(Default)]
 struct InMemorySecretStore {
     values: Mutex<HashMap<String, ConnectionSecrets>>,
+}
+
+struct InMemoryProfileRepository {
+    values: Mutex<Vec<redix_lib::domain::ConnectionProfile>>,
+}
+
+impl InMemoryProfileRepository {
+    fn new(values: Vec<redix_lib::domain::ConnectionProfile>) -> Self {
+        Self {
+            values: Mutex::new(values),
+        }
+    }
+}
+
+impl ProfileRepository for InMemoryProfileRepository {
+    fn load(&self) -> Result<Vec<redix_lib::domain::ConnectionProfile>, AppError> {
+        Ok(self.values.lock().unwrap().clone())
+    }
+
+    fn save(&self, profiles: &[redix_lib::domain::ConnectionProfile]) -> Result<(), AppError> {
+        *self.values.lock().unwrap() = profiles.to_vec();
+        Ok(())
+    }
 }
 
 impl SecretStore for InMemorySecretStore {
@@ -349,6 +373,70 @@ fn in_memory_secret_store_supports_write_read_and_delete() {
     );
     secrets.delete("local").unwrap();
     assert_eq!(secrets.read("local").unwrap(), None);
+}
+
+#[test]
+fn ssh_secrets_round_trip_without_entering_profile_json() {
+    let secrets = ConnectionSecrets {
+        ssh_password: Some("ssh-secret".into()),
+        ssh_private_key: Some("PRIVATE".into()),
+        ssh_passphrase: Some("passphrase".into()),
+        ssh_identity_file: Some("/private/key".into()),
+        ssh_known_hosts_file: Some("/private/known_hosts".into()),
+        ..Default::default()
+    };
+    let encoded = serde_json::to_string(&secrets).unwrap();
+    assert_eq!(decode_stored_secret(&encoded).unwrap(), secrets);
+
+    let mut profile = valid_profile();
+    profile.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example",
+            "port": 22,
+            "username": "operator",
+            "has_password": true,
+            "has_private_key": true,
+            "has_passphrase": true,
+            "has_identity_file": true,
+            "has_known_hosts_file": true
+        }))
+        .unwrap(),
+    );
+    let encoded_profile = serde_json::to_string(&profile).unwrap();
+    assert!(!encoded_profile.contains("ssh-secret"));
+    assert!(!encoded_profile.contains("PRIVATE"));
+    assert!(!encoded_profile.contains("/private/"));
+}
+
+#[test]
+fn legacy_ssh_paths_copy_to_secrets_before_profiles_are_rewritten() {
+    let mut profile = valid_profile();
+    profile.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example",
+            "port": 22,
+            "username": "operator",
+            "identity_file": "/private/key",
+            "known_hosts_file": "/private/known_hosts"
+        }))
+        .unwrap(),
+    );
+    let repository = InMemoryProfileRepository::new(vec![profile]);
+    let secrets = InMemorySecretStore::default();
+
+    migrate_legacy_ssh_paths(&repository, &secrets).unwrap();
+
+    let migrated = repository.load().unwrap();
+    let ssh = migrated[0].ssh.as_ref().unwrap();
+    assert!(ssh.has_identity_file);
+    assert!(ssh.has_known_hosts_file);
+    assert!(!serde_json::to_string(ssh).unwrap().contains("/private/"));
+    let stored = secrets.read("local").unwrap().unwrap();
+    assert_eq!(stored.ssh_identity_file.as_deref(), Some("/private/key"));
+    assert_eq!(
+        stored.ssh_known_hosts_file.as_deref(),
+        Some("/private/known_hosts")
+    );
 }
 
 #[test]

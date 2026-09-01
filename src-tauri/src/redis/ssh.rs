@@ -149,10 +149,10 @@ fn ssh_arguments(
         "-l".into(),
         ssh.username.clone(),
     ]);
-    if let Some(identity) = &ssh.identity_file {
+    if let Some(identity) = &ssh.legacy_identity_file {
         args.extend(["-i".into(), identity.clone()]);
     }
-    if let Some(known_hosts) = &ssh.known_hosts_file {
+    if let Some(known_hosts) = &ssh.legacy_known_hosts_file {
         // OpenSSH parses -o values itself; quote paths containing spaces and escapes.
         let escaped = known_hosts.replace('\\', "\\\\").replace('"', "\\\"");
         args.extend(["-o".into(), format!("UserKnownHostsFile=\"{escaped}\"")]);

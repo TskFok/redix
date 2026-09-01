@@ -106,6 +106,7 @@ async fn isolated_server() -> (Server, RedisService, redis::aio::MultiplexedConn
         verify_server_cert: true,
         ssh: None,
         sentinel: None,
+        cluster: None,
         ca_certificate_name: None,
         client_certificate_name: None,
         has_ca_certificate: false,

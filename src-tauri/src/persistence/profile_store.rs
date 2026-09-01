@@ -11,13 +11,59 @@ use std::os::windows::ffi::OsStrExt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{domain::ConnectionProfile, error::AppError};
+use crate::{domain::ConnectionProfile, error::AppError, persistence::SecretStore};
 
 static TEMPORARY_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub trait ProfileRepository: Send + Sync {
     fn load(&self) -> Result<Vec<ConnectionProfile>, AppError>;
     fn save(&self, profiles: &[ConnectionProfile]) -> Result<(), AppError>;
+}
+
+pub fn migrate_legacy_ssh_paths(
+    profiles: &dyn ProfileRepository,
+    secrets: &dyn SecretStore,
+) -> Result<(), AppError> {
+    let loaded = profiles.load()?;
+    let mut migrated = loaded.clone();
+    let mut changed = false;
+
+    for profile in &mut migrated {
+        let Some(ssh) = profile.ssh.as_mut() else {
+            continue;
+        };
+        let Some(identity_file) = ssh.legacy_identity_file.clone() else {
+            if ssh.legacy_known_hosts_file.is_none() {
+                continue;
+            }
+            // The known-hosts-only case is handled below without duplicating the copy-first path.
+            let mut stored = secrets.read(&profile.id)?.unwrap_or_default();
+            stored.ssh_known_hosts_file = ssh.legacy_known_hosts_file.clone();
+            secrets.write(&profile.id, &stored)?;
+            ssh.has_known_hosts_file = true;
+            ssh.legacy_known_hosts_file = None;
+            changed = true;
+            continue;
+        };
+
+        let mut stored = secrets.read(&profile.id)?.unwrap_or_default();
+        stored.ssh_identity_file = Some(identity_file);
+        if let Some(known_hosts_file) = ssh.legacy_known_hosts_file.clone() {
+            stored.ssh_known_hosts_file = Some(known_hosts_file);
+        }
+        // Persist the copied value before removing it from the profile. A retry is idempotent.
+        secrets.write(&profile.id, &stored)?;
+        ssh.has_identity_file = true;
+        ssh.has_known_hosts_file |= ssh.legacy_known_hosts_file.is_some();
+        ssh.legacy_identity_file = None;
+        ssh.legacy_known_hosts_file = None;
+        changed = true;
+    }
+
+    if changed {
+        profiles.save(&migrated)?;
+    }
+    Ok(())
 }
 
 pub struct JsonProfileRepository {

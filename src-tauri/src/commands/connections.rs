@@ -177,6 +177,7 @@ pub(crate) async fn import_connections_inner(
         let profile = ConnectionProfile {
             ssh: entry.ssh,
             sentinel: entry.sentinel,
+            cluster: entry.cluster,
             id: uuid::Uuid::new_v4().to_string(),
             name: entry.name.clone(),
             host: entry.host,
@@ -589,6 +590,7 @@ mod tests {
         ConnectionProfile {
             ssh: None,
             sentinel: None,
+            cluster: None,
             id: id.into(),
             name: name.into(),
             host: "127.0.0.1".into(),
@@ -785,7 +787,7 @@ mod tests {
         let document = export_connections_inner(&state).await.unwrap();
         let raw = serde_json::to_string(&document).unwrap();
 
-        assert_eq!(document.version, 1);
+        assert_eq!(document.version, 2);
         assert!(!raw.contains("password"));
         assert!(!raw.contains("BEGIN CERTIFICATE"));
         assert!(!raw.contains("BEGIN PRIVATE KEY"));

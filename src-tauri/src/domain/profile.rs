@@ -23,11 +23,20 @@ pub struct SentinelConfig {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ClusterConfig {
+    pub nodes: Vec<ConnectionEndpoint>,
+    #[serde(default)]
+    pub read_from_replicas: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ConnectionProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ssh: Option<SshConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sentinel: Option<SentinelConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<ClusterConfig>,
     pub id: String,
     pub name: String,
     pub host: String,
@@ -49,15 +58,36 @@ pub struct ConnectionProfile {
     pub has_client_certificate: bool,
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SshAuthMethod {
+    #[default]
+    Agent,
+    Password,
+    PrivateKey,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SshConfig {
     pub host: String,
     pub port: u16,
     pub username: String,
     #[serde(default)]
-    pub identity_file: Option<String>,
+    pub auth_method: SshAuthMethod,
     #[serde(default)]
-    pub known_hosts_file: Option<String>,
+    pub has_password: bool,
+    #[serde(default)]
+    pub has_private_key: bool,
+    #[serde(default)]
+    pub has_passphrase: bool,
+    #[serde(default)]
+    pub has_identity_file: bool,
+    #[serde(default)]
+    pub has_known_hosts_file: bool,
+    #[serde(default, rename = "identity_file", skip_serializing)]
+    pub(crate) legacy_identity_file: Option<String>,
+    #[serde(default, rename = "known_hosts_file", skip_serializing)]
+    pub(crate) legacy_known_hosts_file: Option<String>,
 }
 
 impl SshConfig {
@@ -76,9 +106,9 @@ impl SshConfig {
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
             || self
-                .identity_file
+                .legacy_identity_file
                 .iter()
-                .chain(self.known_hosts_file.iter())
+                .chain(self.legacy_known_hosts_file.iter())
                 .any(|path| {
                     !std::path::Path::new(path).is_absolute() || path.contains(['\n', '\r', '\0'])
                 })
@@ -100,28 +130,48 @@ impl ConnectionProfile {
             return Err(AppError::InvalidConnection);
         }
 
+        if self.sentinel.is_some() && self.cluster.is_some() {
+            return Err(AppError::InvalidConnection);
+        }
+
         if let Some(sentinel) = &self.sentinel {
-            if sentinel.master_name.trim().is_empty()
-                || sentinel.nodes.is_empty()
-                || sentinel.nodes.len() > 32
-                || sentinel
-                    .nodes
-                    .iter()
-                    .any(|node| node.host.trim().is_empty() || node.port == 0)
-            {
+            validate_topology_nodes(&sentinel.nodes)?;
+            if sentinel.master_name.trim().is_empty() {
+                return Err(AppError::InvalidConnection);
+            }
+        }
+
+        if let Some(cluster) = &self.cluster {
+            validate_topology_nodes(&cluster.nodes)?;
+            let seed = cluster.nodes.first().ok_or(AppError::InvalidConnection)?;
+            if self.database != 0 || self.host != seed.host || self.port != seed.port {
                 return Err(AppError::InvalidConnection);
             }
         }
 
         if let Some(ssh) = &self.ssh {
             ssh.validate()?;
-            if self.tls || self.sentinel.is_some() {
+            if self.tls || self.cluster.is_some() {
                 return Err(AppError::InvalidConnection);
             }
         }
 
         Ok(())
     }
+}
+
+fn validate_topology_nodes(nodes: &[ConnectionEndpoint]) -> Result<(), AppError> {
+    if nodes.is_empty() || nodes.len() > 32 {
+        return Err(AppError::InvalidConnection);
+    }
+
+    let mut seen = std::collections::HashSet::with_capacity(nodes.len());
+    for node in nodes {
+        if node.host.trim().is_empty() || node.port == 0 || !seen.insert((&node.host, node.port)) {
+            return Err(AppError::InvalidConnection);
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

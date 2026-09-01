@@ -771,6 +771,7 @@ fn integration_profile(url: &str) -> (ConnectionProfile, Option<String>) {
     let profile = ConnectionProfile {
         ssh: None,
         sentinel: None,
+        cluster: None,
         id: "integration".into(),
         name: "Integration".into(),
         host,

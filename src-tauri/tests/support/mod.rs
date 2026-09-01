@@ -4,6 +4,7 @@ pub fn valid_profile() -> ConnectionProfile {
     ConnectionProfile {
         ssh: None,
         sentinel: None,
+        cluster: None,
         id: "local".into(),
         name: "Local".into(),
         host: "127.0.0.1".into(),

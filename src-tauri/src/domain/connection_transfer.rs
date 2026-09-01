@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::{ConnectionEndpoint, ConnectionProfile, SentinelConfig, SshConfig};
+use super::{ClusterConfig, ConnectionEndpoint, ConnectionProfile, SentinelConfig, SshConfig};
 use crate::error::AppError;
 
-pub const CONNECTION_EXPORT_VERSION: u32 = 1;
+pub const CONNECTION_EXPORT_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionExportDocument {
@@ -15,9 +15,11 @@ pub struct ConnectionExportDocument {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectionExportProfile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ssh: Option<SshConfig>,
+    pub ssh: Option<SshExportConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sentinel: Option<SentinelExportConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cluster: Option<ClusterConfig>,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -27,6 +29,43 @@ pub struct ConnectionExportProfile {
     pub verify_server_cert: bool,
     pub ca_certificate_name: Option<String>,
     pub client_certificate_name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SshExportConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    #[serde(default)]
+    pub auth_method: super::SshAuthMethod,
+    #[serde(default)]
+    pub has_password: bool,
+    #[serde(default)]
+    pub has_private_key: bool,
+    #[serde(default)]
+    pub has_passphrase: bool,
+    #[serde(default)]
+    pub has_identity_file: bool,
+    #[serde(default)]
+    pub has_known_hosts_file: bool,
+}
+
+impl From<SshExportConfig> for SshConfig {
+    fn from(ssh: SshExportConfig) -> Self {
+        Self {
+            host: ssh.host,
+            port: ssh.port,
+            username: ssh.username,
+            auth_method: ssh.auth_method,
+            has_password: ssh.has_password,
+            has_private_key: ssh.has_private_key,
+            has_passphrase: ssh.has_passphrase,
+            has_identity_file: ssh.has_identity_file,
+            has_known_hosts_file: ssh.has_known_hosts_file,
+            legacy_identity_file: None,
+            legacy_known_hosts_file: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,7 +83,19 @@ impl ConnectionExportDocument {
             connections: profiles
                 .iter()
                 .map(|profile| ConnectionExportProfile {
-                    ssh: profile.ssh.clone(),
+                    ssh: profile.ssh.as_ref().map(|ssh| SshExportConfig {
+                        host: ssh.host.clone(),
+                        port: ssh.port,
+                        username: ssh.username.clone(),
+                        auth_method: ssh.auth_method,
+                        has_password: ssh.has_password,
+                        has_private_key: ssh.has_private_key,
+                        has_passphrase: ssh.has_passphrase,
+                        has_identity_file: ssh.has_identity_file
+                            || ssh.legacy_identity_file.is_some(),
+                        has_known_hosts_file: ssh.has_known_hosts_file
+                            || ssh.legacy_known_hosts_file.is_some(),
+                    }),
                     sentinel: profile
                         .sentinel
                         .as_ref()
@@ -54,6 +105,7 @@ impl ConnectionExportDocument {
                             username: sentinel.username.clone(),
                             tls: sentinel.tls,
                         }),
+                    cluster: profile.cluster.clone(),
                     name: profile.name.clone(),
                     host: profile.host.clone(),
                     port: profile.port,
@@ -99,6 +151,7 @@ pub struct NormalizedImportDocument {
 pub struct NormalizedImportEntry {
     pub ssh: Option<SshConfig>,
     pub sentinel: Option<SentinelConfig>,
+    pub cluster: Option<ClusterConfig>,
     pub source_index: usize,
     pub name: String,
     pub host: String,
@@ -139,7 +192,7 @@ fn top_level_entries(value: Value) -> Result<Vec<Value>, AppError> {
         Value::Object(object) => {
             if let Some(version) = object.get("version") {
                 let version = parse_u32(version).ok_or(AppError::InvalidInput)?;
-                if version != CONNECTION_EXPORT_VERSION {
+                if !matches!(version, 1 | CONNECTION_EXPORT_VERSION) {
                     return Err(AppError::InvalidInput);
                 }
             }
@@ -189,7 +242,8 @@ fn normalize_entry(source_index: usize, value: Value) -> NormalizedImportEntry {
     NormalizedImportEntry {
         ssh: object
             .and_then(|object| object.get("ssh"))
-            .and_then(|value| serde_json::from_value::<SshConfig>(value.clone()).ok()),
+            .and_then(|value| serde_json::from_value::<SshExportConfig>(value.clone()).ok())
+            .map(SshConfig::from),
         sentinel: object
             .and_then(|object| object.get("sentinel"))
             .and_then(|value| serde_json::from_value::<SentinelConfig>(value.clone()).ok())
@@ -197,6 +251,9 @@ fn normalize_entry(source_index: usize, value: Value) -> NormalizedImportEntry {
                 sentinel.has_password = false;
                 sentinel
             }),
+        cluster: object
+            .and_then(|object| object.get("cluster"))
+            .and_then(|value| serde_json::from_value::<ClusterConfig>(value.clone()).ok()),
         source_index,
         name,
         host,
@@ -348,13 +405,18 @@ fn has_non_empty_value(value: &Value) -> bool {
 
 fn unsupported_connection_type(object: &Map<String, Value>) -> Option<String> {
     if let Some(value) = object.get("ssh").filter(|value| !value.is_null()) {
-        if serde_json::from_value::<SshConfig>(value.clone()).is_err() {
+        if serde_json::from_value::<SshExportConfig>(value.clone()).is_err() {
             return Some("ssh".to_owned());
         }
     }
     if let Some(value) = object.get("sentinel").filter(|value| !value.is_null()) {
         if serde_json::from_value::<SentinelConfig>(value.clone()).is_err() {
             return Some("sentinel".to_owned());
+        }
+    }
+    if let Some(value) = object.get("cluster").filter(|value| !value.is_null()) {
+        if serde_json::from_value::<ClusterConfig>(value.clone()).is_err() {
+            return Some("cluster".to_owned());
         }
     }
     if let Some(connection_type) = first_string(object, &["connectionType", "type"]) {
@@ -370,7 +432,6 @@ fn unsupported_connection_type(object: &Map<String, Value>) -> Option<String> {
         "sentinelOptions",
         "sshOptions",
         "cloudDetails",
-        "cluster",
     ] {
         if object.contains_key(key) {
             return Some(key.to_owned());
@@ -451,6 +512,7 @@ mod tests {
         ConnectionProfile {
             ssh: None,
             sentinel: None,
+            cluster: None,
             id: "secret-id".into(),
             name: "TLS Redis".into(),
             host: "redis.example".into(),

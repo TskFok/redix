@@ -1,7 +1,10 @@
 mod support;
 
 use redix_lib::{
-    domain::{ConnectionExportDocument, ConnectionProfile, SelectDatabaseInput},
+    domain::{
+        ClusterConfig, ConnectionEndpoint, ConnectionExportDocument, ConnectionProfile,
+        SelectDatabaseInput,
+    },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
     redis::{RedisOperations, RedisService},
@@ -32,6 +35,40 @@ fn sentinel_topology_round_trips_without_password_flags_in_export() {
         26379
     );
     assert!(!exported.to_string().contains("password"));
+}
+
+#[test]
+fn export_v2_preserves_cluster_but_import_still_accepts_v1() {
+    let mut profile = support::valid_profile();
+    profile.host = "127.0.0.1".into();
+    profile.port = 7000;
+    profile.cluster = Some(ClusterConfig {
+        nodes: vec![ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port: 7000,
+        }],
+        read_from_replicas: true,
+    });
+
+    let exported = ConnectionExportDocument::from_profiles(&[profile]);
+    assert_eq!(exported.version, 2);
+    assert!(exported.connections[0].cluster.is_some());
+
+    let v1 = serde_json::json!({
+        "version": 1,
+        "connections": [{
+            "name": "legacy",
+            "host": "127.0.0.1",
+            "port": 6379,
+            "username": null,
+            "database": 0,
+            "tls": false,
+            "verify_server_cert": true,
+            "ca_certificate_name": null,
+            "client_certificate_name": null
+        }]
+    });
+    assert!(redix_lib::domain::normalize_import_document(&v1.to_string()).is_ok());
 }
 
 #[test]
@@ -78,10 +115,10 @@ fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_co
     );
     assert!(profile.validate().is_ok());
     let export = serde_json::to_value(ConnectionExportDocument::from_profiles(&[profile])).unwrap();
-    assert_eq!(
-        export["connections"][0]["ssh"]["identity_file"],
-        "/tmp/redix-id"
-    );
+    assert!(export["connections"][0]["ssh"]["has_identity_file"]
+        .as_bool()
+        .unwrap());
+    assert!(export.to_string().contains("/tmp/redix-id") == false);
     let mut imported = export;
     imported["connections"][0]["ssh"]["private_key"] =
         serde_json::json!("private-key-must-not-import");
@@ -107,7 +144,7 @@ fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_co
     assert!(serde_json::from_value::<ConnectionProfile>(value)
         .unwrap()
         .validate()
-        .is_err());
+        .is_ok());
 }
 
 struct Profiles(Mutex<Vec<ConnectionProfile>>);

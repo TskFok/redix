@@ -8,7 +8,9 @@ pub mod error;
 pub mod persistence;
 pub mod redis;
 
-use persistence::{JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring};
+use persistence::{
+    migrate_legacy_ssh_paths, JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring,
+};
 
 pub struct AppState {
     pub(crate) profiles: Arc<dyn ProfileRepository>,
@@ -54,6 +56,7 @@ pub fn run() {
                 data_dir.join("connections.json"),
             ));
             let secrets: Arc<dyn SecretStore> = Arc::new(SystemKeyring::new());
+            migrate_legacy_ssh_paths(profiles.as_ref(), secrets.as_ref())?;
             app.manage(AppState::with_data_dir(profiles, secrets, data_dir));
             Ok(())
         })

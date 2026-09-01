@@ -145,6 +145,7 @@ async fn isolated_stream_pages_and_mutations_preserve_groups_pending_and_ttl() {
             verify_server_cert: true,
             ssh: None,
             sentinel: None,
+            cluster: None,
             ca_certificate_name: None,
             client_certificate_name: None,
             has_ca_certificate: false,

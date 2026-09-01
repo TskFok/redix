@@ -12,6 +12,16 @@ pub struct ConnectionSecrets {
     pub client_certificate: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub client_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_password: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_private_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_passphrase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_identity_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_known_hosts_file: Option<String>,
 }
 
 impl ConnectionSecrets {
@@ -21,6 +31,11 @@ impl ConnectionSecrets {
             && self.ca_certificate.is_none()
             && self.client_certificate.is_none()
             && self.client_key.is_none()
+            && self.ssh_password.is_none()
+            && self.ssh_private_key.is_none()
+            && self.ssh_passphrase.is_none()
+            && self.ssh_identity_file.is_none()
+            && self.ssh_known_hosts_file.is_none()
     }
 
     pub fn has_client_certificate(&self) -> bool {
@@ -89,7 +104,7 @@ impl SecretStore for SystemKeyring {
     }
 }
 
-fn decode_stored_secret(value: &str) -> Result<ConnectionSecrets, AppError> {
+pub fn decode_stored_secret(value: &str) -> Result<ConnectionSecrets, AppError> {
     let parsed = serde_json::from_str::<serde_json::Value>(value).ok();
     if let Some(object) = parsed.as_ref().and_then(serde_json::Value::as_object) {
         let known_keys = [
@@ -98,6 +113,11 @@ fn decode_stored_secret(value: &str) -> Result<ConnectionSecrets, AppError> {
             "ca_certificate",
             "client_certificate",
             "client_key",
+            "ssh_password",
+            "ssh_private_key",
+            "ssh_passphrase",
+            "ssh_identity_file",
+            "ssh_known_hosts_file",
         ];
         if object.keys().any(|key| known_keys.contains(&key.as_str())) {
             return serde_json::from_value(parsed.expect("parsed value must exist"))

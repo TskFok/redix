@@ -11,6 +11,7 @@ pub mod observability;
 pub mod profile;
 pub mod search;
 pub mod stream;
+pub mod topology;
 pub mod vector_set;
 pub mod workbench;
 
@@ -27,6 +28,7 @@ pub use observability::*;
 pub use profile::*;
 pub use search::*;
 pub use stream::*;
+pub use topology::*;
 pub use vector_set::*;
 pub use workbench::*;
 pub mod collection;
