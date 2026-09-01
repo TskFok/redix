@@ -52,4 +52,72 @@ pub struct NodeFailure {
     pub code: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ClusterSummary {
+    pub state: String,
+    pub slots_assigned: u16,
+    pub slots_ok: u16,
+    pub slots_pfail: u16,
+    pub slots_fail: u16,
+    pub current_epoch: u64,
+    pub size: u16,
+    pub known_nodes: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SlotRange {
+    pub start: u16,
+    pub end: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterNodeRole {
+    Primary,
+    Replica,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClusterNodeHealth {
+    Online,
+    Offline,
+    Loading,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ClusterNodeMetrics {
+    pub used_memory_bytes: Option<u64>,
+    pub ops_per_second: Option<u64>,
+    pub connections_received: Option<u64>,
+    pub connected_clients: Option<u64>,
+    pub commands_processed: Option<u64>,
+    pub network_in_kbps: Option<f64>,
+    pub network_out_kbps: Option<f64>,
+    pub cache_hit_ratio: Option<f64>,
+    pub replication_offset: Option<u64>,
+    pub replication_lag: Option<u64>,
+    pub uptime_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClusterNode {
+    pub id: String,
+    pub endpoint: crate::domain::ConnectionEndpoint,
+    /// 仅在后续连接成功时由服务层填充；拓扑解析始终保持为 `None`。
+    pub connection_endpoint: Option<crate::domain::ConnectionEndpoint>,
+    pub role: ClusterNodeRole,
+    pub health: ClusterNodeHealth,
+    pub primary_id: Option<String>,
+    pub slots: Vec<SlotRange>,
+    pub metrics: ClusterNodeMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ClusterTopology {
+    pub summary: ClusterSummary,
+    pub nodes: Vec<ClusterNode>,
+    pub failures: Vec<NodeFailure>,
+}
+
 use serde::{Deserialize, Serialize};

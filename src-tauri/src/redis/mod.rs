@@ -1,6 +1,7 @@
 mod array;
 mod capabilities;
 mod cli;
+mod cluster_topology;
 mod connection_manager;
 mod database_analysis;
 mod json_ops;
@@ -13,6 +14,9 @@ mod vector_set;
 mod workbench;
 
 pub use cli::CliManager;
+pub use cluster_topology::{
+    merge_node_metrics, parse_cluster_info, parse_cluster_nodes, parse_cluster_shards,
+};
 pub use connection_manager::{RedisOperations, RedisService};
 pub use key_ops::decode_key_value;
 pub use observability::{parse_monitor_line, parse_slow_log_config_reply, parse_slow_log_reply};
