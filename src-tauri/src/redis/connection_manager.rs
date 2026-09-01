@@ -307,6 +307,7 @@ impl RedisService {
                 .sentinel
                 .as_ref()
                 .is_some_and(|sentinel| sentinel.has_password)
+            || profile.ssh.is_some()
         {
             Ok(self.secrets.read(&profile.id)?.unwrap_or_default())
         } else {
@@ -2577,8 +2578,11 @@ async fn connect_handle(
     secrets: &ConnectionSecrets,
 ) -> Result<(ConnectionHandle, Option<crate::domain::ConnectionEndpoint>), AppError> {
     profile.validate()?;
+    ensure_supported_connection_combination(profile)?;
     let tunnel = if profile.ssh.is_some() {
-        Some(Arc::new(super::ssh::SshTunnel::start(profile).await?))
+        Some(Arc::new(
+            super::ssh::SshTunnel::start(profile, secrets).await?,
+        ))
     } else {
         None
     };
@@ -2604,6 +2608,7 @@ async fn discover_client(
     secrets: &ConnectionSecrets,
 ) -> Result<(Client, Option<crate::domain::ConnectionEndpoint>), AppError> {
     profile.validate()?;
+    ensure_supported_connection_combination(profile)?;
     let Some(sentinel) = &profile.sentinel else {
         return Ok((build_client(profile, secrets)?, None));
     };
@@ -2669,6 +2674,20 @@ async fn discover_client(
         }
     }
     Err(last_error)
+}
+
+fn ensure_supported_connection_combination(profile: &ConnectionProfile) -> Result<(), AppError> {
+    if profile.cluster.is_some()
+        || (profile.sentinel.is_some() && profile.ssh.is_some())
+        || (profile.tls && profile.ssh.is_some())
+        || profile
+            .ssh
+            .as_ref()
+            .is_some_and(|ssh| !matches!(ssh.auth_method, crate::domain::SshAuthMethod::Agent))
+    {
+        return Err(AppError::UnsupportedFeature);
+    }
+    Ok(())
 }
 
 fn build_client(
@@ -2952,6 +2971,28 @@ mod tests {
             *self.0.lock().unwrap() = None;
             Ok(())
         }
+    }
+
+    #[test]
+    fn ssh_connection_snapshot_loads_migrated_local_paths_from_secret_store() {
+        let mut profile = valid_profile();
+        profile.ssh = Some(
+            serde_json::from_value(serde_json::json!({
+                "host": "jump.example", "port": 22, "username": "operator",
+                "has_identity_file": true, "has_known_hosts_file": true
+            }))
+            .unwrap(),
+        );
+        let expected = ConnectionSecrets {
+            ssh_identity_file: Some("/private/key".into()),
+            ssh_known_hosts_file: Some("/private/known_hosts".into()),
+            ..Default::default()
+        };
+        let service = RedisService::new(
+            Arc::new(MutableProfiles(Mutex::new(vec![profile.clone()]))),
+            Arc::new(MutableSecrets(Mutex::new(Some(expected.clone())))),
+        );
+        assert_eq!(service.connection_secrets(&profile).unwrap(), expected);
     }
 
     // Pause the real client's PING so tests can order lifecycle operations without sleeps.

@@ -25,6 +25,9 @@ impl TryFrom<&ConnectionProfile> for ConnectionTarget {
 
     fn try_from(profile: &ConnectionProfile) -> Result<Self, Self::Error> {
         profile.validate()?;
+        if profile.cluster.is_some() && profile.ssh.is_some() {
+            return Err(AppError::UnsupportedFeature);
+        }
         match (&profile.sentinel, &profile.cluster) {
             (Some(sentinel), None) => Ok(Self::Sentinel(sentinel.clone())),
             (None, Some(cluster)) => Ok(Self::Cluster(cluster.clone())),

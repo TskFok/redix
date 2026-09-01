@@ -9,6 +9,7 @@ use std::{
 use crate::{
     domain::{ConnectionProfile, SshConfig},
     error::AppError,
+    persistence::ConnectionSecrets,
 };
 
 /// Reaps both the master and short-lived control clients on errors and cancellation.
@@ -220,7 +221,11 @@ impl SshMaster {
 }
 
 impl SshTunnel {
-    pub async fn start(profile: &ConnectionProfile) -> Result<Self, AppError> {
+    pub async fn start(
+        profile: &ConnectionProfile,
+        secrets: &ConnectionSecrets,
+    ) -> Result<Self, AppError> {
+        let profile = profile_with_secret_paths(profile, secrets);
         // Windows OpenSSH does not support these authenticated multiplexing controls.
         // Never substitute an unauthenticated TCP readiness probe or a direct connection.
         #[cfg(not(unix))]
@@ -231,7 +236,7 @@ impl SshTunnel {
         #[cfg(unix)]
         {
             let deadline = Instant::now() + Duration::from_secs(6);
-            let master = SshMaster::start(profile, deadline).await?;
+            let master = SshMaster::start(&profile, deadline).await?;
             let reservation =
                 TcpListener::bind(("127.0.0.1", 0)).map_err(|_| AppError::SshTunnelFailed)?;
             let port = reservation
@@ -243,7 +248,7 @@ impl SshTunnel {
             // If this port is stolen, the authenticated master's bind fails and -O fails.
             // TCP connect success is never evidence that this tunnel owns the listener.
             master
-                .control(profile, SshOperation::Forward(port), deadline)
+                .control(&profile, SshOperation::Forward(port), deadline)
                 .await?;
             Ok(Self {
                 _master: master,
@@ -251,6 +256,22 @@ impl SshTunnel {
             })
         }
     }
+}
+
+fn profile_with_secret_paths(
+    profile: &ConnectionProfile,
+    secrets: &ConnectionSecrets,
+) -> ConnectionProfile {
+    let mut effective = profile.clone();
+    if let Some(ssh) = effective.ssh.as_mut() {
+        if ssh.legacy_identity_file.is_none() {
+            ssh.legacy_identity_file = secrets.ssh_identity_file.clone();
+        }
+        if ssh.legacy_known_hosts_file.is_none() {
+            ssh.legacy_known_hosts_file = secrets.ssh_known_hosts_file.clone();
+        }
+    }
+    effective
 }
 
 #[cfg(all(test, unix))]
@@ -378,7 +399,9 @@ mod tests {
         assert!(!private_directory.exists());
         drop(occupied);
 
-        let tunnel = SshTunnel::start(&profile).await.unwrap();
+        let tunnel = SshTunnel::start(&profile, &ConnectionSecrets::default())
+            .await
+            .unwrap();
         let port = tunnel.port;
         let mut connection = TcpStream::connect(("127.0.0.1", port)).unwrap();
         connection
@@ -399,12 +422,12 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(
-            SshTunnel::start(&profile).await,
+            SshTunnel::start(&profile, &ConnectionSecrets::default()).await,
             Err(AppError::SshTunnelFailed)
         ));
         std::fs::write(known_hosts, "").unwrap();
         assert!(matches!(
-            SshTunnel::start(&profile).await,
+            SshTunnel::start(&profile, &ConnectionSecrets::default()).await,
             Err(AppError::SshTunnelFailed)
         ));
         drop(daemon);
@@ -506,5 +529,38 @@ mod tests {
         assert!(forward
             .windows(2)
             .any(|values| values == ["-S", "/tmp/private/c"]));
+    }
+
+    #[test]
+    fn migrated_secret_paths_are_used_by_the_legacy_ssh_tunnel() {
+        let profile: ConnectionProfile = serde_json::from_value(serde_json::json!({
+            "id": "ssh", "name": "SSH", "host": "127.0.0.1", "port": 6379,
+            "username": null, "database": 0, "has_password": false,
+            "ssh": {"host": "jump.example", "port": 22, "username": "operator",
+                     "has_identity_file": true, "has_known_hosts_file": true}
+        }))
+        .unwrap();
+        let secrets = ConnectionSecrets {
+            ssh_identity_file: Some("/private/migrated-key".into()),
+            ssh_known_hosts_file: Some("/private/migrated-known-hosts".into()),
+            ..Default::default()
+        };
+        let effective = profile_with_secret_paths(&profile, &secrets);
+        let args = ssh_arguments(
+            effective.ssh.as_ref().unwrap(),
+            &effective,
+            Path::new("/tmp/private/c"),
+            SshOperation::Master,
+        )
+        .unwrap();
+        assert!(args
+            .windows(2)
+            .any(|values| values == ["-i", "/private/migrated-key"]));
+        assert!(args
+            .iter()
+            .any(|value| value.contains("/private/migrated-known-hosts")));
+        assert!(!serde_json::to_string(&profile)
+            .unwrap()
+            .contains("/private/"));
     }
 }

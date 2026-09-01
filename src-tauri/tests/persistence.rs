@@ -437,6 +437,78 @@ fn legacy_ssh_paths_copy_to_secrets_before_profiles_are_rewritten() {
         stored.ssh_known_hosts_file.as_deref(),
         Some("/private/known_hosts")
     );
+
+    migrate_legacy_ssh_paths(&repository, &secrets).unwrap();
+    assert_eq!(repository.load().unwrap(), migrated);
+}
+
+#[test]
+fn legacy_ssh_migration_does_not_rewrite_profiles_when_secret_copy_fails() {
+    struct FailingSecrets;
+    impl SecretStore for FailingSecrets {
+        fn read(&self, _: &str) -> Result<Option<ConnectionSecrets>, AppError> {
+            Ok(None)
+        }
+        fn write(&self, _: &str, _: &ConnectionSecrets) -> Result<(), AppError> {
+            Err(AppError::PersistenceFailed)
+        }
+        fn delete(&self, _: &str) -> Result<(), AppError> {
+            Ok(())
+        }
+    }
+    let mut profile = valid_profile();
+    profile.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "operator",
+            "identity_file": "/private/key"
+        }))
+        .unwrap(),
+    );
+    let repository = InMemoryProfileRepository::new(vec![profile.clone()]);
+
+    assert_eq!(
+        migrate_legacy_ssh_paths(&repository, &FailingSecrets),
+        Err(AppError::PersistenceFailed)
+    );
+    assert_eq!(repository.load().unwrap(), vec![profile]);
+}
+
+#[test]
+fn legacy_ssh_migration_keeps_legacy_profile_when_profile_rewrite_fails_after_copy() {
+    struct FailingProfiles(Mutex<Vec<redix_lib::domain::ConnectionProfile>>);
+    impl ProfileRepository for FailingProfiles {
+        fn load(&self) -> Result<Vec<redix_lib::domain::ConnectionProfile>, AppError> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+        fn save(&self, _: &[redix_lib::domain::ConnectionProfile]) -> Result<(), AppError> {
+            Err(AppError::PersistenceFailed)
+        }
+    }
+    let mut profile = valid_profile();
+    profile.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "operator",
+            "known_hosts_file": "/private/known_hosts"
+        }))
+        .unwrap(),
+    );
+    let repository = FailingProfiles(Mutex::new(vec![profile.clone()]));
+    let secrets = InMemorySecretStore::default();
+
+    assert_eq!(
+        migrate_legacy_ssh_paths(&repository, &secrets),
+        Err(AppError::PersistenceFailed)
+    );
+    assert_eq!(repository.load().unwrap(), vec![profile]);
+    assert_eq!(
+        secrets
+            .read("local")
+            .unwrap()
+            .unwrap()
+            .ssh_known_hosts_file
+            .as_deref(),
+        Some("/private/known_hosts")
+    );
 }
 
 #[test]

@@ -151,9 +151,6 @@ impl ConnectionProfile {
 
         if let Some(ssh) = &self.ssh {
             ssh.validate()?;
-            if self.tls || self.cluster.is_some() {
-                return Err(AppError::InvalidConnection);
-            }
         }
 
         Ok(())
@@ -167,11 +164,23 @@ fn validate_topology_nodes(nodes: &[ConnectionEndpoint]) -> Result<(), AppError>
 
     let mut seen = std::collections::HashSet::with_capacity(nodes.len());
     for node in nodes {
-        if node.host.trim().is_empty() || node.port == 0 || !seen.insert((&node.host, node.port)) {
+        if !is_safe_endpoint_host(&node.host)
+            || node.port == 0
+            || !seen.insert((&node.host, node.port))
+        {
             return Err(AppError::InvalidConnection);
         }
     }
     Ok(())
+}
+
+fn is_safe_endpoint_host(host: &str) -> bool {
+    host.parse::<std::net::Ipv6Addr>().is_ok()
+        || (!host.is_empty()
+            && !host.starts_with('-')
+            && host
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')))
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

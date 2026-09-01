@@ -138,13 +138,72 @@ fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_co
     assert!(serde_json::from_value::<ConnectionProfile>(value.clone())
         .unwrap()
         .validate()
-        .is_err());
+        .is_ok());
     value["tls"] = serde_json::json!(false);
     value["sentinel"] = serde_json::to_value(sentinel_profile(26379)).unwrap()["sentinel"].clone();
     assert!(serde_json::from_value::<ConnectionProfile>(value)
         .unwrap()
         .validate()
         .is_ok());
+}
+
+#[tokio::test]
+async fn unsupported_topology_and_new_ssh_combinations_fail_before_network_io() {
+    let mut profiles = Vec::new();
+    let mut cluster = support::valid_profile();
+    cluster.host = "invalid.example".into();
+    cluster.port = 7000;
+    cluster.cluster = Some(ClusterConfig {
+        nodes: vec![ConnectionEndpoint {
+            host: "invalid.example".into(),
+            port: 7000,
+        }],
+        read_from_replicas: false,
+    });
+    profiles.push(cluster);
+
+    let mut sentinel_ssh = sentinel_profile(26379);
+    sentinel_ssh.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "operator"
+        }))
+        .unwrap(),
+    );
+    profiles.push(sentinel_ssh);
+
+    let mut tls_ssh = support::valid_profile();
+    tls_ssh.tls = true;
+    tls_ssh.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "operator"
+        }))
+        .unwrap(),
+    );
+    profiles.push(tls_ssh);
+
+    let mut private_key = support::valid_profile();
+    private_key.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "operator",
+            "auth_method": "private_key"
+        }))
+        .unwrap(),
+    );
+    profiles.push(private_key);
+
+    let service = RedisService::new(
+        Arc::new(Profiles(Mutex::new(profiles.clone()))),
+        Arc::new(Secrets(ConnectionSecrets::default())),
+    );
+    for profile in profiles {
+        assert_eq!(
+            service
+                .test_connection(&profile, &ConnectionSecrets::default())
+                .await
+                .unwrap_err(),
+            AppError::UnsupportedFeature
+        );
+    }
 }
 
 struct Profiles(Mutex<Vec<ConnectionProfile>>);

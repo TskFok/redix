@@ -114,6 +114,77 @@ fn cluster_profile_is_db_zero_and_cannot_silently_mix_topologies() {
 }
 
 #[test]
+fn cluster_rejects_invalid_duplicate_oversized_and_drifting_seeds() {
+    let mut profile = valid_profile();
+    profile.host = "bad host".into();
+    profile.port = 7000;
+    profile.cluster = Some(ClusterConfig {
+        nodes: vec![ConnectionEndpoint {
+            host: "bad host".into(),
+            port: 7000,
+        }],
+        read_from_replicas: false,
+    });
+    assert_eq!(profile.validate(), Err(AppError::InvalidConnection));
+
+    profile.host = "127.0.0.1".into();
+    profile.cluster.as_mut().unwrap().nodes = vec![
+        ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port: 7000,
+        },
+        ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port: 7000,
+        },
+    ];
+    assert_eq!(profile.validate(), Err(AppError::InvalidConnection));
+
+    profile.cluster.as_mut().unwrap().nodes = (0..33)
+        .map(|port| ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port: 7000 + port,
+        })
+        .collect();
+    assert_eq!(profile.validate(), Err(AppError::InvalidConnection));
+
+    profile.cluster.as_mut().unwrap().nodes = vec![ConnectionEndpoint {
+        host: "127.0.0.1".into(),
+        port: 7001,
+    }];
+    assert_eq!(profile.validate(), Err(AppError::InvalidConnection));
+}
+
+#[test]
+fn standalone_tls_and_ssh_are_valid_but_cluster_ssh_is_unsupported_at_target_selection() {
+    let mut profile = valid_profile();
+    profile.tls = true;
+    profile.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "operator"
+        }))
+        .unwrap(),
+    );
+    assert_eq!(profile.validate(), Ok(()));
+
+    profile.tls = false;
+    profile.host = "127.0.0.1".into();
+    profile.port = 7000;
+    profile.cluster = Some(ClusterConfig {
+        nodes: vec![ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port: 7000,
+        }],
+        read_from_replicas: false,
+    });
+    assert_eq!(profile.validate(), Ok(()));
+    assert_eq!(
+        ConnectionTarget::try_from(&profile),
+        Err(AppError::UnsupportedFeature)
+    );
+}
+
+#[test]
 fn array_and_vector_domain_contracts_reject_precision_and_payload_errors() {
     let input = ArrayRangeInput {
         connection_id: "local".into(),
