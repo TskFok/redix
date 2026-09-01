@@ -315,6 +315,15 @@ export function getKey(input: GetKeyInput): Promise<KeyValue> {
   return call<KeyValue>("get_key", { input });
 }
 
+/** Collection and Stream entries are loaded by their dedicated paginated APIs. */
+export function getBrowserKey(input: GetKeyInput): Promise<KeyValue> {
+  return call<KeyValue>("get_browser_key", { input });
+}
+
+export function renameBrowserKey(input: RenameKeyInput): Promise<KeyValue> {
+  return call<KeyValue>("rename_browser_key", { input });
+}
+
 export function createArray(input: CreateArrayInput): Promise<KeyValue> {
   return call<KeyValue>("create_array", { input });
 }

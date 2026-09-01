@@ -16,6 +16,7 @@ pub struct AppState {
     pub(crate) redis: redis::RedisService,
     pub(crate) cli: redis::CliManager,
     pub(crate) data_dir: PathBuf,
+    pub(crate) analysis_history: persistence::analysis_history::AnalysisHistoryStore,
 }
 
 impl AppState {
@@ -31,6 +32,9 @@ impl AppState {
         Self {
             redis: redis::RedisService::new(profiles.clone(), secrets.clone()),
             cli: redis::CliManager::new(),
+            analysis_history: persistence::analysis_history::AnalysisHistoryStore::new(
+                data_dir.join("analysis-history.json"),
+            ),
             profiles,
             secrets,
             data_dir,
@@ -54,6 +58,18 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::stream_entries::get_stream_entries,
+            commands::stream_entries::add_stream_entry,
+            commands::stream_entries::delete_stream_entries,
+            commands::collection::get_collection_page,
+            commands::collection::mutate_collection,
+            commands::search_aggregate::aggregate_search,
+            commands::browser::get_browser_key,
+            commands::browser::rename_browser_key,
+            commands::analysis_history::list_analysis_history,
+            commands::analysis_history::save_analysis_history,
+            commands::analysis_history::get_analysis_history,
+            commands::analysis_history::delete_analysis_history,
             commands::cli::open_cli_session,
             commands::cli::execute_cli_command,
             commands::cli::close_cli_session,

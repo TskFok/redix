@@ -5,10 +5,10 @@ import {
   deleteJsonPath,
   getKeySearchIndexes,
   getKeyInfo,
-  getKey,
+  getBrowserKey,
   getJsonPath,
   appendJsonArray,
-  renameKey,
+  renameBrowserKey,
   setKey,
   setJsonPath,
   setKeyTtl,
@@ -33,6 +33,9 @@ import ArrayDetails from "./ArrayDetails";
 import JsonPathEditor, { type JsonPathMutation } from "./JsonPathEditor";
 import StreamConsumerGroups from "./StreamConsumerGroups";
 import VectorSetDetails from "./VectorSetDetails";
+import CollectionDetails from "./CollectionDetails";
+import StreamEntries from "./StreamEntries";
+import type { CollectionKind } from "./collectionApi";
 import { searchCapabilityState } from "../search/searchState";
 
 interface KeyDetailsProps {
@@ -72,6 +75,7 @@ export function KeyDetails({
   onBusyChange,
 }: KeyDetailsProps) {
   const [busy, setBusy] = useState(false);
+  const [childBusy, setChildBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [jsonPathError, setJsonPathError] = useState<string | null>(null);
   const [searchIndexes, setSearchIndexes] = useState<KeySearchIndexSummary[]>([]);
@@ -99,6 +103,7 @@ export function KeyDetails({
   useEffect(() => {
     operationRef.current += 1;
     setBusy(false);
+    setChildBusy(false);
     setError(null);
     setJsonPathError(null);
     setRenameDraft(detail?.key ?? "");
@@ -107,6 +112,12 @@ export function KeyDetails({
     onMetadataChange?.(null);
     onBusyChange?.(false);
   }, [connectionId, detail?.key, onBusyChange]);
+
+  const uiBusy = busy || childBusy;
+  const handleChildBusy = (nextBusy: boolean) => {
+    setChildBusy(nextBusy);
+    onBusyChange?.(nextBusy);
+  };
 
   const info = metadata === undefined ? localInfo : metadata;
   const detailKeyType = detail?.key_type.trim().toLowerCase() ?? "";
@@ -198,7 +209,7 @@ export function KeyDetails({
     if (!isCurrent(operation)) {
       return null;
     }
-    const refreshed = await getKey({
+    const refreshed = await getBrowserKey({
       connection_id: operation.connectionId,
       key: operation.key,
     });
@@ -293,7 +304,7 @@ export function KeyDetails({
     setOperationBusy(operation, true);
     setError(null);
     try {
-      const renamed = await renameKey({
+      const renamed = await renameBrowserKey({
         connection_id: operation.connectionId,
         key: operation.key,
         new_key: nextKey,
@@ -435,7 +446,9 @@ export function KeyDetails({
     moduleProbe.capabilities.json_supported;
   const isArrayDetail = "Array" in detail.value;
   const isVectorSetDetail = "VectorSet" in detail.value;
-  const isModuleDetail = isArrayDetail || isVectorSetDetail;
+  const collectionKind = ["hash", "list", "set", "zset"].includes(detailKeyType) ? detailKeyType as CollectionKind : null;
+  const isStreamDetail = detailKeyType === "stream";
+  const isModuleDetail = isArrayDetail || isVectorSetDetail || collectionKind !== null || isStreamDetail;
   const arraySummary = "Array" in detail.value ? detail.value.Array : null;
   const vectorSetSummary = "VectorSet" in detail.value ? detail.value.VectorSet : null;
 
@@ -443,7 +456,7 @@ export function KeyDetails({
     <section
       className="browser-detail-panel"
       aria-labelledby="key-details-title"
-      aria-busy={busy}
+      aria-busy={uiBusy}
     >
       <div className="browser-panel-heading">
         <div>
@@ -467,11 +480,11 @@ export function KeyDetails({
               setRenameDraft(event.target.value);
               setError(null);
             }}
-            disabled={busy}
+            disabled={uiBusy}
             spellCheck={false}
           />
         </label>
-        <button type="button" className="button button-secondary" onClick={() => void handleRename()} disabled={busy}>
+        <button type="button" className="button button-secondary" onClick={() => void handleRename()} disabled={uiBusy}>
           重命名
         </button>
       </div>
@@ -486,7 +499,7 @@ export function KeyDetails({
         </div>
       </div>
       <div className="detail-info-actions">
-        <button type="button" className="button button-quiet" onClick={() => void handleInfo()} disabled={busy}>
+        <button type="button" className="button button-quiet" onClick={() => void handleInfo()} disabled={uiBusy}>
           刷新元数据
         </button>
       </div>
@@ -524,7 +537,7 @@ export function KeyDetails({
                 value={moduleTtlDraft}
                 onChange={(event) => setModuleTtlDraft(event.target.value)}
                 placeholder={detail.ttl_ms < 0 ? "当前为永久" : undefined}
-                disabled={busy}
+                disabled={uiBusy}
               />
             </label>
             <button
@@ -538,13 +551,13 @@ export function KeyDetails({
                 }
                 void handleSetTtl(parsed);
               }}
-              disabled={busy}
+              disabled={uiBusy}
             >
               设置 TTL
             </button>
           </div>
-          <button type="button" className="button button-danger" onClick={() => void handleDelete()} disabled={busy}>
-            {busy ? "处理中…" : "删除整个键"}
+          <button type="button" className="button button-danger" onClick={() => void handleDelete()} disabled={uiBusy}>
+            {uiBusy ? "处理中…" : "删除整个键"}
           </button>
         </div>
       ) : (
@@ -552,7 +565,7 @@ export function KeyDetails({
           key={JSON.stringify([detail.key, detail.ttl_ms, detail.value])}
           value={detail.value}
           ttlMs={detail.ttl_ms}
-          busy={busy}
+          busy={uiBusy}
           error={error}
           onSave={handleSave}
           onDelete={handleDelete}
@@ -560,6 +573,8 @@ export function KeyDetails({
         />
       )}
       {isModuleDetail && error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
+      {collectionKind && <CollectionDetails key={JSON.stringify([connectionId, detail.key, collectionKind])} connectionId={connectionId} keyName={detail.key} kind={collectionKind} disabled={busy} onBusyChange={handleChildBusy} />}
+      {isStreamDetail && <StreamEntries key={JSON.stringify([connectionId, detail.key])} connectionId={connectionId} streamKey={detail.key} disabled={busy} onBusyChange={handleChildBusy} />}
       {isArrayDetail ? (
         <ArrayDetails
           key={`${connectionId}:${detail.key}`}
@@ -572,7 +587,7 @@ export function KeyDetails({
             next_index: "0",
           } : undefined}
           disabled={busy}
-          onBusyChange={onBusyChange}
+          onBusyChange={handleChildBusy}
         />
       ) : null}
       {isVectorSetDetail ? (
@@ -587,7 +602,7 @@ export function KeyDetails({
             quantization: vectorSetSummary.quantization,
           } : undefined}
           disabled={busy}
-          onBusyChange={onBusyChange}
+          onBusyChange={handleChildBusy}
         />
       ) : null}
       {jsonPathUnsupported ? (

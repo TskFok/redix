@@ -53,7 +53,10 @@ def main():
                 print("运行隔离 Redis 测试；Redis Stack 模块测试仍单独跳过。", flush=True)
                 return subprocess.run([
                     "cargo", "test", "--manifest-path", "src-tauri/Cargo.toml",
-                    "--test", "redis_integration", "--", "--ignored", "--nocapture", "--test-threads=1",
+                    "--test", "redis_integration",
+                    "--test", "collection_integration",
+                    "--test", "stream_entries_integration",
+                    "--", "--ignored", "--nocapture", "--test-threads=1",
                 ], cwd=root, env=env).returncode
             finally:
                 if server.poll() is None:

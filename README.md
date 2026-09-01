@@ -37,29 +37,31 @@ npm run tauri:build
 
 Browser 使用 Redis `SCAN` 分页浏览键，不使用阻塞式全量键枚举。Workbench 只在当前本地连接上执行用户输入的 Redis 命令。
 
-Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新以及校验后的本地 JSON 导入导出；基础数据类型支持 String、Hash、List、Set、Sorted Set、Stream。Stream 编辑最多读取 500 条记录；Stream 详情还支持 Consumer Group 的创建/删除、消费者与 Pending 列表、Pending 确认、消费者删除和显式 XCLAIM 转移。转移需要选择消息并指定目标消费者、最小空闲时间，只操作满足条件的 Pending 消息，不启用 FORCE 或自动消费。RedisJSON 同时支持根文档编辑，以及路径级读取、保存、删除和数组追加。连接级模块能力通过 `MODULE LIST` 探测并按 session 缓存；探测失败或未检测到 RedisJSON/RedisSearch 时，不会阻断普通 Browser 流程，对应的路径编辑器或 Search / Query 工作区会稳定降级为不可用提示。RedisSearch / Query 工作区在 Search 2.0+ 可用时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引和有限的 `FT.SEARCH ... LIMIT` 查询（默认 NOCONTENT，可开启文档字段结果表），查询文本不持久化；Browser 的 Hash/JSON 键详情会显示匹配的索引摘要。
+Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新以及校验后的本地 JSON 导入导出；基础数据类型支持 String、Hash、List、Set、Sorted Set、Stream。Hash、List、Set、Sorted Set 使用有界分页和字段/成员/索引级增量写入，不用当前页重建整个键；Stream 使用有界 ID 范围分页，并支持显式添加和删除消息。Stream 详情还支持 Consumer Group 的创建/删除、消费者与 Pending 列表、Pending 确认、消费者删除和显式 XCLAIM 转移。转移需要选择消息并指定目标消费者、最小空闲时间，只操作满足条件的 Pending 消息，不启用 FORCE 或自动消费。RedisJSON 同时支持根文档编辑，以及路径级读取、保存、删除和数组追加。连接级模块能力通过 `MODULE LIST` 探测并按 session 缓存；探测失败或未检测到 RedisJSON/RedisSearch 时，不会阻断普通 Browser 流程，对应的路径编辑器或 Search / Query 工作区会稳定降级为不可用提示。RedisSearch / Query 工作区在 Search 2.0+ 可用时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引和有限的 `FT.SEARCH ... LIMIT` 查询（默认 NOCONTENT，可开启文档字段结果表），以及 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 查询；查询文本不持久化；Browser 的 Hash/JSON 键详情会显示匹配的索引摘要。
 
 检测到对应命令集后，Browser 还支持 Redis Array 的连续/稀疏创建、范围读取、扫描、单元格编辑、追加、按索引或区间删除、ARGREP 搜索和 AROP 聚合；Vector Set 支持受限维度的元素创建与批量添加、分页浏览、向量/属性读取与编辑、FP32 向量下载、VSIM 相似度查询和元素删除。两类模块都通过 typed IPC 接入，模块缺失时只禁用对应类型和详情操作，不影响普通 Redis 键浏览；单次批量与响应大小均有固定上限。
 
 Workbench 支持本地内置命令目录、命令前缀提示、多行批量执行、遇错继续策略、Raw/Text/JSON 结果格式和复制。命令历史按连接保存到应用数据目录的版本化 JSON 文件；AUTH、HELLO、ACL、CONFIG 命令族不会写入历史，也不使用 `localStorage`。
 
-Database 工作区提供服务器版本、运行模式、连接数、内存、命令量、命中率和已加载模块等只读概览，并展示数据库键空间统计；实例详情按 INFO 分组展示客户端、内存、统计、持久化与复制指标，并提供 commandstats 命令统计。数据库切换成功后才更新当前连接配置。Database Analysis 是显式触发的只读工具：仅在用户点击“开始分析”后，以 `SCAN` 加固定批次 pipeline 汇总当前数据库；默认最多处理 100000 个键，结果不落盘，也不会在连接后自动开始分析。Query Library 使用应用数据目录中的版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench，AUTH、HELLO、ACL、CONFIG 命令族不会保存。设置使用 `settings.json` 持久化主题、结果格式、Browser 扫描数量和批量命令错误策略。
+Database 工作区提供服务器版本、运行模式、连接数、内存、命令量、命中率和已加载模块等只读概览，并展示数据库键空间统计；实例详情按 INFO 分组展示客户端、内存、统计、持久化与复制指标，并提供 commandstats 命令统计。数据库切换成功后才更新当前连接配置。Database Analysis 是显式触发的只读工具：仅在用户点击“开始分析”后，以 `SCAN` 加固定批次 pipeline 汇总当前数据库；默认最多处理 100000 个键，也不会在连接后自动开始分析。结果默认不落盘；用户可在键名敏感提示后显式保存到版本化本机历史，按连接和数据库隔离，支持查看、删除及相同参数的观察值比较。Query Library 使用应用数据目录中的版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench，AUTH、HELLO、ACL、CONFIG 命令族不会保存。设置使用 `settings.json` 持久化主题、结果格式、Browser 扫描数量和批量命令错误策略。
 
 运维观察工作区提供 Slow Log 的读取、清空和 `slowlog-*` 配置，独立 Pub/Sub channel/pattern 订阅、发布和实时消息流，以及基于独立 `MONITOR` socket 的 Profiler 实时命令流。Pub/Sub 每个连接只保留一个可取消会话，前端最多缓存 5000 条消息；Profiler 前端最多缓存 10000 条事件；关闭连接、切换数据库或卸载页面时会清理后台任务。Profiler 启动前会提示 MONITOR 可能带来的性能影响，不自动保存日志文件或历史记录。支持筛选、暂停显示及显式导出：Profiler LOG、Pub/Sub JSON、Slow Log CSV/JSON。暂停只冻结显示，后台仍接收并保留有界缓存；导出包含当前筛选快照，可能带有敏感命令参数。
 
 ## 当前边界
 
-本版本支持 Standalone（TCP/TLS）、Sentinel 主节点连接和受限 SSH 隧道。Redis Cloud 明确排除；Cluster 路由与节点 fan-out、完整 Stream 分页/实时消费/XAUTOCLAIM、更多模块专用可视化和其他 RedisInsight 产品细节仍未全量对齐。没有引入云登录、云账户、云数据库发现、云 SDK、SQL 或远程插件运行时；Azure、RDI、AI/Copilot、Telemetry 当前同样未实现。
+本版本支持 Standalone（TCP/TLS）、Sentinel 主节点连接和受限 SSH 隧道。Redis Cloud 明确排除；Cluster 路由与节点 fan-out、Stream 实时消费/XAUTOCLAIM、更多模块专用可视化和其他 RedisInsight 产品细节仍未全量对齐。没有引入云登录、云账户、云数据库发现、云 SDK、SQL 或远程插件运行时；Azure、RDI、AI/Copilot、Telemetry 当前同样未实现。
 
 除已列出的 RedisJSON、RedisSearch、Array、Vector Set 和 Stream 能力外，其他模块专用数据编辑器、Monaco/插件运行时尚未实现；不能将这些差异视作已对齐。
 
-## 本轮补齐能力（2026-08-31）
+## 本轮补齐能力（2026-09-01）
 
 - Browser 支持平铺/按 `:` 前缀分层的键树切换；树只展示当前已扫描结果，不额外扫描全库。JSON 可按对象/数组折叠、定位并回填路径编辑器，不能安全表达的路径只读。
 - Workbench 支持离线模块命令帮助、当前光标行补全、`#`/`//` 注释行、嵌套结果树/表格，以及按连接删除单条或清空历史。敏感命令继续不写历史，包括被引号包围或转义的命令名。
 - Search 可显式开启文档字段结果；默认键名模式兼容旧行为。支持 RESP2/RESP3 回复和过期文档空内容；字段、文档、深度、单页和总响应均有限额，超限返回固定错误。
 - Sentinel 配置种子节点、master name 和独立认证，支持失败种子回退及主节点 ROLE 校验；重新连接或切库时重新发现。正在运行的会话不会无缝迁移到新的主节点。Sentinel 密码只存系统钥匙串，普通导出不含密码。
 - SSH 使用 macOS/Linux 的系统 OpenSSH、ssh-agent 或本地 identity file；必须预先验证主机指纹并写入 known_hosts，也可指定已有 known_hosts 文件。严格拒绝未知/变化的主机密钥，禁用交互式密码，不自动信任。认证后通过私有控制 socket 确认转发成功，端口占用时失败；超时、取消、关闭或替换会话时回收进程。首版仅支持 Standalone 非 TLS，不支持 Windows 或 SSH 与 TLS/Sentinel 组合。
+- 大集合和 Stream 详情直接进入分页端点；Hash/List/Set/Sorted Set 原位编辑保留未加载数据与 TTL，键消失或类型变化时拒绝写入；Stream 读写保留 Consumer Group 和 TTL。
+- Search 增加受限聚合查询面板，不接受任意聚合管道；Database Analysis 增加显式本机历史和相同扫描参数比较，报告可能包含键名且不自动保存。
 - 独立 CLI 通过专用持久 socket 保留多轮 MULTI/EXEC、WATCH 和 SELECT 状态，不影响 Browser 的数据库。关闭、离开页面或主连接切库会丢弃会话及未提交事务；每条命令超时 5 秒后断开且不重试。最多 16 个会话，命令 16 KiB，单次展示输出 256 KiB，前端最多 200 条/2 MiB；不自动保存命令或输出。推送订阅、MONITOR、复制协议及关闭回复的命令由专用功能处理或拒绝。
 
 完整对比与尚未覆盖的能力见 [功能差异矩阵](docs/redisinsight-feature-matrix.md)。这不是与 RedisInsight 的全量等价实现。

@@ -29,3 +29,6 @@ pub use search::*;
 pub use stream::*;
 pub use vector_set::*;
 pub use workbench::*;
+pub mod collection;
+pub mod search_aggregate;
+pub mod stream_entries;

@@ -471,3 +471,16 @@
 - Workbench 当前 normalizeCommandList 直接按行拆分、目录静态、结果仅格式输出，缺少模块帮助和复杂结果折叠。
 - 连接 profile 仅 host/port/database/TLS；Cluster/Sentinel/SSH 在旧 MVP 范围文件中被标为未实现，不应误报为已对齐。
 - Redis Cloud 明确排除；旧文档中的其他历史排除项不是本轮新授权的替代品。
+
+## 2026-08-31 新一轮源码对比
+
+当前 882386d 已包含前次矩阵中的 Sentinel/SSH/CLI/树/观察导出。参考 RedisInsight 存在独立 browser/{hash,list,set,z-set,stream} 增量端点、redisearch 聚合、database-analysis 历史仓储；Redix 仍以完整集合读取/重建保存为主，Stream 受 500 条限制，分析结果仅临时显示。用户只要求排除 Redis Cloud，旧文档更广的“永久排除”不作为本轮用户限制。
+
+## 2026-09-01 深化实现结论
+
+- SCAN 的 COUNT 只是提示，服务端可能返回超过请求数量的成员；分页实现不得截断该批次后仍返回服务端 cursor，否则会永久跳过被截断成员。当前实现接受提示偏差，但对整页条目数和 4 MiB IPC 响应设硬上限，超限整页失败。
+- HSET/SADD/ZADD/LPUSH 等原生命令会在键已过期时重新创建键；集合增量写入必须在同一 Lua 原子区间先检查 TYPE，再执行固定命令。脚本参数只来自 ARGV，不接受 raw Redis 命令。
+- LSET 的成功回复是状态字符串 OK，不能和 HSET 等整数回复统一解析为整数数组；脚本应丢弃各命令原始回复并只返回固定状态码。
+- Stream XADD 使用 NOMKSTREAM，避免详情打开后原 Stream 消失时被编辑动作重建；XDEL 只删除显式选中的 ID，不影响 Group/Pending 元数据。
+- FT.AGGREGATE 多取一行只用于判断 has_more，该 lookahead 行的字段不能加入当前可见页 columns，否则分页列集合会被未展示数据污染。
+- 分析历史属于可能含键名的本机敏感数据，只能显式保存；完整 read-modify-write 需要同一互斥锁保护，损坏或未知版本源文件必须拒绝覆盖。

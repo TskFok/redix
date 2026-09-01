@@ -34,6 +34,7 @@ import {
   getInstanceDetails,
   getCommandCatalog,
   getKey,
+  getBrowserKey,
   getArraySummary,
   getArrayElements,
   getKeyInfo,
@@ -55,6 +56,7 @@ import {
   publishPubSub,
   startProfiler,
   renameKey,
+  renameBrowserKey,
   saveConnection,
   scanKeys,
   saveCommandHistory,
@@ -405,6 +407,19 @@ describe("Tauri IPC bridge", () => {
     expect(invokeMock).toHaveBeenLastCalledWith("get_key_search_indexes", {
       input: keyInput,
     });
+  });
+
+  it("为 Browser 有界预览和重命名调用独立 typed command", async () => {
+    const value: KeyValue = {
+      key: "large", key_type: "hash", ttl_ms: -1, value: { Hash: { fields: [] } },
+    };
+    const input = { connection_id: "local", key: "large" };
+    const renameInput = { ...input, new_key: "renamed" };
+    invokeMock.mockResolvedValueOnce(value).mockResolvedValueOnce({ ...value, key: "renamed" });
+    await expect(getBrowserKey(input)).resolves.toEqual(value);
+    expect(invokeMock).toHaveBeenLastCalledWith("get_browser_key", { input });
+    await expect(renameBrowserKey(renameInput)).resolves.toEqual({ ...value, key: "renamed" });
+    expect(invokeMock).toHaveBeenLastCalledWith("rename_browser_key", { input: renameInput });
   });
 
   it("为全部数据命令传递 input 对象并保留返回值", async () => {

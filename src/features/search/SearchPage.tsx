@@ -25,6 +25,7 @@ import {
   type SearchState,
 } from "./searchState";
 import { SearchDocumentTable } from "./SearchDocumentTable";
+import { AggregatePanel } from "./AggregatePanel";
 import "./searchDocuments.css";
 
 interface SearchPageProps {
@@ -633,6 +634,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
               {state.includeContent ? <p className="browser-helper">最多 64 个字段/文档、256 KiB/字段、4 MiB/响应；支持 UTF-8 文本及 JSON，过大或二进制文档请使用仅键名模式。</p> : null}
               <SearchResults result={state.result} busy={state.loading || mutationBusy} includeContent={state.includeContent} onNext={() => { if (nextOffset !== null) void runSearch(nextOffset); }} />
             </section>
+            <AggregatePanel connectionId={connectionId} index={state.selectedIndex} enabled={!mutationBusy} />
           </div>
         </>
       ) : null}

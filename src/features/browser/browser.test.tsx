@@ -104,6 +104,7 @@ const {
 vi.mock("../../lib/tauri", () => ({
   scanKeys: scanKeysMock,
   getKey: getKeyMock,
+  getBrowserKey: getKeyMock,
   getModuleCapabilities: getModuleCapabilitiesMock,
   getKeySearchIndexes: getKeySearchIndexesMock,
   getJsonPath: getJsonPathMock,
@@ -135,6 +136,7 @@ vi.mock("../../lib/tauri", () => ({
   deleteKeys: deleteKeysMock,
   exportKeys: exportKeysMock,
   renameKey: renameKeyMock,
+  renameBrowserKey: renameKeyMock,
   getKeyInfo: getKeyInfoMock,
   importKeys: importKeysMock,
   setKeyTtl: setKeyTtlMock,
@@ -816,7 +818,7 @@ describe("Redis Browser", () => {
     expect(onDeleted).not.toHaveBeenCalled();
   });
 
-  it("保存 Hash、List、Set 和 Sorted Set 时生成对应 RedisValue", async () => {
+  it("Hash、List、Set 和 Sorted Set 使用分页详情且不再执行整键覆盖保存", async () => {
     const summaries = [
       { key: "hash:1", key_type: "hash", ttl_ms: -1, size: 2 },
       { key: "list:1", key_type: "list", ttl_ms: -1, size: 2 },
@@ -825,173 +827,33 @@ describe("Redis Browser", () => {
     ];
     scanKeysMock.mockResolvedValue({ cursor: 0, keys: summaries, has_more: false });
     getKeyMock.mockImplementation(async ({ key }: { key: string }) => {
-      if (key === "hash:1") {
-        return {
-          key,
-          key_type: "hash",
-          ttl_ms: -1,
-          value: { Hash: { fields: [{ field: "name", value: "Alice" }] } },
-        };
-      }
-      if (key === "list:1") {
-        return {
-          key,
-          key_type: "list",
-          ttl_ms: -1,
-          value: { List: { items: ["first"] } },
-        };
-      }
-      if (key === "set:1") {
-        return {
-          key,
-          key_type: "set",
-          ttl_ms: -1,
-          value: { Set: { members: ["member"] } },
-        };
-      }
-      return {
-        key,
-        key_type: "zset",
-        ttl_ms: -1,
-        value: { SortedSet: { members: [{ member: "member", score: 1 }] } },
-      };
+      const summary = summaries.find((item) => item.key === key)!;
+      const value = summary.key_type === "hash" ? { Hash: { fields: [] } }
+        : summary.key_type === "list" ? { List: { items: [] } }
+        : summary.key_type === "set" ? { Set: { members: [] } }
+        : { SortedSet: { members: [] } };
+      return { key, key_type: summary.key_type, ttl_ms: -1, value };
     });
 
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("hash:1");
-
-    fireEvent.click(screen.getByRole("button", { name: "hash:1" }));
-    await screen.findByDisplayValue("Alice");
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() =>
-      expect(setKeyMock).toHaveBeenCalledWith({
-        connection_id: "local",
-        key: "hash:1",
-        value: { Hash: { fields: [{ field: "name", value: "Alice" }] } },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "list:1" }));
-    await screen.findByDisplayValue("first");
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() =>
-      expect(setKeyMock).toHaveBeenCalledWith({
-        connection_id: "local",
-        key: "list:1",
-        value: { List: { items: ["first"] } },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "set:1" }));
-    await screen.findByDisplayValue("member");
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() =>
-      expect(setKeyMock).toHaveBeenCalledWith({
-        connection_id: "local",
-        key: "set:1",
-        value: { Set: { members: ["member"] } },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "zset:1" }));
-    await screen.findByDisplayValue("1");
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() =>
-      expect(setKeyMock).toHaveBeenCalledWith({
-        connection_id: "local",
-        key: "zset:1",
-        value: { SortedSet: { members: [{ member: "member", score: 1 }] } },
-      }),
-    );
+    for (const [key, label] of [["hash:1", "Hash 分页详情"], ["list:1", "List 分页详情"], ["set:1", "Set 分页详情"], ["zset:1", "Sorted Set 分页详情"]]) {
+      fireEvent.click(screen.getByRole("button", { name: key }));
+      expect(await screen.findByRole("region", { name: label })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
+    }
+    expect(setKeyMock).not.toHaveBeenCalled();
   });
 
-  it("Set 保存前去重，Sorted Set 拒绝非有限 score", async () => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [
-        { key: "set:1", key_type: "set", ttl_ms: -1, size: 1 },
-        { key: "zset:1", key_type: "zset", ttl_ms: -1, size: 1 },
-      ],
-      has_more: false,
-    });
-    getKeyMock.mockImplementation(async ({ key }: { key: string }) => ({
-      key,
-      key_type: key.startsWith("z") ? "zset" : "set",
-      ttl_ms: -1,
-      value: key.startsWith("z")
-        ? { SortedSet: { members: [{ member: "member", score: 1 }] } }
-        : { Set: { members: ["member"] } },
-    }));
-
-    render(<BrowserPage connectionId="local" />);
-    await screen.findByText("set:1");
-    fireEvent.click(screen.getByRole("button", { name: "set:1" }));
-    const setInput = await screen.findByDisplayValue("member");
-    fireEvent.change(setInput, { target: { value: "duplicate" } });
-    fireEvent.click(screen.getByRole("button", { name: "添加成员" }));
-    const setInputs = screen.getAllByRole("textbox");
-    fireEvent.change(setInputs[setInputs.length - 1], { target: { value: "duplicate" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() =>
-      expect(setKeyMock).toHaveBeenCalledWith({
-        connection_id: "local",
-        key: "set:1",
-        value: { Set: { members: ["duplicate"] } },
-      }),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "zset:1" }));
-    await screen.findByDisplayValue("1");
-    fireEvent.change(screen.getByLabelText("分数 1"), {
-      target: { value: "Infinity" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("分数必须是有限数字");
-    expect(setKeyMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("同一详情身份的父级重渲染不会覆盖 TTL 和 Sorted Set score 输入", () => {
+  it("同一分页详情身份的父级重渲染不会覆盖 TTL 输入", () => {
     const detail: KeyValue = {
-      key: "zset:1",
-      key_type: "zset",
-      ttl_ms: -1,
-      value: { SortedSet: { members: [{ member: "member", score: 1 }] } },
+      key: "zset:1", key_type: "zset", ttl_ms: -1,
+      value: { SortedSet: { members: [] } },
     };
-    const onDetailChange = vi.fn();
-    const onDeleted = vi.fn();
-
-    const { rerender } = render(
-      <KeyDetails
-        connectionId="local"
-        detail={detail}
-        loading={false}
-        onDetailChange={onDetailChange}
-        onDeleted={onDeleted}
-      />,
-    );
-    fireEvent.change(screen.getByLabelText("TTL（毫秒）"), {
-      target: { value: "60000" },
-    });
-    fireEvent.change(screen.getByLabelText("分数 1"), {
-      target: { value: "Infinity" },
-    });
-
-    rerender(
-      <KeyDetails
-        connectionId="local"
-        detail={{
-          ...detail,
-          value: { SortedSet: { members: [{ member: "member", score: 1 }] } },
-        }}
-        loading={false}
-        onDetailChange={onDetailChange}
-        onDeleted={onDeleted}
-      />,
-    );
-
+    const { rerender } = render(<KeyDetails connectionId="local" detail={detail} loading={false} onDetailChange={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText("TTL（毫秒）"), { target: { value: "60000" } });
+    rerender(<KeyDetails connectionId="local" detail={{ ...detail, value: { SortedSet: { members: [] } } }} loading={false} onDetailChange={vi.fn()} onDeleted={vi.fn()} />);
     expect(screen.getByLabelText("TTL（毫秒）")).toHaveValue(60000);
-    expect(screen.getByLabelText("分数 1")).toHaveValue("Infinity");
   });
 
   it("加载失败时显示 alert 并在请求期间禁用重复过滤", async () => {
@@ -1540,7 +1402,9 @@ describe("Redis Browser", () => {
         path: "$",
       });
     });
-    expect(screen.queryByRole("button", { name: "profile:1" })).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "profile:1" })).not.toBeInTheDocument(),
+    );
     expect(screen.getByText("请选择一个键查看详情")).toBeInTheDocument();
   });
 

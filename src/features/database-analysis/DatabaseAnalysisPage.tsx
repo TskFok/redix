@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import AnalysisHistory from "./AnalysisHistory";
 
 import { analyzeDatabase } from "../../lib/tauri";
 import type {
@@ -262,7 +263,7 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
       ...initialDatabaseAnalysisState,
       input: { ...DEFAULT_ANALYSIS_INPUT, connection_id: connectionId },
     });
-  }, [connectionId]);
+  }, [connectionId, activeDatabase]);
 
   const handleSubmit = () => {
     if (state.loading) {
@@ -373,6 +374,7 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
       {state.error ? <p className="inline-error" role="alert">{state.error}</p> : null}
       {state.loading ? <p className="empty-state-compact" role="status">正在分析数据库…</p> : null}
       {state.report ? <AnalysisResults report={state.report} /> : null}
+      <AnalysisHistory key={JSON.stringify([connectionId, activeDatabase])} connectionId={connectionId} database={activeDatabase} report={state.report} renderReport={(report) => <AnalysisResults report={report} />} />
     </section>
   );
 }

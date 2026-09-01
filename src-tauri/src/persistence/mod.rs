@@ -1,3 +1,4 @@
+pub mod analysis_history;
 mod document_store;
 mod profile_store;
 mod secret_store;

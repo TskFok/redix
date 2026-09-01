@@ -457,3 +457,19 @@
 - 最终真实验证：隔离普通Redis5项通过、3项Stack测试明确skip；CLI9项、Sentinel2项、SSH2项通过。cargo fmt --check、non-cloud与git diff --check通过；前端构建83模块通过。既有Array未用函数与测试辅助函数warning仍存在，不属于失败。
 - 已关闭本任务10:54启动的Vite临时开发服务器；参考仓库状态干净。原生release二进制构建（无安装包/签名）验证进行中。
 - 原生release构建已通过：`CARGO_NET_OFFLINE=true npm run tauri:build -- --no-bundle`，耗时2m13s，生成 `src-tauri/target/release/redix`；未签名、安装、打包或发布。当前main改动未提交/推送，本轮功能与验证收口，总体未覆盖能力按差异矩阵继续跟踪。
+
+## 2026-08-31 非 Cloud 深化补齐启动
+
+- 读取当前功能矩阵与既有实施计划，检查当前 main 干净，参考仓库只读。
+- 使用 brainstorming/writing-plans/planning-with-files/TDD/dispatching-parallel-agents 工作流；依照本轮明确实现要求继续工作，不重复审批已有架构。
+- 按模块分离实现，公共注册和统一验收由主任务负责。
+
+## 2026-09-01 非 Cloud 深化补齐收口
+
+- 大集合详情改为 HSCAN/SSCAN/ZSCAN/LRANGE 有界分页；Hash/List/Set/ZSet 写入使用带存在性与类型检查的原子 Lua 脚本，避免键过期后被增量命令意外重建，并保留未加载数据与 TTL。
+- Stream 详情增加正反向 ID 分页、XADD NOMKSTREAM 和显式 XDEL；隔离测试验证 Consumer Group、Pending 和 TTL 不受详情编辑破坏。
+- Search 增加 typed FT.AGGREGATE LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 面板，解析 RESP2/RESP3 并限制行列、字段和响应大小；任意 raw stage 不进入 IPC。
+- Database Analysis 增加用户显式保存的版本化本机历史，按连接和数据库隔离，支持删除、查看与同参数观察值比较；损坏或未知版本文件不会被静默覆盖。
+- Browser 新增轻量预览读取/重命名路径，大集合和 Stream 打开详情时只读 TYPE/PTTL；子编辑器请求期间同步禁用根级 TTL、删除和改名动作。
+- 首轮隔离回归发现 LSET 的 Redis 回复为 OK，旧 Lua 返回数组被按整数数组解析而失败；改为脚本执行写入后只返回统一整数状态码，针对性测试及完整本地 Redis 套件随后通过。
+- Redis Stack 环境变量未配置，FT.AGGREGATE 真实 Stack 网络流程只记录为 skip，不外推为实机通过。Cluster 路由/fan-out、Stream 实时消费/XAUTOCLAIM、完整 String 解码器和可视查询/向量高级流程继续保留在差异矩阵中。

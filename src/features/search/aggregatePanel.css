@@ -1,0 +1,11 @@
+.aggregate-panel { grid-column: 1 / -1; min-width: 0; }
+.aggregate-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-block: 16px; }
+.aggregate-query { grid-column: 1 / -1; }
+.aggregate-reducers { display: grid; gap: 12px; }
+.aggregate-reducer { display: grid; grid-template-columns: minmax(100px, .7fr) minmax(100px, 1fr) minmax(100px, 1fr) auto; gap: 10px; align-items: end; }
+.aggregate-reducers > button { justify-self: start; }
+.aggregate-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 14px; }
+.aggregate-results { min-width: 0; }
+.aggregate-results table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+.aggregate-results th, .aggregate-results td { padding: 10px; border-bottom: 1px solid var(--color-border); }
+@media (max-width: 760px) { .aggregate-fields, .aggregate-reducer { grid-template-columns: 1fr; } }

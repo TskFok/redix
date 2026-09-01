@@ -20,3 +20,6 @@ pub use stream_groups::{
     parse_stream_consumer_groups, parse_stream_consumers, parse_stream_pending_entries,
 };
 pub use workbench::tokenize_command;
+mod collection;
+mod search_aggregate;
+mod stream_entries;

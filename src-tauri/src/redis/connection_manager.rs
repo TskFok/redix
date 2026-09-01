@@ -358,6 +358,35 @@ impl RedisService {
         self.pubsub.start(app, &client, input).await
     }
 
+    /// Browser collection values are placeholders; the dedicated editor reads bounded pages.
+    /// Full reads remain available to explicit export and legacy operations through get_key.
+    pub async fn get_browser_key(
+        &self,
+        connection_id: &str,
+        key: &str,
+    ) -> Result<KeyValue, AppError> {
+        if key.is_empty() || key.len() > 16 * 1024 {
+            return Err(AppError::InvalidInput);
+        }
+        let mut connection = self.connection(connection_id).await?;
+        read_key_mode(&mut connection, key, true).await
+    }
+
+    pub async fn rename_browser_key(&self, input: RenameKeyInput) -> Result<KeyValue, AppError> {
+        input.validate()?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        let renamed: i64 = ::redis::cmd("RENAMENX")
+            .arg(&input.key)
+            .arg(&input.new_key)
+            .query_async(&mut connection)
+            .await
+            .map_err(map_command_error)?;
+        if renamed == 0 {
+            return Err(AppError::CommandFailed);
+        }
+        read_key_mode(&mut connection, &input.new_key, true).await
+    }
+
     pub async fn stop_pub_sub(&self, input: StopPubSubInput) -> Result<(), AppError> {
         self.pubsub.stop(input)
     }
@@ -2151,6 +2180,14 @@ async fn read_key(
     connection: &mut ::redis::aio::MultiplexedConnection,
     key: &str,
 ) -> Result<KeyValue, AppError> {
+    read_key_mode(connection, key, false).await
+}
+
+async fn read_key_mode(
+    connection: &mut ::redis::aio::MultiplexedConnection,
+    key: &str,
+    preview: bool,
+) -> Result<KeyValue, AppError> {
     let key_type: String = ::redis::cmd("TYPE")
         .arg(key)
         .query_async::<String>(connection)
@@ -2160,6 +2197,32 @@ async fn read_key(
         return Err(AppError::KeyNotFound);
     }
 
+    if preview {
+        let value = match key_type.as_str() {
+            "hash" => Some(RedisValue::Hash { fields: vec![] }),
+            "list" => Some(RedisValue::List { items: vec![] }),
+            "set" => Some(RedisValue::Set { members: vec![] }),
+            "zset" => Some(RedisValue::SortedSet { members: vec![] }),
+            "stream" => Some(RedisValue::Stream { entries: vec![] }),
+            _ => None,
+        };
+        if let Some(value) = value {
+            let ttl_ms = ::redis::cmd("PTTL")
+                .arg(key)
+                .query_async::<i64>(connection)
+                .await
+                .map_err(map_command_error)?;
+            if ttl_ms == -2 {
+                return Err(AppError::KeyNotFound);
+            }
+            return Ok(KeyValue {
+                key: key.into(),
+                key_type,
+                ttl_ms,
+                value,
+            });
+        }
+    }
     let value = match key_type.as_str() {
         "string" => RedisValue::String {
             value: ::redis::cmd("GET")

@@ -8,6 +8,7 @@ import DatabaseAnalysisPage from "./DatabaseAnalysisPage";
 vi.mock("../../lib/tauri", () => ({
   analyzeDatabase: vi.fn(),
 }));
+vi.mock("./analysisHistoryApi", () => ({ listAnalysisHistory: vi.fn().mockResolvedValue([]) }));
 
 const analyzeDatabaseMock = vi.mocked(analyzeDatabase);
 

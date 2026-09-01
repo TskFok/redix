@@ -4,8 +4,8 @@ use tauri::Manager;
 
 use redix_lib::{
     commands::{
-        array, browser, connections, database, json, observability, query_library, search,
-        settings, vector_set, workbench,
+        analysis_history, array, browser, collection, connections, database, json, observability,
+        query_library, search, search_aggregate, settings, stream_entries, vector_set, workbench,
     },
     domain::{
         AppSettings, CommandHistoryEntry, CommandResult, QueryLibraryItemInput,
@@ -69,6 +69,8 @@ fn exposes_all_tauri_command_adapters() {
     let _ = vector_set::download_vector_embedding;
     let _ = browser::scan_keys;
     let _ = browser::get_key;
+    let _ = browser::get_browser_key;
+    let _ = browser::rename_browser_key;
     let _ = browser::set_key;
     let _ = browser::delete_key;
     let _ = browser::set_key_ttl;
@@ -110,6 +112,16 @@ fn exposes_all_tauri_command_adapters() {
     let _ = search::delete_search_index;
     let _ = search::search_keys;
     let _ = search::get_key_search_indexes;
+    let _ = search_aggregate::aggregate_search;
+    let _ = collection::get_collection_page;
+    let _ = collection::mutate_collection;
+    let _ = stream_entries::get_stream_entries;
+    let _ = stream_entries::add_stream_entry;
+    let _ = stream_entries::delete_stream_entries;
+    let _ = analysis_history::list_analysis_history;
+    let _ = analysis_history::save_analysis_history;
+    let _ = analysis_history::get_analysis_history;
+    let _ = analysis_history::delete_analysis_history;
     let _ = observability::get_slow_logs;
     let _ = observability::clear_slow_logs;
     let _ = observability::get_slow_log_config;

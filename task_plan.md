@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-Phase 11：本地 Redis Stream Consumer Group（已完成）
+Phase 18：非 Cloud 深化补齐（已完成；整体剩余差异见功能矩阵）
 
 ## Phases
 
@@ -572,3 +572,16 @@ complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust doma
 - [x] 收口交叉审查：配置事务锁和 CLI 部分失败/格式化超限
 - [x] 全量前后端、前端/原生 release 构建、格式、安全范围与真实 Redis 验证；Stack 未配置明确跳过
 - 共享代码由主任务协调；不自动提交或推送。
+
+## Phase 18：非 Cloud 深化补齐（2026-08-31）
+
+- Status: complete
+- 当前基线 882386d，工作区干净；延续既有成果，不重复实现。
+- 计划：docs/superpowers/plans/2026-08-31-non-cloud-pagination-analysis.md
+- [x] 集合：Hash/List/Set/ZSet 有界分页、原子类型检查和字段/成员/索引级增量写入。
+- [x] Stream：双向 ID 分页、XADD NOMKSTREAM 与显式 XDEL，保留 Group、Pending 和 TTL。
+- [x] Search：typed FT.AGGREGATE LOAD/GROUPBY/REDUCE/SORTBY/LIMIT，兼容 RESP2/RESP3。
+- [x] Database Analysis：显式版本化本机历史、连接/数据库隔离、删除与同参数比较。
+- [x] Browser：大集合和 Stream 详情改用预览端点，不再为打开详情读取完整键。
+- [x] 完成全量前后端、生产/原生构建、隔离 Redis、格式、范围和差异检查。
+- 未完成整体目标：Cluster、高级连接组合、解码器、插件、查询构建器等继续跟踪。

@@ -21,6 +21,25 @@ pub async fn scan_keys(
 }
 
 #[tauri::command]
+pub async fn get_browser_key(
+    state: tauri::State<'_, AppState>,
+    input: GetKeyInput,
+) -> Result<KeyValue, AppError> {
+    state
+        .redis
+        .get_browser_key(&input.connection_id, &input.key)
+        .await
+}
+
+#[tauri::command]
+pub async fn rename_browser_key(
+    state: tauri::State<'_, AppState>,
+    input: RenameKeyInput,
+) -> Result<KeyValue, AppError> {
+    state.redis.rename_browser_key(input).await
+}
+
+#[tauri::command]
 pub async fn get_key(
     state: tauri::State<'_, AppState>,
     input: GetKeyInput,

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { getKey, getModuleCapabilities, scanKeys } from "../../lib/tauri";
+import { getBrowserKey, getModuleCapabilities, scanKeys } from "../../lib/tauri";
 import type { KeyValue } from "../../lib/types";
 import KeyDetails from "./KeyDetails";
 import KeyList from "./KeyList";
@@ -274,7 +274,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
     }));
 
     try {
-      const detail = await getKey({ connection_id: connectionId, key });
+      const detail = await getBrowserKey({ connection_id: connectionId, key });
       if (mountedRef.current && detailRequestRef.current === requestId) {
         setState((current) => ({ ...current, detail, error: null }));
       }
