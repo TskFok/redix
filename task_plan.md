@@ -585,3 +585,40 @@ complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust doma
 - [x] Browser：大集合和 Stream 详情改用预览端点，不再为打开详情读取完整键。
 - [x] 完成全量前后端、生产/原生构建、隔离 Redis、格式、范围和差异检查。
 - 未完成整体目标：Cluster、高级连接组合、解码器、插件、查询构建器等继续跟踪。
+
+## Phase 19：RedisInsight 本地功能全量对齐（2026-09-01）
+
+### Goal
+
+在现有 Redix `27ea136` 基线上继续对照 RedisInsight `48ee19fab`，补齐除明确排除项之外的本地 Redis 功能；保持 Rust + Tauri + React、typed IPC、固定错误边界和跨平台目标。
+
+### Scope
+
+- 永久排除 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics 和远程插件。
+- 对齐用户可见功能、Redis 行为和安全边界，不复制 Electron/NestJS 内部架构。
+- macOS、Windows、Linux 均纳入设计和验证矩阵。
+- 不引入 SQL，不在循环遍历中查询 SQL，不使用 `KEYS` 代替扫描。
+
+### Checklist
+
+- [x] 只读恢复两仓状态、功能矩阵和既有交付记录
+- [x] 与用户确认排除范围、功能对齐口径和三平台目标
+- [x] 比较三种实施策略并确认纵向分批方案
+- [x] 确认架构、组件、数据流、交互和测试设计
+- [x] 编写并自审正式设计文档
+- [ ] 用户审阅正式设计文档
+- [ ] 使用 writing-plans 编写详细实施计划
+- [ ] 用户确认实施计划后按 TDD 执行批次 1：连接与拓扑
+- [ ] 批次 2：Browser 深化
+- [ ] 批次 3：Search、Vector 与 Workbench
+- [ ] 批次 4：分析与推荐
+- [ ] 批次 5：本地产品能力
+- [ ] 批次 6：跨平台收口
+
+### Artifacts
+
+- 设计：`docs/superpowers/specs/2026-09-01-redisinsight-local-full-parity-design.md`
+
+### Status
+
+`spec_review_pending`：设计已获聊天分节确认并写入仓库，等待用户审阅文档；尚未修改业务源码。

@@ -484,3 +484,14 @@
 - Stream XADD 使用 NOMKSTREAM，避免详情打开后原 Stream 消失时被编辑动作重建；XDEL 只删除显式选中的 ID，不影响 Group/Pending 元数据。
 - FT.AGGREGATE 多取一行只用于判断 has_more，该 lookahead 行的字段不能加入当前可见页 columns，否则分页列集合会被未展示数据污染。
 - 分析历史属于可能含键名的本机敏感数据，只能显式保存；完整 read-modify-write 需要同一互斥锁保护，损坏或未知版本源文件必须拒绝覆盖。
+
+## 2026-09-01 本地功能全量对齐范围与设计决策
+
+- 用户明确排除 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics 和远程插件；本地内置白名单可视化仍纳入功能对齐。
+- 用户确认按用户可见工作流、Redis 行为和安全边界验收，继续使用 Rust + Tauri + React，不复制 RedisInsight 的 Electron/NestJS 内部实现。
+- 用户确认 macOS、Windows、Linux 均进入设计和验证范围；当前机器只能实测 macOS，Windows/Linux 结果必须区分 CI 与实机。
+- 已比较纵向分批、一次性移植和 Node 兼容层三种方案；用户确认采用纵向分批，每批同时完成 Rust、typed IPC、React、跨平台适配和测试。
+- 批次顺序固定为：连接与拓扑 → Browser 深化 → Search/Vector/Workbench → 分析与推荐 → 本地产品能力 → 跨平台收口。
+- 连接层将以 Standalone/Sentinel/Cluster target、可组合传输配置和 NodeScope 为边界；后续操作必须明确逻辑数据库、主节点、指定节点或全拓扑作用域。
+- 新增通用 CapabilityRegistry、BackgroundTaskManager、DecoderRegistry 和 BuiltinVisualizationRegistry；远程 manifest、下载、动态代码和远程更新永久排除。
+- 设计文档：`docs/superpowers/specs/2026-09-01-redisinsight-local-full-parity-design.md`。

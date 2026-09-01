@@ -473,3 +473,13 @@
 - Browser 新增轻量预览读取/重命名路径，大集合和 Stream 打开详情时只读 TYPE/PTTL；子编辑器请求期间同步禁用根级 TTL、删除和改名动作。
 - 首轮隔离回归发现 LSET 的 Redis 回复为 OK，旧 Lua 返回数组被按整数数组解析而失败；改为脚本执行写入后只返回统一整数状态码，针对性测试及完整本地 Redis 套件随后通过。
 - Redis Stack 环境变量未配置，FT.AGGREGATE 真实 Stack 网络流程只记录为 skip，不外推为实机通过。Cluster 路由/fan-out、Stream 实时消费/XAUTOCLAIM、完整 String 解码器和可视查询/向量高级流程继续保留在差异矩阵中。
+
+## 2026-09-01 RedisInsight 本地功能全量对齐设计
+
+- **Status:** `spec_review_pending`
+- 当前 Redix `27ea136`、参考 RedisInsight `48ee19fab`，两个仓库均为 `main`；Redix 工作区开始时干净，参考仓库保持只读。
+- 已恢复现有计划、发现、进度和功能矩阵，确认从已完成的集合分页、Stream 分页、受限聚合和分析历史之后继续，不重复已有批次。
+- 用户确认永久排除 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics 和远程插件。
+- 用户确认以功能、Redis 行为和安全边界对齐为准，保留 Rust + Tauri + React，并要求 macOS、Windows、Linux 三平台纳入范围。
+- 用户分节确认了纵向分批方案、四层架构、统一连接目标、能力/任务/解码/内置可视化注册表、typed IPC 数据流、错误边界、用户体验和跨平台测试门槛。
+- 正式设计已写入 `docs/superpowers/specs/2026-09-01-redisinsight-local-full-parity-design.md`；尚未修改业务代码，等待用户审阅后再使用 writing-plans 编写实施计划。
