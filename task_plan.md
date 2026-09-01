@@ -606,8 +606,8 @@ complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust doma
 - [x] 比较三种实施策略并确认纵向分批方案
 - [x] 确认架构、组件、数据流、交互和测试设计
 - [x] 编写并自审正式设计文档
-- [ ] 用户审阅正式设计文档
-- [ ] 使用 writing-plans 编写详细实施计划
+- [x] 用户审阅正式设计文档
+- [x] 使用 writing-plans 编写总路线图和批次 1 详细实施计划
 - [ ] 用户确认实施计划后按 TDD 执行批次 1：连接与拓扑
 - [ ] 批次 2：Browser 深化
 - [ ] 批次 3：Search、Vector 与 Workbench
@@ -618,7 +618,16 @@ complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust doma
 ### Artifacts
 
 - 设计：`docs/superpowers/specs/2026-09-01-redisinsight-local-full-parity-design.md`
+- 总路线图：`docs/superpowers/plans/2026-09-01-redisinsight-local-full-parity-roadmap.md`
+- 批次 1 计划：`docs/superpowers/plans/2026-09-01-connection-topology.md`
 
 ### Status
 
-`spec_review_pending`：设计已获聊天分节确认并写入仓库，等待用户审阅文档；尚未修改业务源码。
+`plan_ready`：设计已获用户确认，路线图和批次 1 的 10 个 TDD 任务已完成自审；尚未修改业务源码，等待用户选择执行方式。
+
+### Planning errors
+
+| Error | Attempt | Resolution |
+|---|---:|---|
+| 检查可用 SSH crate 时，zsh 对不存在的 `russh-*` glob 报 `no matches found` | 1 | 已确认缓存仅发现 `ssh2 0.9.5`；后续使用解析出的精确目录或 `rg --files`，不再传入未匹配 glob |
+| 首次暂存规划文档时桌面沙箱禁止创建 `.git/index.lock` | 1 | 按权限流程仅对明确的 `git add` 目标提权，暂存成功；未扩大文件范围 |

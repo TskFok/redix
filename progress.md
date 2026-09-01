@@ -476,10 +476,20 @@
 
 ## 2026-09-01 RedisInsight 本地功能全量对齐设计
 
-- **Status:** `spec_review_pending`
+- **Status:** `plan_ready`
 - 当前 Redix `27ea136`、参考 RedisInsight `48ee19fab`，两个仓库均为 `main`；Redix 工作区开始时干净，参考仓库保持只读。
 - 已恢复现有计划、发现、进度和功能矩阵，确认从已完成的集合分页、Stream 分页、受限聚合和分析历史之后继续，不重复已有批次。
 - 用户确认永久排除 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics 和远程插件。
 - 用户确认以功能、Redis 行为和安全边界对齐为准，保留 Rust + Tauri + React，并要求 macOS、Windows、Linux 三平台纳入范围。
 - 用户分节确认了纵向分批方案、四层架构、统一连接目标、能力/任务/解码/内置可视化注册表、typed IPC 数据流、错误边界、用户体验和跨平台测试门槛。
-- 正式设计已写入 `docs/superpowers/specs/2026-09-01-redisinsight-local-full-parity-design.md`；尚未修改业务代码，等待用户审阅后再使用 writing-plans 编写实施计划。
+- 正式设计已写入 `docs/superpowers/specs/2026-09-01-redisinsight-local-full-parity-design.md` 并获用户确认；路线图与批次 1 详细计划已完成，尚未修改业务代码。
+
+## 2026-09-01 本地功能全量对齐实施规划
+
+- **Status:** `plan_ready`
+- 用户已审阅并确认正式设计；开始使用 writing-plans 拆分实施计划，尚未修改业务代码。
+- 由于六个批次属于独立子系统，将建立总路线图，并先为依赖最前的连接与拓扑批次编写完整可执行计划；后续批次在前一批接口稳定后分别规划。
+- 已完成当前 profile、connection manager、commands、typed bridge、连接表单和测试入口，以及参考项目 Cluster/Sentinel/SSH/Cluster Monitor 文件分布的首轮映射。
+- 批次 1 计划已完成连接合同、Cluster parser/routing、跨平台 SSH、Sentinel over SSH、现有 operation/CLI 路由迁移、多 primary SCAN、拓扑/分析、typed IPC、UI、隔离 Cluster 与三平台 CI 的 10 个 TDD 任务。
+- 计划自审补齐 SSH+TLS 原始 SNI、MultiplexedConnection driver 生命周期、自定义 Pub/Sub/Profiler transport、Sentinel seed/primary 全程 SSH、现有 concrete connection helper 迁移，以及逐节点连接不得在循环读取凭据等边界。
+- 自审通过：详细计划 10 个任务、62 个平衡代码围栏、无 TODO/TBD/占位符，`git diff --check` 通过；等待用户选择 subagent-driven 或当前会话逐项执行。

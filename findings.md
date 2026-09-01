@@ -495,3 +495,45 @@
 - 连接层将以 Standalone/Sentinel/Cluster target、可组合传输配置和 NodeScope 为边界；后续操作必须明确逻辑数据库、主节点、指定节点或全拓扑作用域。
 - 新增通用 CapabilityRegistry、BackgroundTaskManager、DecoderRegistry 和 BuiltinVisualizationRegistry；远程 manifest、下载、动态代码和远程更新永久排除。
 - 设计文档：`docs/superpowers/specs/2026-09-01-redisinsight-local-full-parity-design.md`。
+
+### 批次 1 文件与接口勘察
+
+- 当前 `ConnectionProfile` 用 `Option<SentinelConfig>` 和 `Option<SshConfig>` 表达拓扑/传输，前端 `topology` 只有 `standalone | sentinel`；新增 Cluster 应先建立显式 topology 合同，同时保证旧 JSON 反序列化兼容。
+- 当前 `ConnectionHandle` 仅持单个 `redis::Client`、profile 和可选 SSH tunnel；`RedisOperations` 已承载大量单连接操作。批次 1 应把节点选择与路由封装在 handle/service 内，避免把 Cluster client 或节点连接泄露到现有命令 trait 的每个方法。
+- 当前 SSH 校验明确拒绝 TLS 或 Sentinel 组合，Windows 由现有 OpenSSH 路径稳定拒绝；批次 1 需要先定义跨平台 transport builder 与合法组合矩阵，再替换平台实现。
+- 参考项目 Cluster 连接分布在 `redis/client/{ioredis,node-redis}`、`redis/connection` 和 `cluster-monitor`，UI 入口位于 `home/components/cluster-connection` 与 `pages/redis-cluster`；不能只照抄 `cluster-monitor` 模块。
+- 参考 `cluster-monitor` 同时支持 `CLUSTER SHARDS` 和 `CLUSTER NODES` 信息策略，表明 Redix 需要版本/能力降级，而不是只解析单一回复格式。
+- 当前 `redis = 1.5` 只启用 `tokio-comp`、Rustls TLS 和 insecure TLS feature；批次 1 是否复用 crate 的 async cluster 支持，需要核对 feature 与 API 后再锁定 Cargo 改动。
+- 目标 Cluster client 将 `nodes(primary|replica|all)` 作为统一能力，并把 pipeline 降级为逐命令路由；Redix 的 plan 应保持节点列表和命令路由为服务层接口，不把第三方 cluster client 类型进入 domain/IPC。
+- 目标 Cluster 详情包含 cluster state/slots/epoch/known nodes，以及节点 id、endpoint、role、health、slots、内存、OPS、连接、网络、复制 offset/lag 和 uptime；批次 1 的 DTO 与 UI 验收应覆盖这些字段并允许单节点指标局部缺失。
+- `CLUSTER SHARDS` 是优先拓扑来源，`CLUSTER NODES` 是兼容回退；endpoint 解析需要处理 TLS port、IPv6、未知 endpoint 和 announced endpoint，不能把展示地址直接无条件当作连接地址。
+- 本机缓存的 `redis 1.5.0` 提供 `cluster-async` feature、`ClusterClientBuilder`、TLS/证书、超时、重试和 cloneable `cluster_async::ClusterConnection`；计划可复用其 MOVED/ASK 与 slot 刷新，不自行重写槽路由算法。
+- 连接 service 需要引入内部 `RoutedClient`/`RoutedConnection` 枚举：Standalone 分支继续使用 `Client`/`MultiplexedConnection`，Cluster 分支使用 `ClusterClient`/`ClusterConnection`；domain 和 typed IPC 不暴露 redis crate 类型。
+- 现有业务 helper 大量接收具体 async connection。计划应让内部 routed connection 实现 `redis::aio::ConnectionLike`，使 key/search/array/vector 等现有命令继续复用，并只为全拓扑 SCAN、节点详情和 fan-out 分析增加显式接口。
+- 当前 Windows 分支只依赖 `windows-sys`，SSH 生产实现依赖 Unix OpenSSH control socket，非 Unix 明确返回失败。若要三平台对齐，不能继续把 TCP 可连接当作 SSH 隧道归属证明。
+- 本机 Cargo 缓存存在 `ssh2 0.9.5`，不存在已发现的 `russh`；计划将优先评估 `ssh2` 的 host-key、agent/public-key 认证与 direct-tcpip 能力，避免依赖 Windows OpenSSH multiplexing。
+- `ssh2 0.9.5` 提供 OpenSSH known_hosts 读取/校验、agent 认证、私钥文件认证、host key 获取和 `channel_direct_tcpip`；它可由 Redix 自己持有本地 listener，从而消除“释放随机端口再让外部 ssh 绑定”的竞态并统一三平台生命周期。
+- 参考 UI 的 SSH 认证明确支持密码和私钥/口令；当前 Redix 只支持 agent/identity file。批次 1 必须扩展 `ConnectionSecrets` 保存 SSH 密码、私钥 PEM 和私钥口令，并保持 profile/导出/日志无敏感正文。
+- 参考数据库模型同时拥有 connectionType、TLS、SSH 和 Sentinel 字段，但 Cluster discovery 有独立入口。计划应建立显式组合矩阵并测试：Standalone TCP/TLS 可与 SSH 组合；Cluster 和 Sentinel 的 SSH 组合在缺少可证明的多节点隧道路由前保持稳定拒绝，而不是静默直连。
+- `ConnectionSecrets` 已使用版本宽松的 JSON 钥匙串值并兼容历史 raw password；可向后兼容增加 `ssh_password`、`ssh_private_key`、`ssh_passphrase`，同时必须扩展 known-key 检测和 `is_empty()`。
+- 连接导出 v1 当前会序列化整个 `SshConfig`，因此新增的 `has_*`/认证元数据可以导出，但任何 SSH password、私钥正文和口令只能计入 ignored secret fields，不能进入 portable document。
+- 为避免破坏已有 Sentinel JSON，持久化 profile 继续保留可选 `sentinel`，新增可选 `cluster`；运行时使用 `ConnectionTarget::try_from(&ConnectionProfile)` 产生显式 Standalone/Sentinel/Cluster target，并拒绝多个拓扑配置同时存在。
+- 当前 `AppError` 没有拓扑、部分失败和节点不可达错误；批次 1 需要新增固定 `CLUSTER_TOPOLOGY_FAILED`、`CLUSTER_NODE_UNAVAILABLE`、`PARTIAL_FAILURE`，并保持序列化只包含 code/message。
+- 当前 Database 页面和分析 DTO 都隐含单节点/单数据库语义；Cluster 只能使用 DB 0，`select_database` 必须稳定拒绝非 0，Database 页面改为拓扑摘要与节点表，分析报告需要增加 `node_results`/`failed_nodes` 但保留现有 Standalone shape 的兼容读取。
+- 当前前端导航没有 topology workspace；计划新增 `topology` workspace，并在非 Cluster 连接上展示局部不可用说明，而不是隐藏整个连接。
+- 当前隔离测试脚本只启动单个 Standalone Redis，仓库无 `.github` workflow。批次 1 需要独立的 `scripts/test-local-cluster.py`，用临时目录和随机端口启动至少 3 个 Redis Cluster 节点，并新增三平台 CI；脚本必须清理子进程且不继承用户的 `REDIX_TEST_REDIS*` 地址。
+- 现有 README/non-cloud scope 明确记录 SSH 仅 Unix Standalone 非 TLS；批次 1 完成后必须同步这些边界，且不得在 Windows/Linux 未验证时声称实机通过。
+- `redis::aio::ConnectionLike` 仅要求 `req_packed_command`、`req_packed_commands` 和 `get_db`；Standalone `MultiplexedConnection` 与 Cluster `ClusterConnection` 都实现该 trait，内部枚举可直接委托并让现有 typed Redis 命令保持泛型兼容。
+- 当前 `client()` 直接返回 `redis::Client`，Pub/Sub/Profiler 依赖该具体类型。批次 1 应把普通命令改用 `RoutedConnection`，同时为只支持单节点 socket 的 Pub/Sub/Profiler 增加 `standalone_client()` 能力门控；后续拓扑观察扩展不能误把随机 Cluster 节点当作完整实例。
+- Cluster `get_db()` 固定为 0；profile 校验、连接表单、数据库切换和导入都必须强制 Cluster database 0。
+- 计划自审发现 SSH+TLS 不能把 tunnel 的 `127.0.0.1` 当作证书 SNI。批次 1 必须增加 `TunneledClient`：TCP 实际连接 app-owned local endpoint，TLS ServerName 与 Redis connection info 仍使用原目标 host，然后再构造 `MultiplexedConnection`。
+- `redis 1.5` 的 `MultiplexedConnection::new/new_with_config` 接受调用方提供的 async stream；现有 lockfile 已含 rustls/tokio-rustls，可增加 direct dependencies 实现上述 tunnel+TLS 流，不修改系统 hosts 或关闭证书校验。
+- 当前 lockfile 版本为 rustls 0.23.42、tokio-rustls 0.26.4、rustls-native-certs 0.8.3；PEM parser 需新增 rustls-pemfile 2.x direct dependency。`MultiplexedConnection::new_with_config` 返回 connection 和 driver future，TunneledClient 必须 spawn driver，不能只返回 connection 后丢弃 transport。
+- 计划类型自审要求 `RoutedClient` 明确定义；Cluster 分支应保存已经建立且可 clone 的 `ClusterConnection`，而不是每次操作从 `ClusterClient` 重建全拓扑连接。
+- redis crate 的 PubSub/Monitor 对外入口主要挂在 `Client`；SSH+TLS 自定义 stream 对长连接观察的支持需要继续核对构造器可见性。若 crate 不允许由自定义 stream 构造，批次 1 必须稳定能力门控并把该组合记录为显式剩余差异，不能静默降级直连。
+- 核对结果：`redis::aio::PubSub::new` 可接受自定义 async stream，`Monitor::new` 是 crate-private；MONITOR 的实时消息是 RESP simple string。批次 1 可让 TunneledClient 提供 PubSub，并在 Redix 自己的 profiler transport 中执行 AUTH/SELECT/MONITOR 握手和有界逐行解码，从而不必把 SSH+TLS Profiler 留成永久缺口。
+- 进一步自审发现设计要求补齐 TLS/SSH/Sentinel 的合法组合，而初稿错误地把 Sentinel + SSH 一并拒绝。修正方案是 `SshTransport` 只认证一次，并为 Sentinel 种子与发现出的 primary 分别创建 endpoint-owned direct-tcpip forward；所有发现和数据连接继续使用原 endpoint 做 TLS SNI，Cluster + SSH 才保持显式不支持。
+- 当前 operation helper、JSON、Database Analysis 和持久 CLI socket 仍大量写死 `MultiplexedConnection`。仅给新 enum 实现 `ConnectionLike` 不足以让 Cluster 覆盖既有功能；批次 1 计划已增加生产 helper/CLI socket 到 `RoutedConnection` 的机械替换与 acceptance scan。
+- Cluster crate 不公开可复用的“逐节点连接”集合。跨 primary SCAN、节点 INFO 和分析需要单独的 `ClusterNodeConnectionFactory`，从 active handle 一次性捕获认证/TLS material，再按 announced endpoint 有界并发连接；禁止在节点循环读取 keyring/持久化，也不把不可达节点替换为无关 seed。
+- 自定义 SSH+TLS Profiler 不依赖 crate-private `Monitor::new`：计划统一为 `MonitorLineStream`，Direct 分支包装公开 Monitor stream，自定义分支执行有界 AUTH/SELECT/MONITOR 握手并只接收有大小上限的 RESP simple-string 行；Pub/Sub 直接使用公开 `PubSub::new`。
+- 批次 1 详细计划最终拆为 10 个可提交 TDD 任务；总路线图保留六批依赖门槛，避免在连接/任务/解码 DTO 尚未稳定时提前固化后续批次签名。
