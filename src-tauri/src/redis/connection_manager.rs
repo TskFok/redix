@@ -272,7 +272,7 @@ pub struct RedisService {
 struct ConnectionHandle {
     client: Client,
     profile: ConnectionProfile,
-    _tunnel: Option<Arc<super::ssh::SshTunnel>>,
+    _ssh_forward: Option<Arc<super::ssh::SshForward>>,
 }
 
 impl RedisService {
@@ -2579,25 +2579,32 @@ async fn connect_handle(
 ) -> Result<(ConnectionHandle, Option<crate::domain::ConnectionEndpoint>), AppError> {
     profile.validate()?;
     ensure_supported_connection_combination(profile)?;
-    let tunnel = if profile.ssh.is_some() {
-        Some(Arc::new(
-            super::ssh::SshTunnel::start(profile, secrets).await?,
-        ))
+    let ssh_forward = if let Some(ssh) = profile.ssh.as_ref() {
+        let transport = super::ssh::SshTransport::connect(ssh, secrets).await?;
+        Some(
+            transport
+                .forward(&crate::domain::ConnectionEndpoint {
+                    host: profile.host.clone(),
+                    port: profile.port,
+                })
+                .await?,
+        )
     } else {
         None
     };
     let mut effective = profile.clone();
-    if let Some(tunnel) = &tunnel {
+    if let Some(forward) = &ssh_forward {
+        let endpoint = forward.local_endpoint();
         effective.ssh = None;
-        effective.host = "127.0.0.1".into();
-        effective.port = tunnel.port;
+        effective.host = endpoint.host;
+        effective.port = endpoint.port;
     }
     let (client, endpoint) = discover_client(&effective, secrets).await?;
     Ok((
         ConnectionHandle {
             client,
             profile: profile.clone(),
-            _tunnel: tunnel,
+            _ssh_forward: ssh_forward,
         },
         endpoint,
     ))
@@ -2680,10 +2687,6 @@ fn ensure_supported_connection_combination(profile: &ConnectionProfile) -> Resul
     if profile.cluster.is_some()
         || (profile.sentinel.is_some() && profile.ssh.is_some())
         || (profile.tls && profile.ssh.is_some())
-        || profile
-            .ssh
-            .as_ref()
-            .is_some_and(|ssh| !matches!(ssh.auth_method, crate::domain::SshAuthMethod::Agent))
     {
         return Err(AppError::UnsupportedFeature);
     }

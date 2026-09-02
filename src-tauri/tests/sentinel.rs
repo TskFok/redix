@@ -148,7 +148,7 @@ fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_co
 }
 
 #[tokio::test]
-async fn unsupported_topology_and_new_ssh_combinations_fail_before_network_io() {
+async fn unsupported_topology_and_routed_ssh_combinations_fail_before_network_io() {
     let mut profiles = Vec::new();
     let mut cluster = support::valid_profile();
     cluster.host = "invalid.example".into();
@@ -181,16 +181,6 @@ async fn unsupported_topology_and_new_ssh_combinations_fail_before_network_io() 
     );
     profiles.push(tls_ssh);
 
-    let mut private_key = support::valid_profile();
-    private_key.ssh = Some(
-        serde_json::from_value(serde_json::json!({
-            "host": "bastion.example", "port": 22, "username": "operator",
-            "auth_method": "private_key"
-        }))
-        .unwrap(),
-    );
-    profiles.push(private_key);
-
     let service = RedisService::new(
         Arc::new(Profiles(Mutex::new(profiles.clone()))),
         Arc::new(Secrets(ConnectionSecrets::default())),
@@ -207,7 +197,7 @@ async fn unsupported_topology_and_new_ssh_combinations_fail_before_network_io() 
 }
 
 #[tokio::test]
-async fn ssh_password_authentication_is_rejected_before_any_client_or_socket_is_created() {
+async fn ssh_password_authentication_without_selected_secret_fails_closed() {
     let mut profile = support::valid_profile();
     profile.host = "invalid.example".into();
     profile.ssh = Some(
@@ -230,7 +220,7 @@ async fn ssh_password_authentication_is_rejected_before_any_client_or_socket_is_
             .test_connection(&profile, &ConnectionSecrets::default())
             .await
             .unwrap_err(),
-        AppError::UnsupportedFeature
+        AppError::SshTunnelFailed
     );
 }
 

@@ -25,6 +25,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
 
 tempfile = "3"
+ssh2 = { version = "0.9.5", features = ["vendored-openssl"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", default-features = false, features = ["Win32_Storage_FileSystem"] }
