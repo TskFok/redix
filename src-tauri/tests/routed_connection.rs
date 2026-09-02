@@ -31,6 +31,13 @@ async fn spawn_fake_redis() -> u16 {
                 pending.drain(..consumed);
                 let response = match command.first().map(Vec::as_slice) {
                     Some(b"PING") => b"+PONG\r\n".as_slice(),
+                    Some(b"ECHO") => {
+                        let payload = command.get(1).map(Vec::as_slice).unwrap_or_default();
+                        let response = format!("${}\r\n", payload.len());
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                        socket.write_all(payload).await.unwrap();
+                        b"\r\n".as_slice()
+                    }
                     _ => b"+OK\r\n".as_slice(),
                 };
                 socket.write_all(response).await.unwrap();
@@ -38,6 +45,35 @@ async fn spawn_fake_redis() -> u16 {
         }
     });
     port
+}
+
+async fn spawn_blocking_redis() -> (u16, tokio::sync::oneshot::Receiver<()>) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut pending = Vec::new();
+        let mut read = [0_u8; 4096];
+        loop {
+            let size = socket.read(&mut read).await.unwrap();
+            if size == 0 {
+                let _ = closed_tx.send(());
+                return;
+            }
+            pending.extend_from_slice(&read[..size]);
+            if let Some((_, command)) = parse_resp_command(&pending) {
+                assert_eq!(
+                    command.first().map(Vec::as_slice),
+                    Some(b"BLPOP".as_slice())
+                );
+                pending.clear();
+            }
+        }
+    });
+    (port, closed_rx)
 }
 
 type ObservedCommands = Arc<Mutex<Vec<Vec<Vec<u8>>>>>;
@@ -74,6 +110,38 @@ Ymnw0YzaAQkbf2ywPQ+isYIgv++hRANCAAT29igT4ACTcKZfAUUz8S0hwODiixw9
 YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
 -----END PRIVATE KEY-----
 "#;
+const WRONG_CA: &str = r#"-----BEGIN CERTIFICATE-----
+MIIBhjCCASugAwIBAgIUNPvunqPqKR5wBoew2KaT9nqpB8MwCgYIKoZIzj0EAwIw
+GDEWMBQGA1UEAwwNV3JvbmctVGVzdC1DQTAeFw0yNjA5MDIxMDA4MjJaFw0zNjA4
+MzAxMDA4MjJaMBgxFjAUBgNVBAMMDVdyb25nLVRlc3QtQ0EwWTATBgcqhkjOPQIB
+BggqhkjOPQMBBwNCAARmXqNLo7LSu5hNqZGdySly5U+JrZoJdHtXykY7ZZ+DxaPo
+Uu2B75nsTUAQpGAdYVQYNAxhWPhpaGmp8gDCsx87o1MwUTAdBgNVHQ4EFgQUiHO8
+Igq3uiRvyZewypNmHBpeLjowHwYDVR0jBBgwFoAUiHO8Igq3uiRvyZewypNmHBpe
+LjowDwYDVR0TAQH/BAUwAwEB/zAKBggqhkjOPQQDAgNJADBGAiEA9TbnQRouNe8M
+F1f11rro02vmtIz2i1x4gDD/1K6V9R0CIQDk6T3qd5U8UaLqtzokyqX+iU6Q5/rn
+ZITKy02e49ID3Q==
+-----END CERTIFICATE-----
+"#;
+
+fn tunneled_tls_client(
+    port: u16,
+    original_host: &str,
+    material: TlsClientMaterial,
+) -> TunneledClient {
+    TunneledClient::new(
+        redis::RedisConnectionInfo::default().set_skip_set_lib_name(),
+        ConnectionEndpoint {
+            host: original_host.into(),
+            port: 6379,
+        },
+        ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        Some(material),
+        Arc::new(()),
+    )
+}
 
 async fn spawn_fake_cluster() -> (u16, ObservedCommands) {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
@@ -107,6 +175,14 @@ async fn spawn_fake_cluster() -> (u16, ObservedCommands) {
                                 )
                             }
                             Some(b"PING") => "+PONG\r\n".to_owned(),
+                            Some(b"ECHO") => {
+                                let payload = command.get(1).map(Vec::as_slice).unwrap_or_default();
+                                format!(
+                                    "${}\r\n{}\r\n",
+                                    payload.len(),
+                                    String::from_utf8_lossy(payload)
+                                )
+                            }
                             _ => "+OK\r\n".to_owned(),
                         };
                         socket.write_all(response.as_bytes()).await.unwrap();
@@ -187,12 +263,14 @@ async fn spawn_fake_tls_redis() -> (u16, Arc<Mutex<Vec<String>>>) {
             let config = config.clone();
             let observed = observed.clone();
             tokio::spawn(async move {
-                let start = tokio_rustls::LazyConfigAcceptor::new(
+                let Ok(start) = tokio_rustls::LazyConfigAcceptor::new(
                     rustls::server::Acceptor::default(),
                     socket,
                 )
                 .await
-                .unwrap();
+                else {
+                    return;
+                };
                 observed.lock().unwrap().push(
                     start
                         .client_hello()
@@ -200,7 +278,9 @@ async fn spawn_fake_tls_redis() -> (u16, Arc<Mutex<Vec<String>>>) {
                         .unwrap_or_default()
                         .to_owned(),
                 );
-                let mut stream = start.into_stream(config).await.unwrap();
+                let Ok(mut stream) = start.into_stream(config).await else {
+                    return;
+                };
                 let mut pending = Vec::new();
                 let mut read = [0_u8; 4096];
                 loop {
@@ -233,6 +313,10 @@ async fn spawn_fake_tls_redis() -> (u16, Arc<Mutex<Vec<String>>>) {
 }
 
 async fn spawn_monitor_reply_server(reply: Vec<u8>) -> u16 {
+    spawn_monitor_byte_server(vec![b"+OK\r\n".to_vec()], vec![reply]).await
+}
+
+async fn spawn_monitor_byte_server(ack_chunks: Vec<Vec<u8>>, reply_chunks: Vec<Vec<u8>>) -> u16 {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();
@@ -249,8 +333,14 @@ async fn spawn_monitor_reply_server(reply: Vec<u8>) -> u16 {
             pending.extend_from_slice(&read[..size]);
             if let Some((_, command)) = parse_resp_command(&pending) {
                 assert_eq!(command, vec![b"MONITOR".to_vec()]);
-                socket.write_all(b"+OK\r\n").await.unwrap();
-                socket.write_all(&reply).await.unwrap();
+                for chunk in ack_chunks {
+                    socket.write_all(&chunk).await.unwrap();
+                    tokio::task::yield_now().await;
+                }
+                for chunk in reply_chunks {
+                    socket.write_all(&chunk).await.unwrap();
+                    tokio::task::yield_now().await;
+                }
                 return;
             }
         }
@@ -348,6 +438,116 @@ async fn standalone_route_delegates_pipelines_with_requested_response_count() {
 }
 
 #[tokio::test]
+async fn standalone_route_delegates_nonzero_pipeline_offset_and_count() {
+    let port = spawn_fake_redis().await;
+    let client = RoutedClient::Standalone(StandaloneClient::Direct(
+        redis::Client::open(format!("redis://127.0.0.1:{port}/")).unwrap(),
+    ));
+    let mut connection = client.connection().await.unwrap();
+    let mut pipeline = redis::pipe();
+    pipeline
+        .cmd("ECHO")
+        .arg("zero")
+        .cmd("ECHO")
+        .arg("one")
+        .cmd("ECHO")
+        .arg("two");
+
+    let values = ConnectionLike::req_packed_commands(&mut connection, &pipeline, 1, 1)
+        .await
+        .unwrap();
+    assert_eq!(values, vec![redis::Value::BulkString(b"one".to_vec())]);
+}
+
+#[tokio::test]
+async fn routed_response_timeout_is_stable_for_standalone_and_cluster() {
+    let (port, closed) = spawn_blocking_redis().await;
+    let client = RoutedClient::Standalone(StandaloneClient::Tunneled(TunneledClient::new(
+        redis::RedisConnectionInfo::default().set_skip_set_lib_name(),
+        ConnectionEndpoint {
+            host: "cache.internal".into(),
+            port: 6379,
+        },
+        ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        None,
+        Arc::new(()),
+    )));
+    let mut standalone = client.connection().await.unwrap();
+    standalone.set_response_timeout(Duration::from_millis(50));
+    let result = tokio::time::timeout(
+        Duration::from_secs(1),
+        redis::cmd("BLPOP")
+            .arg("blocked")
+            .arg(0)
+            .query_async::<redis::Value>(&mut standalone),
+    )
+    .await
+    .expect("standalone response timeout was not delegated");
+    assert!(result.is_err());
+    drop(standalone);
+    tokio::time::timeout(Duration::from_secs(1), closed)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (port, _) = spawn_fake_cluster().await;
+    let cluster = redis::cluster::ClusterClient::new(vec![format!("redis://127.0.0.1:{port}/")])
+        .unwrap()
+        .get_async_connection()
+        .await
+        .unwrap();
+    let mut cluster = RoutedClient::Cluster(cluster).connection().await.unwrap();
+    cluster.set_response_timeout(Duration::from_millis(250));
+    assert_eq!(ConnectionLike::get_db(&cluster), 0);
+    assert_eq!(
+        redis::cmd("PING")
+            .query_async::<String>(&mut cluster)
+            .await
+            .unwrap(),
+        "PONG"
+    );
+}
+
+#[tokio::test]
+async fn dropping_all_tunneled_connection_clones_aborts_a_blocked_driver() {
+    let (port, closed) = spawn_blocking_redis().await;
+    let client = RoutedClient::Standalone(StandaloneClient::Tunneled(TunneledClient::new(
+        redis::RedisConnectionInfo::default().set_skip_set_lib_name(),
+        ConnectionEndpoint {
+            host: "cache.internal".into(),
+            port: 6379,
+        },
+        ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        None,
+        Arc::new(()),
+    )));
+    let mut connection = client.connection().await.unwrap();
+    let retained_clone = connection.clone();
+    let request = tokio::spawn(async move {
+        redis::cmd("BLPOP")
+            .arg("blocked")
+            .arg(0)
+            .query_async::<redis::Value>(&mut connection)
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    request.abort();
+    let _ = request.await;
+    drop(retained_clone);
+
+    tokio::time::timeout(Duration::from_secs(1), closed)
+        .await
+        .expect("最后一个连接 clone 释放后 custom driver 仍持有 socket")
+        .unwrap();
+}
+
+#[tokio::test]
 async fn cluster_route_is_db_zero_reuses_connection_and_hides_standalone_capability() {
     let (port, _) = spawn_fake_cluster().await;
     let cluster = redis::cluster::ClusterClient::new(vec![format!("redis://127.0.0.1:{port}/")])
@@ -382,6 +582,20 @@ async fn cluster_route_is_db_zero_reuses_connection_and_hides_standalone_capabil
             .await
             .unwrap(),
         ("PONG".into(), "PONG".into())
+    );
+    let mut pipeline = redis::pipe();
+    pipeline
+        .cmd("ECHO")
+        .arg("zero")
+        .cmd("ECHO")
+        .arg("one")
+        .cmd("ECHO")
+        .arg("two");
+    assert_eq!(
+        ConnectionLike::req_packed_commands(&mut first, &pipeline, 1, 1)
+            .await
+            .unwrap(),
+        vec![redis::Value::BulkString(b"one".to_vec())]
     );
 }
 
@@ -425,6 +639,63 @@ async fn cluster_builder_uses_shared_acl_credentials_and_opens_once() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn cluster_builder_maps_invalid_tls_material_without_exposing_redis_errors() {
+    let result = RoutedClient::cluster(
+        &ClusterConfig {
+            nodes: vec![ConnectionEndpoint {
+                host: "127.0.0.1".into(),
+                port: 1,
+            }],
+            read_from_replicas: true,
+        },
+        Some("operator"),
+        Some("redis-secret"),
+        Some(TlsClientMaterial {
+            client_cert: Some(TEST_SERVER_CERT.as_bytes().to_vec()),
+            ..TlsClientMaterial::default()
+        }),
+    )
+    .await;
+    let error = match result {
+        Ok(_) => panic!("invalid mTLS material unexpectedly built a cluster client"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error, redix_lib::error::AppError::InvalidInput);
+    assert!(!format!("{error:?}").contains("redis-secret"));
+}
+
+#[tokio::test]
+async fn cluster_builder_maps_an_unavailable_seed_to_a_fixed_connection_error() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        RoutedClient::cluster(
+            &ClusterConfig {
+                nodes: vec![ConnectionEndpoint {
+                    host: "127.0.0.1".into(),
+                    port,
+                }],
+                read_from_replicas: false,
+            },
+            None,
+            None,
+            None,
+        ),
+    )
+    .await
+    .expect("cluster seed error exceeded the configured connection timeout");
+    assert!(matches!(
+        result,
+        Err(redix_lib::error::AppError::ConnectionFailed)
+    ));
 }
 
 #[tokio::test]
@@ -539,7 +810,6 @@ async fn tunneled_tls_accepts_an_ip_server_name_without_dns_or_panic() {
             port,
         },
         Some(TlsClientMaterial {
-            root_cert: Some(TEST_CA.as_bytes().to_vec()),
             verify_server_cert: false,
             ..TlsClientMaterial::default()
         }),
@@ -555,6 +825,76 @@ async fn tunneled_tls_accepts_an_ip_server_name_without_dns_or_panic() {
         "PONG"
     );
     assert_eq!(server_names.lock().unwrap().as_slice(), [""]);
+}
+
+#[tokio::test]
+async fn tunneled_tls_insecure_accepts_untrusted_dns_certificate_without_roots() {
+    let (port, server_names) = spawn_fake_tls_redis().await;
+    let client = tunneled_tls_client(
+        port,
+        "cache.internal",
+        TlsClientMaterial {
+            verify_server_cert: false,
+            ..TlsClientMaterial::default()
+        },
+    );
+
+    let mut connection = client.connection().await.unwrap();
+    assert_eq!(
+        redis::cmd("PING")
+            .query_async::<String>(&mut connection)
+            .await
+            .unwrap(),
+        "PONG"
+    );
+    assert_eq!(server_names.lock().unwrap().as_slice(), ["cache.internal"]);
+}
+
+#[tokio::test]
+async fn tunneled_tls_secure_rejects_untrusted_and_wrong_ca_certificates() {
+    assert!(TlsClientMaterial::default().verify_server_cert);
+    for root_cert in [None, Some(WRONG_CA.as_bytes().to_vec())] {
+        let (port, _) = spawn_fake_tls_redis().await;
+        let client = tunneled_tls_client(
+            port,
+            "cache.internal",
+            TlsClientMaterial {
+                root_cert,
+                ..TlsClientMaterial::default()
+            },
+        );
+        assert!(matches!(
+            client.connection().await,
+            Err(redix_lib::error::AppError::ConnectionFailed)
+        ));
+    }
+}
+
+#[tokio::test]
+async fn tunneled_tls_rejects_missing_or_invalid_mtls_material_with_fixed_error() {
+    let materials = [
+        TlsClientMaterial {
+            client_cert: Some(TEST_SERVER_CERT.as_bytes().to_vec()),
+            ..TlsClientMaterial::default()
+        },
+        TlsClientMaterial {
+            client_key: Some(TEST_SERVER_KEY.as_bytes().to_vec()),
+            ..TlsClientMaterial::default()
+        },
+        TlsClientMaterial {
+            client_cert: Some(b"not a certificate".to_vec()),
+            client_key: Some(b"not a key".to_vec()),
+            ..TlsClientMaterial::default()
+        },
+    ];
+    for material in materials {
+        let (port, _) = spawn_fake_tls_redis().await;
+        let client = tunneled_tls_client(port, "cache.internal", material);
+        assert!(matches!(
+            client.connection().await,
+            Err(redix_lib::error::AppError::InvalidInput)
+        ));
+    }
 }
 
 #[tokio::test]
@@ -611,7 +951,13 @@ async fn monitor_rejects_bulk_malformed_and_oversized_lines_once_then_closes() {
     oversized.push(b'+');
     oversized.extend(std::iter::repeat_n(b'x', 256 * 1024 + 1));
     oversized.extend_from_slice(b"\r\n");
-    for reply in [b"$4\r\nPING\r\n".to_vec(), b"+broken\n".to_vec(), oversized] {
+    for reply in [
+        b"$4\r\nPING\r\n".to_vec(),
+        b"+broken\n".to_vec(),
+        b"+embedded\rcr\r\n".to_vec(),
+        b"+partial".to_vec(),
+        oversized,
+    ] {
         let port = spawn_monitor_reply_server(reply).await;
         let client = TunneledClient::new(
             redis::RedisConnectionInfo::default().set_skip_set_lib_name(),
@@ -632,6 +978,72 @@ async fn monitor_rejects_bulk_malformed_and_oversized_lines_once_then_closes() {
             Err(redix_lib::error::AppError::CommandFailed)
         );
         assert!(stream.next().await.is_none());
+    }
+}
+
+#[tokio::test]
+async fn monitor_accepts_fragmented_ack_and_fragmented_simple_string_frame() {
+    let port = spawn_monitor_byte_server(
+        vec![b"+".to_vec(), b"OK\r".to_vec(), b"\n".to_vec()],
+        vec![
+            b"+1.0 [3 ".to_vec(),
+            b"local] \"PI".to_vec(),
+            b"NG\"\r".to_vec(),
+            b"\n".to_vec(),
+        ],
+    )
+    .await;
+    let client = TunneledClient::new(
+        redis::RedisConnectionInfo::default().set_skip_set_lib_name(),
+        ConnectionEndpoint {
+            host: "cache.internal".into(),
+            port: 6379,
+        },
+        ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        None,
+        Arc::new(()),
+    );
+    let mut stream = client.monitor_stream().await.unwrap();
+    assert_eq!(
+        stream.next().await.unwrap().unwrap(),
+        "1.0 [3 local] \"PING\""
+    );
+    assert!(stream.next().await.is_none());
+}
+
+#[tokio::test]
+async fn monitor_rejects_malformed_bulk_partial_and_oversized_ack() {
+    let mut ack = Vec::with_capacity(8 * 1024 + 4);
+    ack.push(b'+');
+    ack.extend(std::iter::repeat_n(b'x', 8 * 1024 + 1));
+    ack.extend_from_slice(b"\r\n");
+    for reply in [
+        b"+NO\r\n".to_vec(),
+        b"$2\r\n".to_vec(),
+        b"+partial".to_vec(),
+        ack,
+    ] {
+        let port = spawn_monitor_byte_server(vec![reply], Vec::new()).await;
+        let client = TunneledClient::new(
+            redis::RedisConnectionInfo::default().set_skip_set_lib_name(),
+            ConnectionEndpoint {
+                host: "cache.internal".into(),
+                port: 6379,
+            },
+            ConnectionEndpoint {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            None,
+            Arc::new(()),
+        );
+        assert!(matches!(
+            client.monitor_stream().await,
+            Err(redix_lib::error::AppError::CommandFailed)
+        ));
     }
 }
 

@@ -5,7 +5,9 @@ use crate::{
     error::AppError,
 };
 
-use super::standalone_transport::{map_connection_error, StandaloneClient, TlsClientMaterial};
+use super::standalone_transport::{
+    map_connection_error, ManagedMultiplexedConnection, StandaloneClient, TlsClientMaterial,
+};
 
 #[derive(Clone)]
 pub enum RoutedClient {
@@ -111,9 +113,22 @@ fn cluster_url(endpoint: &ConnectionEndpoint, tls: bool) -> Result<String, AppEr
     ))
 }
 
+#[derive(Clone)]
 pub enum RoutedConnection {
-    Standalone(redis::aio::MultiplexedConnection),
+    Standalone(ManagedMultiplexedConnection),
     Cluster(redis::cluster_async::ClusterConnection),
+}
+
+impl RoutedConnection {
+    pub fn set_response_timeout(&mut self, timeout: std::time::Duration) {
+        match self {
+            Self::Standalone(connection) => connection.set_response_timeout(timeout),
+            // redis-rs 1.5 only exposes ClusterClientBuilder::response_timeout. The cluster
+            // connection is built once with the mandatory three-second timeout above, so this
+            // compatibility setter deliberately preserves that value after connection setup.
+            Self::Cluster(_) => {}
+        }
+    }
 }
 
 impl ConnectionLike for RoutedConnection {
@@ -144,5 +159,29 @@ impl ConnectionLike for RoutedConnection {
             Self::Standalone(connection) => connection.get_db(),
             Self::Cluster(_) => 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::redis::{ssh::SshTransport, standalone_transport::TunneledClient};
+
+    #[test]
+    fn sibling_redis_modules_can_use_the_ssh_transport_production_constructor() {
+        async fn compile_task5_call(transport: &SshTransport) -> Result<TunneledClient, AppError> {
+            TunneledClient::from_ssh_transport(
+                redis::RedisConnectionInfo::default(),
+                ConnectionEndpoint {
+                    host: "cache.internal".into(),
+                    port: 6379,
+                },
+                None,
+                transport,
+            )
+            .await
+        }
+
+        let _ = compile_task5_call;
     }
 }

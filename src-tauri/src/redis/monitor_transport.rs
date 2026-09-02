@@ -84,7 +84,11 @@ async fn read_monitor_line(
     if line.first() != Some(&b'+') || !line.ends_with(b"\r\n") {
         return Err(AppError::CommandFailed);
     }
-    String::from_utf8(line[1..line.len() - 2].to_vec())
+    let payload = &line[1..line.len() - 2];
+    if payload.iter().any(|byte| matches!(byte, b'\r' | b'\n')) {
+        return Err(AppError::CommandFailed);
+    }
+    String::from_utf8(payload.to_vec())
         .map(Some)
         .map_err(|_| AppError::CommandFailed)
 }

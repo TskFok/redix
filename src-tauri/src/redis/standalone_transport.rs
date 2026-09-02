@@ -1,6 +1,7 @@
 use std::{fmt, io::Cursor, pin::Pin, sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
+use redis::aio::ConnectionLike;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{domain::ConnectionEndpoint, error::AppError};
@@ -13,6 +14,65 @@ use super::{
 pub(crate) trait RedisStream: AsyncRead + AsyncWrite {}
 impl<T> RedisStream for T where T: AsyncRead + AsyncWrite {}
 pub(crate) type BoxedRedisStream = Pin<Box<dyn RedisStream + Send + Sync>>;
+
+#[derive(Clone)]
+pub struct ManagedMultiplexedConnection {
+    connection: redis::aio::MultiplexedConnection,
+    _driver: Option<Arc<DriverGuard>>,
+}
+
+struct DriverGuard(tokio::task::AbortHandle);
+
+impl Drop for DriverGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+impl ManagedMultiplexedConnection {
+    fn direct(connection: redis::aio::MultiplexedConnection) -> Self {
+        Self {
+            connection,
+            _driver: None,
+        }
+    }
+
+    fn custom(
+        connection: redis::aio::MultiplexedConnection,
+        driver: tokio::task::JoinHandle<()>,
+    ) -> Self {
+        Self {
+            connection,
+            _driver: Some(Arc::new(DriverGuard(driver.abort_handle()))),
+        }
+    }
+
+    pub fn set_response_timeout(&mut self, timeout: Duration) {
+        self.connection.set_response_timeout(timeout);
+    }
+}
+
+impl ConnectionLike for ManagedMultiplexedConnection {
+    fn req_packed_command<'a>(
+        &'a mut self,
+        command: &'a redis::Cmd,
+    ) -> redis::RedisFuture<'a, redis::Value> {
+        self.connection.req_packed_command(command)
+    }
+
+    fn req_packed_commands<'a>(
+        &'a mut self,
+        pipeline: &'a redis::Pipeline,
+        offset: usize,
+        count: usize,
+    ) -> redis::RedisFuture<'a, Vec<redis::Value>> {
+        self.connection.req_packed_commands(pipeline, offset, count)
+    }
+
+    fn get_db(&self) -> i64 {
+        self.connection.get_db()
+    }
+}
 
 #[derive(Clone)]
 pub struct TlsClientMaterial {
@@ -152,7 +212,7 @@ impl TunneledClient {
         Ok(Box::pin(stream))
     }
 
-    pub async fn connection(&self) -> Result<redis::aio::MultiplexedConnection, AppError> {
+    pub async fn connection(&self) -> Result<ManagedMultiplexedConnection, AppError> {
         let stream = self.open_stream().await?;
         let (connection, driver) = tokio::time::timeout(
             Duration::from_secs(3),
@@ -167,8 +227,8 @@ impl TunneledClient {
         .await
         .map_err(|_| AppError::ConnectionFailed)?
         .map_err(map_connection_error)?;
-        tokio::spawn(driver);
-        Ok(connection)
+        let driver = tokio::spawn(driver);
+        Ok(ManagedMultiplexedConnection::custom(connection, driver))
     }
 
     pub async fn pubsub(&self) -> Result<redis::aio::PubSub, AppError> {
@@ -193,28 +253,29 @@ impl TunneledClient {
 
 fn build_tls_config(material: &TlsClientMaterial) -> Result<rustls::ClientConfig, AppError> {
     let mut roots = rustls::RootCertStore::empty();
-    if let Some(root_cert) = &material.root_cert {
-        let certificates = rustls_pemfile::certs(&mut Cursor::new(root_cert))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|_| AppError::InvalidInput)?;
-        if certificates.is_empty() {
-            return Err(AppError::InvalidInput);
-        }
-        for certificate in certificates {
-            roots.add(certificate).map_err(|_| AppError::InvalidInput)?;
-        }
-    } else {
-        let native = rustls_native_certs::load_native_certs();
-        for certificate in native.certs {
-            roots.add(certificate).map_err(|_| AppError::InvalidInput)?;
-        }
-        if roots.is_empty() {
-            return Err(AppError::ConnectionFailed);
+    if material.verify_server_cert {
+        if let Some(root_cert) = &material.root_cert {
+            let certificates = rustls_pemfile::certs(&mut Cursor::new(root_cert))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| AppError::InvalidInput)?;
+            if certificates.is_empty() {
+                return Err(AppError::InvalidInput);
+            }
+            for certificate in certificates {
+                roots.add(certificate).map_err(|_| AppError::InvalidInput)?;
+            }
+        } else {
+            let native = rustls_native_certs::load_native_certs();
+            for certificate in native.certs {
+                roots.add(certificate).map_err(|_| AppError::InvalidInput)?;
+            }
+            if roots.is_empty() {
+                return Err(AppError::ConnectionFailed);
+            }
         }
     }
 
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
-    let verifier_roots = Arc::new(roots.clone());
     let builder = rustls::ClientConfig::builder_with_provider(provider.clone())
         .with_safe_default_protocol_versions()
         .map_err(|_| AppError::ConnectionFailed)?
@@ -235,47 +296,39 @@ fn build_tls_config(material: &TlsClientMaterial) -> Result<rustls::ClientConfig
         _ => return Err(AppError::InvalidInput),
     };
     if !material.verify_server_cert {
-        let inner =
-            rustls::client::WebPkiServerVerifier::builder_with_provider(verifier_roots, provider)
-                .build()
-                .map_err(|_| AppError::InvalidInput)?;
+        // Insecure mode disables trust-chain and server-name verification only. The verifier
+        // still checks CertificateVerify with the certificate public key below.
         config
             .dangerous()
-            .set_certificate_verifier(Arc::new(AcceptInvalidHostnamesVerifier { inner }));
+            .set_certificate_verifier(Arc::new(InsecureServerCertVerifier {
+                supported: provider.signature_verification_algorithms,
+            }));
     }
     Ok(config)
 }
 
-struct AcceptInvalidHostnamesVerifier {
-    inner: Arc<rustls::client::WebPkiServerVerifier>,
+struct InsecureServerCertVerifier {
+    supported: rustls::crypto::WebPkiSupportedAlgorithms,
 }
 
-impl fmt::Debug for AcceptInvalidHostnamesVerifier {
+impl fmt::Debug for InsecureServerCertVerifier {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("AcceptInvalidHostnamesVerifier")
+            .debug_struct("InsecureServerCertVerifier")
             .finish()
     }
 }
 
-impl rustls::client::danger::ServerCertVerifier for AcceptInvalidHostnamesVerifier {
+impl rustls::client::danger::ServerCertVerifier for InsecureServerCertVerifier {
     fn verify_server_cert(
         &self,
-        end_entity: &rustls::pki_types::CertificateDer<'_>,
-        intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        server_name: &rustls::pki_types::ServerName<'_>,
-        ocsp_response: &[u8],
-        now: rustls::pki_types::UnixTime,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
     ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        self.inner
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
-            .or_else(|error| match error {
-                rustls::Error::InvalidCertificate(
-                    rustls::CertificateError::NotValidForName
-                    | rustls::CertificateError::NotValidForNameContext { .. },
-                ) => Ok(rustls::client::danger::ServerCertVerified::assertion()),
-                error => Err(error),
-            })
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
@@ -284,8 +337,7 @@ impl rustls::client::danger::ServerCertVerifier for AcceptInvalidHostnamesVerifi
         certificate: &rustls::pki_types::CertificateDer<'_>,
         signed: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        self.inner
-            .verify_tls12_signature(message, certificate, signed)
+        rustls::crypto::verify_tls12_signature(message, certificate, signed, &self.supported)
     }
 
     fn verify_tls13_signature(
@@ -294,17 +346,16 @@ impl rustls::client::danger::ServerCertVerifier for AcceptInvalidHostnamesVerifi
         certificate: &rustls::pki_types::CertificateDer<'_>,
         signed: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        self.inner
-            .verify_tls13_signature(message, certificate, signed)
+        rustls::crypto::verify_tls13_signature(message, certificate, signed, &self.supported)
     }
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        self.inner.supported_verify_schemes()
+        self.supported.supported_schemes()
     }
 }
 
 impl StandaloneClient {
-    pub async fn connection(&self) -> Result<redis::aio::MultiplexedConnection, AppError> {
+    pub async fn connection(&self) -> Result<ManagedMultiplexedConnection, AppError> {
         match self {
             Self::Direct(client) => client
                 .get_multiplexed_async_connection_with_config(
@@ -313,6 +364,7 @@ impl StandaloneClient {
                         .set_response_timeout(Some(Duration::from_secs(3))),
                 )
                 .await
+                .map(ManagedMultiplexedConnection::direct)
                 .map_err(map_connection_error),
             Self::Tunneled(client) => client.connection().await,
         }
@@ -352,5 +404,20 @@ pub(crate) fn map_connection_error(error: redis::RedisError) -> AppError {
         AppError::AuthenticationFailed
     } else {
         AppError::ConnectionFailed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ssh_forward_constructor_keeps_the_exact_arc_lifetime_type_private_to_redis() {
+        let _: fn(
+            redis::RedisConnectionInfo,
+            ConnectionEndpoint,
+            Option<TlsClientMaterial>,
+            Arc<SshForward>,
+        ) -> TunneledClient = TunneledClient::from_ssh_forward;
     }
 }
