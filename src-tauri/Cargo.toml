@@ -19,13 +19,17 @@ serde_json = "1"
 base64 = "0.22"
 thiserror = "2"
 keyring = { version = "4.1", default-features = false, features = ["v1"] }
-redis = { version = "1.5", features = ["tokio-comp", "tokio-rustls-comp", "tls-rustls-insecure"] }
+redis = { version = "1.5", features = ["tokio-comp", "tokio-rustls-comp", "tls-rustls-insecure", "cluster-async"] }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
 
 tempfile = "3"
 ssh2 = { version = "0.9.5", features = ["vendored-openssl"] }
+rustls = "0.23.42"
+tokio-rustls = "0.26.4"
+rustls-native-certs = "0.8.3"
+rustls-pemfile = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", default-features = false, features = ["Win32_Storage_FileSystem"] }
