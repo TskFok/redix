@@ -544,3 +544,33 @@ fn decoded_structural_envelope_counts_unknown_push_kind_text() {
         Err(AppError::ClusterTopologyFailed)
     );
 }
+
+#[test]
+fn decoded_structural_envelope_counts_unknown_verbatim_format_text() {
+    let reply = Value::Array(vec![Value::Array(vec![
+        bulk("slots"),
+        Value::Array(vec![Value::Int(0), Value::Int(1)]),
+        bulk("ignored"),
+        Value::VerbatimString {
+            format: redis::VerbatimFormat::Unknown("x".repeat(4 * 1024 * 1024)),
+            text: "value".into(),
+        },
+        bulk("nodes"),
+        Value::Array(vec![Value::Array(vec![
+            bulk("id"),
+            bulk("node"),
+            bulk("role"),
+            bulk("master"),
+            bulk("endpoint"),
+            bulk("cache.internal"),
+            bulk("port"),
+            Value::Int(6379),
+            bulk("health"),
+            bulk("online"),
+        ])]),
+    ])]);
+    assert_eq!(
+        parse_cluster_shards(reply),
+        Err(AppError::ClusterTopologyFailed)
+    );
+}

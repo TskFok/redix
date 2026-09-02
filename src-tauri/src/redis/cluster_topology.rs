@@ -489,14 +489,14 @@ fn ensure_value_size(root: &Value) -> Result<(), AppError> {
             Value::SimpleString(value) => {
                 add_envelope_bytes(&mut total, simple_envelope_size(value.len())?)?
             }
-            Value::VerbatimString { text, .. } => add_envelope_bytes(
-                &mut total,
-                bulk_envelope_size(
-                    text.len()
-                        .checked_add(4)
-                        .ok_or(AppError::ClusterTopologyFailed)?,
-                )?,
-            )?,
+            Value::VerbatimString { format, text } => {
+                let format_length = format.to_string().len();
+                let body_length = format_length
+                    .checked_add(1)
+                    .and_then(|length| length.checked_add(text.len()))
+                    .ok_or(AppError::ClusterTopologyFailed)?;
+                add_envelope_bytes(&mut total, bulk_envelope_size(body_length)?)?
+            }
             Value::BigNumber(value) => {
                 add_envelope_bytes(&mut total, simple_envelope_size(value.to_string().len())?)?
             }
