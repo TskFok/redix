@@ -206,6 +206,7 @@ git commit -m "增加连接拓扑与 SSH 安全合同"
 - Consumes: `ClusterConfig`, `ConnectionEndpoint`
 - Produces: `parse_cluster_info(&str) -> Result<ClusterSummary, AppError>`
 - Produces: `parse_cluster_shards(Value) -> Result<Vec<ClusterNode>, AppError>`
+- Produces: `parse_cluster_shards_for_tls(Value, bool) -> Result<Vec<ClusterNode>, AppError>`
 - Produces: `parse_cluster_nodes(&str) -> Result<Vec<ClusterNode>, AppError>`
 - Produces: `merge_node_metrics(&mut ClusterNode, &str) -> Result<(), AppError>`
 
@@ -302,7 +303,7 @@ pub struct ClusterTopology {
 }
 ```
 
-Limit nodes to 128, slot ranges to 16,384, ids/hosts to 256 bytes and raw topology reply to 4 MiB. Prefer SHARDS; only fall back to NODES when SHARDS returns unsupported-command behavior. Keep `announced_endpoint` separate from an optional `connection_endpoint` chosen later by the service.
+Limit nodes to 128, slot ranges to 16,384, ids/hosts to 256 bytes and the decoded topology structural envelope to 4 MiB. The parser receives an already-normalized `redis::Value`, so it must not claim to recover the original RESP wire length. Prefer SHARDS; only fall back to NODES when SHARDS returns unsupported-command behavior. Keep `announced_endpoint` separate from an optional `connection_endpoint` chosen later by the service. The default parser chooses the non-TLS port; the TLS-aware entry point chooses `tls-port`, with the other advertised port used only as a fallback.
 
 - [ ] **Step 4: Run parser and domain tests**
 
