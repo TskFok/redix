@@ -2,7 +2,10 @@ use redis::Value;
 use redix_lib::{
     domain::{ClusterNodeHealth, ClusterNodeRole, SlotRange},
     error::AppError,
-    redis::{merge_node_metrics, parse_cluster_info, parse_cluster_nodes, parse_cluster_shards},
+    redis::{
+        merge_node_metrics, parse_cluster_info, parse_cluster_nodes, parse_cluster_shards,
+        parse_cluster_shards_for_tls,
+    },
 };
 
 fn bulk(value: &str) -> Value {
@@ -45,6 +48,137 @@ fn shards_preserve_announced_endpoint_and_prefer_plain_port() {
             end: 16_383
         }]
     );
+}
+
+#[test]
+fn shards_tls_aware_parser_selects_ports_without_creating_connection_endpoints() {
+    let reply = || {
+        Value::Array(vec![Value::Array(vec![
+            bulk("slots"),
+            Value::Array(vec![Value::Int(0), Value::Int(1)]),
+            bulk("nodes"),
+            Value::Array(vec![Value::Array(vec![
+                bulk("id"),
+                bulk("node"),
+                bulk("role"),
+                bulk("master"),
+                bulk("endpoint"),
+                bulk("cache.internal"),
+                bulk("port"),
+                Value::Int(6379),
+                bulk("tls-port"),
+                Value::Int(6380),
+                bulk("health"),
+                bulk("online"),
+            ])]),
+        ])])
+    };
+    assert_eq!(
+        parse_cluster_shards(reply()).unwrap()[0].endpoint.port,
+        6379
+    );
+    let tls_nodes = parse_cluster_shards_for_tls(reply(), true).unwrap();
+    assert_eq!(tls_nodes[0].endpoint.port, 6380);
+    assert_eq!(tls_nodes[0].connection_endpoint, None);
+
+    let tls_only = Value::Array(vec![Value::Array(vec![
+        bulk("slots"),
+        Value::Array(vec![Value::Int(2), Value::Int(3)]),
+        bulk("nodes"),
+        Value::Array(vec![Value::Array(vec![
+            bulk("id"),
+            bulk("tls-only"),
+            bulk("role"),
+            bulk("master"),
+            bulk("endpoint"),
+            bulk("cache.internal"),
+            bulk("tls-port"),
+            Value::Int(6380),
+            bulk("health"),
+            bulk("online"),
+        ])]),
+    ])]);
+    assert_eq!(
+        parse_cluster_shards(tls_only).unwrap()[0].endpoint.port,
+        6380
+    );
+
+    let plain_only = Value::Array(vec![Value::Array(vec![
+        bulk("slots"),
+        Value::Array(vec![Value::Int(4), Value::Int(5)]),
+        bulk("nodes"),
+        Value::Array(vec![Value::Array(vec![
+            bulk("id"),
+            bulk("plain-only"),
+            bulk("role"),
+            bulk("master"),
+            bulk("endpoint"),
+            bulk("cache.internal"),
+            bulk("port"),
+            Value::Int(6379),
+            bulk("health"),
+            bulk("online"),
+        ])]),
+    ])]);
+    assert_eq!(
+        parse_cluster_shards_for_tls(plain_only, true).unwrap()[0]
+            .endpoint
+            .port,
+        6379
+    );
+}
+
+#[test]
+fn shards_empty_or_nil_endpoint_falls_back_to_hostname_then_ip() {
+    let reply = Value::Array(vec![Value::Array(vec![
+        bulk("slots"),
+        Value::Array(vec![Value::Int(0), Value::Int(1)]),
+        bulk("nodes"),
+        Value::Array(vec![
+            Value::Array(vec![
+                bulk("id"),
+                bulk("primary"),
+                bulk("role"),
+                bulk("master"),
+                bulk("endpoint"),
+                bulk(""),
+                bulk("hostname"),
+                bulk("primary.internal"),
+                bulk("port"),
+                Value::Int(6379),
+                bulk("health"),
+                bulk("online"),
+            ]),
+            Value::Array(vec![
+                bulk("id"),
+                bulk("replica"),
+                bulk("role"),
+                bulk("replica"),
+                bulk("endpoint"),
+                Value::Nil,
+                bulk("ip"),
+                bulk("10.0.0.2"),
+                bulk("port"),
+                Value::Int(6379),
+                bulk("health"),
+                bulk("online"),
+            ]),
+        ]),
+    ])]);
+    let nodes = parse_cluster_shards(reply).unwrap();
+    assert_eq!(nodes[0].endpoint.host, "primary.internal");
+    assert_eq!(nodes[1].endpoint.host, "10.0.0.2");
+}
+
+#[test]
+fn shards_parser_accepts_a_real_resp2_wire_fixture() {
+    let reply = redis::parse_redis_value(
+        b"*1\r\n*4\r\n$5\r\nslots\r\n*2\r\n:0\r\n:1\r\n$5\r\nnodes\r\n*1\r\n*10\r\n$2\r\nid\r\n$4\r\nnode\r\n$4\r\nrole\r\n$6\r\nmaster\r\n$8\r\nendpoint\r\n$14\r\ncache.internal\r\n$4\r\nport\r\n:6379\r\n$6\r\nhealth\r\n$6\r\nonline\r\n",
+    )
+    .unwrap();
+    let nodes = parse_cluster_shards(reply).unwrap();
+    assert_eq!(nodes[0].id, "node");
+    assert_eq!(nodes[0].endpoint.port, 6379);
 }
 
 #[test]
@@ -393,6 +527,18 @@ fn shards_parser_counts_resp_framing_in_its_conservative_size_bound() {
         ])]),
     ])]);
 
+    assert_eq!(
+        parse_cluster_shards(reply),
+        Err(AppError::ClusterTopologyFailed)
+    );
+}
+
+#[test]
+fn decoded_structural_envelope_counts_unknown_push_kind_text() {
+    let reply = Value::Push {
+        kind: redis::PushKind::Other("x".repeat(4 * 1024 * 1024)),
+        data: vec![],
+    };
     assert_eq!(
         parse_cluster_shards(reply),
         Err(AppError::ClusterTopologyFailed)

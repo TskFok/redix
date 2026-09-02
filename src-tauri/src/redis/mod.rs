@@ -16,6 +16,7 @@ mod workbench;
 pub use cli::CliManager;
 pub use cluster_topology::{
     merge_node_metrics, parse_cluster_info, parse_cluster_nodes, parse_cluster_shards,
+    parse_cluster_shards_for_tls,
 };
 pub use connection_manager::{RedisOperations, RedisService};
 pub use key_ops::decode_key_value;

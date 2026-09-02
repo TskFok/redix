@@ -8,7 +8,8 @@ use crate::{
     error::AppError,
 };
 
-const MAX_TOPOLOGY_BYTES: usize = 4 * 1024 * 1024;
+const MAX_TOPOLOGY_TEXT_BYTES: usize = 4 * 1024 * 1024;
+const MAX_DECODED_STRUCTURAL_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NODES: usize = 128;
 const MAX_SLOT_RANGES: usize = 16_384;
 const MAX_ID_OR_HOST_BYTES: usize = 256;
@@ -46,6 +47,13 @@ pub fn parse_cluster_info(input: &str) -> Result<ClusterSummary, AppError> {
 }
 
 pub fn parse_cluster_shards(value: Value) -> Result<Vec<ClusterNode>, AppError> {
+    parse_cluster_shards_for_tls(value, false)
+}
+
+/// Parses a decoded `CLUSTER SHARDS` reply using the endpoint port appropriate for `tls`.
+/// This is display topology only; `connection_endpoint` remains unset until a live service
+/// has successfully connected to the node.
+pub fn parse_cluster_shards_for_tls(value: Value, tls: bool) -> Result<Vec<ClusterNode>, AppError> {
     ensure_value_size(&value)?;
     if let Value::ServerError(error) = value_without_attributes(&value) {
         return if is_unsupported_command(error.details().unwrap_or_default()) {
@@ -59,7 +67,7 @@ pub fn parse_cluster_shards(value: Value) -> Result<Vec<ClusterNode>, AppError> 
     let mut nodes = Vec::new();
     let mut slot_range_count = 0;
     for shard in shards {
-        parse_shard(shard, &mut nodes, &mut slot_range_count)?;
+        parse_shard(shard, &mut nodes, &mut slot_range_count, tls)?;
     }
     Ok(nodes)
 }
@@ -139,6 +147,7 @@ fn parse_shard(
     shard: &Value,
     output: &mut Vec<ClusterNode>,
     slot_range_count: &mut usize,
+    tls: bool,
 ) -> Result<(), AppError> {
     let mut slots = None;
     let mut shard_nodes = None;
@@ -166,7 +175,7 @@ fn parse_shard(
     }
     let mut parsed = Vec::with_capacity(shard_nodes.len());
     for value in shard_nodes {
-        parsed.push(parse_shard_node(value)?);
+        parsed.push(parse_shard_node(value, tls)?);
     }
     let mut primary = None;
     for (index, node) in parsed.iter().enumerate() {
@@ -189,7 +198,7 @@ fn parse_shard(
     Ok(())
 }
 
-fn parse_shard_node(value: &Value) -> Result<ClusterNode, AppError> {
+fn parse_shard_node(value: &Value, tls: bool) -> Result<ClusterNode, AppError> {
     let mut id = None;
     let mut endpoint = None;
     let mut hostname = None;
@@ -218,14 +227,19 @@ fn parse_shard_node(value: &Value) -> Result<ClusterNode, AppError> {
 
     let id = bounded_text(id.ok_or(AppError::ClusterTopologyFailed)?)?.to_owned();
     let host = endpoint
+        .filter(|value| !value.is_empty())
         .or(hostname.filter(|value| !value.is_empty()))
         .or(ip.filter(|value| !value.is_empty()))
         .ok_or(AppError::ClusterTopologyFailed)?;
     let host = bounded_text(host)?.to_owned();
-    let port = port
-        .filter(|port| *port != 0)
-        .or(tls_port.filter(|port| *port != 0))
-        .filter(|port| *port != 0);
+    let port = if tls {
+        tls_port
+            .filter(|port| *port != 0)
+            .or(port.filter(|port| *port != 0))
+    } else {
+        port.filter(|port| *port != 0)
+            .or(tls_port.filter(|port| *port != 0))
+    };
     let endpoint = ConnectionEndpoint {
         host,
         port: port.ok_or(AppError::ClusterTopologyFailed)?,
@@ -449,7 +463,7 @@ fn value_as_u16(value: &Value) -> Option<u16> {
 }
 
 fn ensure_text_size(value: &str) -> Result<(), AppError> {
-    if value.len() > MAX_TOPOLOGY_BYTES {
+    if value.len() > MAX_TOPOLOGY_TEXT_BYTES {
         Err(AppError::ClusterTopologyFailed)
     } else {
         Ok(())
@@ -457,9 +471,9 @@ fn ensure_text_size(value: &str) -> Result<(), AppError> {
 }
 
 fn ensure_value_size(root: &Value) -> Result<(), AppError> {
-    // redis-rs has already decoded the wire reply here. Count a conservative RESP envelope
-    // (payload, type marker, length/count digits, and CRLF) so a decoded value is never
-    // accepted when any corresponding RESP reply could exceed the 4 MiB protocol bound.
+    // redis-rs has already normalized the wire reply. This checked decoded structural-envelope
+    // limit bounds payload and decoded RESP structure only; it cannot recover raw wire details
+    // such as leading zeros, so transport owns any exact raw-byte cap before decoding.
     let mut total = 0usize;
     let mut stack = vec![root];
     while let Some(value) = stack.pop() {
@@ -486,9 +500,20 @@ fn ensure_value_size(root: &Value) -> Result<(), AppError> {
             Value::BigNumber(value) => {
                 add_envelope_bytes(&mut total, simple_envelope_size(value.to_string().len())?)?
             }
-            Value::Array(values) | Value::Set(values) | Value::Push { data: values, .. } => {
+            Value::Array(values) | Value::Set(values) => {
                 add_envelope_bytes(&mut total, aggregate_envelope_size(values.len())?)?;
                 push_values(&mut stack, values)?;
+            }
+            Value::Push { kind, data } => {
+                let item_count = data
+                    .len()
+                    .checked_add(1)
+                    .ok_or(AppError::ClusterTopologyFailed)?;
+                add_envelope_bytes(&mut total, aggregate_envelope_size(item_count)?)?;
+                // redis-rs stores the push kind outside `data`; account for it explicitly,
+                // including a future/unknown `PushKind::Other` string.
+                add_envelope_bytes(&mut total, simple_envelope_size(kind.to_string().len())?)?;
+                push_values(&mut stack, data)?;
             }
             Value::Map(entries) => {
                 add_envelope_bytes(&mut total, aggregate_envelope_size(entries.len())?)?;
@@ -539,7 +564,7 @@ fn ensure_value_size(root: &Value) -> Result<(), AppError> {
 fn add_envelope_bytes(total: &mut usize, amount: usize) -> Result<(), AppError> {
     *total = total
         .checked_add(amount)
-        .filter(|total| *total <= MAX_TOPOLOGY_BYTES)
+        .filter(|total| *total <= MAX_DECODED_STRUCTURAL_ENVELOPE_BYTES)
         .ok_or(AppError::ClusterTopologyFailed)?;
     Ok(())
 }
@@ -582,7 +607,7 @@ fn reserve_value_stack(stack: &Vec<&Value>, additional: usize) -> Result<(), App
     stack
         .len()
         .checked_add(additional)
-        .filter(|length| *length <= MAX_TOPOLOGY_BYTES)
+        .filter(|length| *length <= MAX_DECODED_STRUCTURAL_ENVELOPE_BYTES)
         .ok_or(AppError::ClusterTopologyFailed)?;
     Ok(())
 }
