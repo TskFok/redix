@@ -32,13 +32,13 @@ pub fn parse_cluster_info(input: &str) -> Result<ClusterSummary, AppError> {
         };
         match key {
             "cluster_state" => summary.state = bounded_text(value.trim())?.to_owned(),
-            "cluster_slots_assigned" => summary.slots_assigned = parse_u16(value)?,
-            "cluster_slots_ok" => summary.slots_ok = parse_u16(value)?,
-            "cluster_slots_pfail" => summary.slots_pfail = parse_u16(value)?,
-            "cluster_slots_fail" => summary.slots_fail = parse_u16(value)?,
+            "cluster_slots_assigned" => summary.slots_assigned = parse_slot_count(value)?,
+            "cluster_slots_ok" => summary.slots_ok = parse_slot_count(value)?,
+            "cluster_slots_pfail" => summary.slots_pfail = parse_slot_count(value)?,
+            "cluster_slots_fail" => summary.slots_fail = parse_slot_count(value)?,
             "cluster_current_epoch" => summary.current_epoch = parse_u64(value)?,
-            "cluster_size" => summary.size = parse_u16(value)?,
-            "cluster_known_nodes" => summary.known_nodes = parse_u16(value)?,
+            "cluster_size" => summary.size = parse_node_count(value)?,
+            "cluster_known_nodes" => summary.known_nodes = parse_node_count(value)?,
             _ => {}
         }
     }
@@ -73,7 +73,9 @@ pub fn parse_cluster_nodes(input: &str) -> Result<Vec<ClusterNode>, AppError> {
             return Err(AppError::ClusterTopologyFailed);
         }
         let node = parse_cluster_node_line(line, MAX_SLOT_RANGES - slot_range_count)?;
-        slot_range_count += node.slots.len();
+        slot_range_count = slot_range_count
+            .checked_add(node.slots.len())
+            .ok_or(AppError::ClusterTopologyFailed)?;
         nodes.push(node);
     }
     Ok(nodes)
@@ -81,6 +83,7 @@ pub fn parse_cluster_nodes(input: &str) -> Result<Vec<ClusterNode>, AppError> {
 
 pub fn merge_node_metrics(node: &mut ClusterNode, input: &str) -> Result<(), AppError> {
     ensure_text_size(input)?;
+    let mut metrics = node.metrics.clone();
     let mut hits = None;
     let mut misses = None;
     for line in input.lines() {
@@ -88,32 +91,48 @@ pub fn merge_node_metrics(node: &mut ClusterNode, input: &str) -> Result<(), App
             continue;
         };
         match key {
-            "used_memory" => node.metrics.used_memory_bytes = Some(parse_u64(value)?),
-            "instantaneous_ops_per_sec" => node.metrics.ops_per_second = Some(parse_u64(value)?),
+            "used_memory" => set_metric(&mut metrics.used_memory_bytes, parse_u64(value)),
+            "instantaneous_ops_per_sec" => {
+                set_metric(&mut metrics.ops_per_second, parse_u64(value))
+            }
             "total_connections_received" => {
-                node.metrics.connections_received = Some(parse_u64(value)?)
+                set_metric(&mut metrics.connections_received, parse_u64(value))
             }
-            "connected_clients" => node.metrics.connected_clients = Some(parse_u64(value)?),
-            "total_commands_processed" => node.metrics.commands_processed = Some(parse_u64(value)?),
-            "instantaneous_input_kbps" => node.metrics.network_in_kbps = Some(parse_f64(value)?),
-            "instantaneous_output_kbps" => node.metrics.network_out_kbps = Some(parse_f64(value)?),
+            "connected_clients" => set_metric(&mut metrics.connected_clients, parse_u64(value)),
+            "total_commands_processed" => {
+                set_metric(&mut metrics.commands_processed, parse_u64(value))
+            }
+            "instantaneous_input_kbps" => {
+                set_metric(&mut metrics.network_in_kbps, parse_f64(value))
+            }
+            "instantaneous_output_kbps" => {
+                set_metric(&mut metrics.network_out_kbps, parse_f64(value))
+            }
             "master_repl_offset" | "slave_repl_offset" => {
-                node.metrics.replication_offset = Some(parse_u64(value)?)
+                set_metric(&mut metrics.replication_offset, parse_u64(value))
             }
-            "master_last_io_seconds_ago" => node.metrics.replication_lag = Some(parse_u64(value)?),
-            "uptime_in_seconds" => node.metrics.uptime_seconds = Some(parse_u64(value)?),
-            "keyspace_hits" => hits = Some(parse_u64(value)?),
-            "keyspace_misses" => misses = Some(parse_u64(value)?),
+            "master_last_io_seconds_ago" => {
+                set_metric(&mut metrics.replication_lag, parse_u64(value))
+            }
+            "uptime_in_seconds" => set_metric(&mut metrics.uptime_seconds, parse_u64(value)),
+            "keyspace_hits" => hits = parse_u64(value).ok(),
+            "keyspace_misses" => misses = parse_u64(value).ok(),
             _ => {}
         }
     }
     if let (Some(hits), Some(misses)) = (hits, misses) {
-        let total = hits.saturating_add(misses);
-        if total != 0 {
-            node.metrics.cache_hit_ratio = Some(hits as f64 * 100.0 / total as f64);
+        if let Some(total) = hits.checked_add(misses).filter(|total| *total != 0) {
+            metrics.cache_hit_ratio = Some(hits as f64 * 100.0 / total as f64);
         }
     }
+    node.metrics = metrics;
     Ok(())
+}
+
+fn set_metric<T>(target: &mut Option<T>, result: Result<T, AppError>) {
+    if let Ok(value) = result {
+        *target = Some(value);
+    }
 }
 
 fn parse_shard(
@@ -132,33 +151,53 @@ fn parse_shard(
     if slots.len() > MAX_SLOT_RANGES - *slot_range_count {
         return Err(AppError::ClusterTopologyFailed);
     }
-    *slot_range_count += slots.len();
+    *slot_range_count = slot_range_count
+        .checked_add(slots.len())
+        .ok_or(AppError::ClusterTopologyFailed)?;
     let shard_nodes = sequence(value_without_attributes(
         shard_nodes.ok_or(AppError::ClusterTopologyFailed)?,
     ))
     .ok_or(AppError::ClusterTopologyFailed)?;
-    if shard_nodes.len() > MAX_NODES.saturating_sub(output.len()) {
+    let remaining_nodes = MAX_NODES
+        .checked_sub(output.len())
+        .ok_or(AppError::ClusterTopologyFailed)?;
+    if shard_nodes.len() > remaining_nodes {
         return Err(AppError::ClusterTopologyFailed);
     }
+    let mut parsed = Vec::with_capacity(shard_nodes.len());
     for value in shard_nodes {
-        let mut node = parse_shard_node(value)?;
-        if node.role == ClusterNodeRole::Primary {
-            node.slots = slots.clone();
-        }
-        output.push(node);
+        parsed.push(parse_shard_node(value)?);
     }
+    let mut primary = None;
+    for (index, node) in parsed.iter().enumerate() {
+        if node.role == ClusterNodeRole::Primary {
+            if primary.replace(index).is_some() {
+                return Err(AppError::ClusterTopologyFailed);
+            }
+        }
+    }
+    let primary = primary.ok_or(AppError::ClusterTopologyFailed)?;
+    let primary_id = parsed[primary].id.clone();
+    for (index, node) in parsed.iter_mut().enumerate() {
+        if index == primary {
+            node.slots = slots.clone();
+        } else {
+            node.primary_id = Some(primary_id.clone());
+        }
+    }
+    output.extend(parsed);
     Ok(())
 }
 
 fn parse_shard_node(value: &Value) -> Result<ClusterNode, AppError> {
     let mut id = None;
     let mut endpoint = None;
+    let mut hostname = None;
     let mut ip = None;
     let mut port = None;
     let mut tls_port = None;
     let mut role = None;
     let mut health = None;
-    let mut primary_id = None;
 
     for_each_pair(value, |key, value| {
         let Some(key) = value_as_text(key) else {
@@ -167,25 +206,25 @@ fn parse_shard_node(value: &Value) -> Result<ClusterNode, AppError> {
         match key {
             "id" => id = value_as_text(value),
             "endpoint" => endpoint = value_as_text(value),
+            "hostname" => hostname = value_as_text(value),
             "ip" => ip = value_as_text(value),
             "port" => port = value_as_u16(value),
             "tls-port" => tls_port = value_as_u16(value),
             "role" => role = value_as_text(value),
             "health" => health = value_as_text(value),
-            "master-id" => primary_id = value_as_text(value),
             _ => {}
         }
     })?;
 
     let id = bounded_text(id.ok_or(AppError::ClusterTopologyFailed)?)?.to_owned();
     let host = endpoint
-        .filter(|value| !value.is_empty() && *value != "?")
+        .or(hostname.filter(|value| !value.is_empty()))
         .or(ip.filter(|value| !value.is_empty()))
         .ok_or(AppError::ClusterTopologyFailed)?;
     let host = bounded_text(host)?.to_owned();
-    let port = tls_port
+    let port = port
         .filter(|port| *port != 0)
-        .or(port)
+        .or(tls_port.filter(|port| *port != 0))
         .filter(|port| *port != 0);
     let endpoint = ConnectionEndpoint {
         host,
@@ -193,19 +232,13 @@ fn parse_shard_node(value: &Value) -> Result<ClusterNode, AppError> {
     };
     let role = parse_role(role.ok_or(AppError::ClusterTopologyFailed)?)?;
     let health = parse_health(health.unwrap_or("offline"));
-    let primary_id = primary_id
-        .filter(|value| !value.is_empty() && *value != "-")
-        .map(bounded_text)
-        .transpose()?
-        .map(ToOwned::to_owned);
-
     Ok(ClusterNode {
         id,
         endpoint,
         connection_endpoint: None,
         role,
         health,
-        primary_id,
+        primary_id: None,
         slots: Vec::new(),
         metrics: ClusterNodeMetrics::default(),
     })
@@ -220,9 +253,10 @@ fn parse_cluster_node_line(
     let endpoint = parse_nodes_endpoint(fields.next().ok_or(AppError::ClusterTopologyFailed)?)?;
     let flags = fields.next().ok_or(AppError::ClusterTopologyFailed)?;
     let primary_id = fields.next().ok_or(AppError::ClusterTopologyFailed)?;
-    for _ in 0..4 {
-        fields.next().ok_or(AppError::ClusterTopologyFailed)?;
-    }
+    fields.next().ok_or(AppError::ClusterTopologyFailed)?;
+    fields.next().ok_or(AppError::ClusterTopologyFailed)?;
+    fields.next().ok_or(AppError::ClusterTopologyFailed)?;
+    let link_state = fields.next().ok_or(AppError::ClusterTopologyFailed)?;
 
     let role = if flags.split(',').any(|flag| flag == "master") {
         ClusterNodeRole::Primary
@@ -234,9 +268,10 @@ fn parse_cluster_node_line(
     } else {
         return Err(AppError::ClusterTopologyFailed);
     };
-    let health = if flags
-        .split(',')
-        .any(|flag| matches!(flag, "fail" | "fail?" | "handshake" | "noaddr"))
+    let health = if link_state != "connected"
+        || flags
+            .split(',')
+            .any(|flag| matches!(flag, "fail" | "fail?" | "handshake" | "noaddr"))
     {
         ClusterNodeHealth::Offline
     } else if flags.split(',').any(|flag| flag == "loading") {
@@ -272,7 +307,8 @@ fn parse_cluster_node_line(
 }
 
 fn parse_nodes_endpoint(value: &str) -> Result<ConnectionEndpoint, AppError> {
-    let address = value
+    let (address, announced_hostname) = value.split_once(',').unwrap_or((value, ""));
+    let address = address
         .split('@')
         .next()
         .ok_or(AppError::ClusterTopologyFailed)?;
@@ -290,7 +326,12 @@ fn parse_nodes_endpoint(value: &str) -> Result<ConnectionEndpoint, AppError> {
             .ok_or(AppError::ClusterTopologyFailed)?
     };
     Ok(ConnectionEndpoint {
-        host: bounded_text(host)?.to_owned(),
+        host: bounded_text(if announced_hostname.is_empty() {
+            host
+        } else {
+            announced_hostname
+        })?
+        .to_owned(),
         port: parse_u16(port)?,
     })
 }
@@ -416,53 +457,133 @@ fn ensure_text_size(value: &str) -> Result<(), AppError> {
 }
 
 fn ensure_value_size(root: &Value) -> Result<(), AppError> {
-    let mut remaining = MAX_TOPOLOGY_BYTES;
-    let mut values = vec![root];
-    while let Some(value) = values.pop() {
-        let (cost, children): (usize, &[Value]) = match value {
-            Value::Nil | Value::Okay => (0, &[]),
-            Value::Int(_) | Value::Double(_) | Value::Boolean(_) => (8, &[]),
-            Value::BulkString(value) => (value.len(), &[]),
-            Value::SimpleString(value) => (value.len(), &[]),
-            Value::VerbatimString { text, .. } => (text.len(), &[]),
-            Value::BigNumber(value) => (value.to_string().len(), &[]),
+    // redis-rs has already decoded the wire reply here. Count a conservative RESP envelope
+    // (payload, type marker, length/count digits, and CRLF) so a decoded value is never
+    // accepted when any corresponding RESP reply could exceed the 4 MiB protocol bound.
+    let mut total = 0usize;
+    let mut stack = vec![root];
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Nil => add_envelope_bytes(&mut total, 5)?,
+            Value::Okay => add_envelope_bytes(&mut total, 5)?,
+            Value::Int(_) => add_envelope_bytes(&mut total, 23)?,
+            Value::Double(_) => add_envelope_bytes(&mut total, 29)?,
+            Value::Boolean(_) => add_envelope_bytes(&mut total, 4)?,
+            Value::BulkString(value) => {
+                add_envelope_bytes(&mut total, bulk_envelope_size(value.len())?)?
+            }
+            Value::SimpleString(value) => {
+                add_envelope_bytes(&mut total, simple_envelope_size(value.len())?)?
+            }
+            Value::VerbatimString { text, .. } => add_envelope_bytes(
+                &mut total,
+                bulk_envelope_size(
+                    text.len()
+                        .checked_add(4)
+                        .ok_or(AppError::ClusterTopologyFailed)?,
+                )?,
+            )?,
+            Value::BigNumber(value) => {
+                add_envelope_bytes(&mut total, simple_envelope_size(value.to_string().len())?)?
+            }
             Value::Array(values) | Value::Set(values) | Value::Push { data: values, .. } => {
-                (values.len().saturating_mul(8), values)
+                add_envelope_bytes(&mut total, aggregate_envelope_size(values.len())?)?;
+                push_values(&mut stack, values)?;
             }
             Value::Map(entries) => {
-                let cost = entries.len().saturating_mul(16);
-                if cost > remaining || entries.len() > remaining / 16 {
-                    return Err(AppError::ClusterTopologyFailed);
-                }
+                add_envelope_bytes(&mut total, aggregate_envelope_size(entries.len())?)?;
+                reserve_value_stack(
+                    &stack,
+                    entries
+                        .len()
+                        .checked_mul(2)
+                        .ok_or(AppError::ClusterTopologyFailed)?,
+                )?;
                 for (key, value) in entries {
-                    values.push(key);
-                    values.push(value);
+                    stack.push(key);
+                    stack.push(value);
                 }
-                remaining -= cost;
-                continue;
             }
             Value::Attribute { data, attributes } => {
-                let cost = attributes.len().saturating_mul(16);
-                if cost > remaining || attributes.len() > remaining / 16 {
-                    return Err(AppError::ClusterTopologyFailed);
-                }
-                values.push(data);
+                add_envelope_bytes(&mut total, aggregate_envelope_size(attributes.len())?)?;
+                reserve_value_stack(
+                    &stack,
+                    attributes
+                        .len()
+                        .checked_mul(2)
+                        .and_then(|length| length.checked_add(1))
+                        .ok_or(AppError::ClusterTopologyFailed)?,
+                )?;
+                stack.push(data);
                 for (key, value) in attributes {
-                    values.push(key);
-                    values.push(value);
+                    stack.push(key);
+                    stack.push(value);
                 }
-                remaining -= cost;
-                continue;
             }
-            Value::ServerError(value) => (value.to_string().len(), &[]),
-            _ => (0, &[]),
-        };
-        if cost > remaining || children.len() > remaining / 8 {
-            return Err(AppError::ClusterTopologyFailed);
+            Value::ServerError(value) => {
+                let detail = value.details().map(str::len).unwrap_or(0);
+                let body = value
+                    .code()
+                    .len()
+                    .checked_add(detail)
+                    .and_then(|length| length.checked_add(1))
+                    .ok_or(AppError::ClusterTopologyFailed)?;
+                add_envelope_bytes(&mut total, simple_envelope_size(body)?)?;
+            }
+            _ => {}
         }
-        remaining -= cost;
-        values.extend(children.iter());
     }
+    Ok(())
+}
+
+fn add_envelope_bytes(total: &mut usize, amount: usize) -> Result<(), AppError> {
+    *total = total
+        .checked_add(amount)
+        .filter(|total| *total <= MAX_TOPOLOGY_BYTES)
+        .ok_or(AppError::ClusterTopologyFailed)?;
+    Ok(())
+}
+
+fn bulk_envelope_size(length: usize) -> Result<usize, AppError> {
+    1usize
+        .checked_add(decimal_digits(length))
+        .and_then(|size| size.checked_add(2))
+        .and_then(|size| size.checked_add(length))
+        .and_then(|size| size.checked_add(2))
+        .ok_or(AppError::ClusterTopologyFailed)
+}
+
+fn simple_envelope_size(length: usize) -> Result<usize, AppError> {
+    length.checked_add(3).ok_or(AppError::ClusterTopologyFailed)
+}
+
+fn aggregate_envelope_size(length: usize) -> Result<usize, AppError> {
+    decimal_digits(length)
+        .checked_add(3)
+        .ok_or(AppError::ClusterTopologyFailed)
+}
+
+fn decimal_digits(mut value: usize) -> usize {
+    let mut digits = 1;
+    while value >= 10 {
+        value /= 10;
+        digits += 1;
+    }
+    digits
+}
+
+fn push_values<'a>(stack: &mut Vec<&'a Value>, children: &'a [Value]) -> Result<(), AppError> {
+    reserve_value_stack(stack, children.len())?;
+    stack.extend(children.iter());
+    Ok(())
+}
+
+fn reserve_value_stack(stack: &Vec<&Value>, additional: usize) -> Result<(), AppError> {
+    stack
+        .len()
+        .checked_add(additional)
+        .filter(|length| *length <= MAX_TOPOLOGY_BYTES)
+        .ok_or(AppError::ClusterTopologyFailed)?;
     Ok(())
 }
 
@@ -479,6 +600,24 @@ fn parse_u16(value: &str) -> Result<u16, AppError> {
         .trim()
         .parse()
         .map_err(|_| AppError::ClusterTopologyFailed)
+}
+
+fn parse_slot_count(value: &str) -> Result<u16, AppError> {
+    let value = parse_u16(value)?;
+    if value <= 16_384 {
+        Ok(value)
+    } else {
+        Err(AppError::ClusterTopologyFailed)
+    }
+}
+
+fn parse_node_count(value: &str) -> Result<u16, AppError> {
+    let value = parse_u16(value)?;
+    if value as usize <= MAX_NODES {
+        Ok(value)
+    } else {
+        Err(AppError::ClusterTopologyFailed)
+    }
 }
 
 fn parse_u64(value: &str) -> Result<u64, AppError> {

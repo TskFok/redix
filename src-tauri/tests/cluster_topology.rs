@@ -10,7 +10,7 @@ fn bulk(value: &str) -> Value {
 }
 
 #[test]
-fn shards_prefers_announced_endpoint_and_preserves_tls_port() {
+fn shards_preserve_announced_endpoint_and_prefer_plain_port() {
     let reply = Value::Array(vec![Value::Array(vec![
         bulk("slots"),
         Value::Array(vec![Value::Int(0), Value::Int(16_383)]),
@@ -25,7 +25,7 @@ fn shards_prefers_announced_endpoint_and_preserves_tls_port() {
             bulk("ip"),
             bulk("10.0.0.2"),
             bulk("port"),
-            Value::Int(0),
+            Value::Int(6379),
             bulk("tls-port"),
             Value::Int(6380),
             bulk("health"),
@@ -36,7 +36,7 @@ fn shards_prefers_announced_endpoint_and_preserves_tls_port() {
     let nodes = parse_cluster_shards(reply).unwrap();
 
     assert_eq!(nodes[0].endpoint.host, "cache.internal");
-    assert_eq!(nodes[0].endpoint.port, 6380);
+    assert_eq!(nodes[0].endpoint.port, 6379);
     assert_eq!(nodes[0].connection_endpoint, None);
     assert_eq!(
         nodes[0].slots,
@@ -57,14 +57,22 @@ fn shards_parser_accepts_resp3_maps_and_attributes() {
             ),
             (
                 bulk("nodes"),
-                Value::Array(vec![Value::Map(vec![
-                    (bulk("id"), bulk("node-2")),
-                    (bulk("role"), bulk("replica")),
-                    (bulk("endpoint"), bulk("replica.internal")),
-                    (bulk("port"), Value::Int(6379)),
-                    (bulk("health"), bulk("loading")),
-                    (bulk("master-id"), bulk("node-1")),
-                ])]),
+                Value::Array(vec![
+                    Value::Map(vec![
+                        (bulk("id"), bulk("node-1")),
+                        (bulk("role"), bulk("master")),
+                        (bulk("endpoint"), bulk("primary.internal")),
+                        (bulk("port"), Value::Int(6379)),
+                        (bulk("health"), bulk("online")),
+                    ]),
+                    Value::Map(vec![
+                        (bulk("id"), bulk("node-2")),
+                        (bulk("role"), bulk("replica")),
+                        (bulk("endpoint"), bulk("replica.internal")),
+                        (bulk("port"), Value::Int(6379)),
+                        (bulk("health"), bulk("loading")),
+                    ]),
+                ]),
             ),
         ])])),
         attributes: vec![(bulk("server"), bulk("redis"))],
@@ -72,22 +80,74 @@ fn shards_parser_accepts_resp3_maps_and_attributes() {
 
     let nodes = parse_cluster_shards(reply).unwrap();
 
-    assert_eq!(nodes.len(), 1);
-    assert_eq!(nodes[0].role, ClusterNodeRole::Replica);
-    assert_eq!(nodes[0].health, ClusterNodeHealth::Loading);
-    assert_eq!(nodes[0].primary_id.as_deref(), Some("node-1"));
-    assert!(nodes[0].slots.is_empty());
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[1].role, ClusterNodeRole::Replica);
+    assert_eq!(nodes[1].health, ClusterNodeHealth::Loading);
+    assert_eq!(nodes[1].primary_id.as_deref(), Some("node-1"));
+    assert!(nodes[1].slots.is_empty());
 }
 
 #[test]
-fn nodes_parser_accepts_bracketed_ipv6_and_marks_failures() {
-    let nodes =
-        parse_cluster_nodes("id1 [::1]:7000@17000 master,fail - 0 0 1 connected 0-100\n").unwrap();
+fn nodes_parser_uses_announced_hostname_and_marks_disconnected_nodes_offline() {
+    let nodes = parse_cluster_nodes(
+        "id1 [::1]:7000@17000,cache.internal master - 0 0 1 disconnected 0-100\n",
+    )
+    .unwrap();
 
-    assert_eq!(nodes[0].endpoint.host, "::1");
+    assert_eq!(nodes[0].endpoint.host, "cache.internal");
     assert_eq!(nodes[0].endpoint.port, 7000);
     assert_eq!(nodes[0].health, ClusterNodeHealth::Offline);
     assert_eq!(nodes[0].slots, vec![SlotRange { start: 0, end: 100 }]);
+
+    let ipv6 = parse_cluster_nodes("id2 [::1]:7001@17001 master - 0 0 2 connected\n").unwrap();
+    assert_eq!(ipv6[0].endpoint.host, "::1");
+}
+
+#[test]
+fn shards_infer_replica_primary_and_preserve_question_mark_endpoint() {
+    let reply = Value::Array(vec![Value::Array(vec![
+        bulk("slots"),
+        Value::Array(vec![Value::Int(0), Value::Int(1)]),
+        bulk("nodes"),
+        Value::Array(vec![
+            Value::Array(vec![
+                bulk("id"),
+                bulk("primary"),
+                bulk("role"),
+                bulk("master"),
+                bulk("endpoint"),
+                bulk("?"),
+                bulk("ip"),
+                bulk("10.0.0.1"),
+                bulk("port"),
+                Value::Int(6379),
+                bulk("health"),
+                bulk("online"),
+            ]),
+            Value::Array(vec![
+                bulk("id"),
+                bulk("replica"),
+                bulk("role"),
+                bulk("replica"),
+                bulk("hostname"),
+                bulk("replica.example"),
+                bulk("ip"),
+                bulk("10.0.0.2"),
+                bulk("port"),
+                Value::Int(0),
+                bulk("tls-port"),
+                Value::Int(6380),
+                bulk("health"),
+                bulk("online"),
+            ]),
+        ]),
+    ])]);
+
+    let nodes = parse_cluster_shards(reply).unwrap();
+    assert_eq!(nodes[0].endpoint.host, "?");
+    assert_eq!(nodes[1].endpoint.host, "replica.example");
+    assert_eq!(nodes[1].endpoint.port, 6380);
+    assert_eq!(nodes[1].primary_id.as_deref(), Some("primary"));
 }
 
 #[test]
@@ -117,6 +177,35 @@ fn info_parser_and_metric_merge_tolerate_partial_sections() {
 }
 
 #[test]
+fn info_and_metrics_enforce_bounds_and_ignore_malformed_optional_values() {
+    assert_eq!(
+        parse_cluster_info("cluster_slots_ok:16385\n"),
+        Err(AppError::ClusterTopologyFailed)
+    );
+    assert_eq!(
+        parse_cluster_info("cluster_size:129\n"),
+        Err(AppError::ClusterTopologyFailed)
+    );
+    assert_eq!(
+        parse_cluster_info("cluster_known_nodes:129\n"),
+        Err(AppError::ClusterTopologyFailed)
+    );
+
+    let mut node = parse_cluster_nodes("id1 127.0.0.1:7000@17000 master - 0 0 1 connected\n")
+        .unwrap()
+        .remove(0);
+    node.metrics.used_memory_bytes = Some(11);
+    merge_node_metrics(
+        &mut node,
+        "used_memory:not-a-number\nconnected_clients:2\ninstantaneous_input_kbps:nan\n",
+    )
+    .unwrap();
+    assert_eq!(node.metrics.used_memory_bytes, Some(11));
+    assert_eq!(node.metrics.connected_clients, Some(2));
+    assert_eq!(node.metrics.network_in_kbps, None);
+}
+
+#[test]
 fn parsers_reject_malformed_or_oversized_topology_replies() {
     assert_eq!(
         parse_cluster_nodes("id1 127.0.0.1:7000@17000 master - 0 0 1 connected 100-0\n"),
@@ -133,6 +222,34 @@ fn parsers_reject_malformed_or_oversized_topology_replies() {
             bulk("nodes"),
             Value::Array(vec![]),
         ])])),
+        Err(AppError::ClusterTopologyFailed)
+    );
+}
+
+#[test]
+fn shards_reject_multiple_primaries_in_one_shard() {
+    let primary = |id| {
+        Value::Array(vec![
+            bulk("id"),
+            bulk(id),
+            bulk("role"),
+            bulk("master"),
+            bulk("endpoint"),
+            bulk("cache.internal"),
+            bulk("port"),
+            Value::Int(6379),
+            bulk("health"),
+            bulk("online"),
+        ])
+    };
+    let reply = Value::Array(vec![Value::Array(vec![
+        bulk("slots"),
+        Value::Array(vec![Value::Int(0), Value::Int(1)]),
+        bulk("nodes"),
+        Value::Array(vec![primary("node-1"), primary("node-2")]),
+    ])]);
+    assert_eq!(
+        parse_cluster_shards(reply),
         Err(AppError::ClusterTopologyFailed)
     );
 }
@@ -167,4 +284,117 @@ fn nodes_parser_caps_slot_ranges_across_the_entire_reply() {
         parse_cluster_nodes(&reply),
         Err(AppError::ClusterTopologyFailed)
     ));
+}
+
+#[test]
+fn shards_parser_caps_total_output_slot_ranges() {
+    let shard = |id: &str| {
+        Value::Array(vec![
+            bulk("slots"),
+            Value::Array(std::iter::repeat_n(Value::Int(0), 18_000).collect()),
+            bulk("nodes"),
+            Value::Array(vec![Value::Array(vec![
+                bulk("id"),
+                bulk(id),
+                bulk("role"),
+                bulk("master"),
+                bulk("endpoint"),
+                bulk("cache.internal"),
+                bulk("port"),
+                Value::Int(6379),
+                bulk("health"),
+                bulk("online"),
+            ])]),
+        ])
+    };
+    assert_eq!(
+        parse_cluster_shards(Value::Array(vec![shard("node-1"), shard("node-2")])),
+        Err(AppError::ClusterTopologyFailed)
+    );
+}
+
+#[test]
+fn topology_limits_accept_exact_boundaries_and_reject_the_next_value() {
+    let nodes = (0..128)
+        .map(|index| format!("id{index} 127.0.0.1:7000@17000 master - 0 0 1 connected"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_eq!(parse_cluster_nodes(&nodes).unwrap().len(), 128);
+    assert_eq!(
+        parse_cluster_nodes(&format!(
+            "{nodes}\nid128 127.0.0.1:7000@17000 master - 0 0 1 connected"
+        )),
+        Err(AppError::ClusterTopologyFailed)
+    );
+
+    let max_id = "n".repeat(256);
+    assert!(parse_cluster_nodes(&format!(
+        "{max_id} 127.0.0.1:7000@17000 master - 0 0 1 connected"
+    ))
+    .is_ok());
+    let too_long_id = "n".repeat(257);
+    assert_eq!(
+        parse_cluster_nodes(&format!(
+            "{too_long_id} 127.0.0.1:7000@17000 master - 0 0 1 connected"
+        )),
+        Err(AppError::ClusterTopologyFailed)
+    );
+    let max_host = "h".repeat(256);
+    assert!(parse_cluster_nodes(&format!(
+        "id 127.0.0.1:7000@17000,{max_host} master - 0 0 1 connected"
+    ))
+    .is_ok());
+    let too_long_host = "h".repeat(257);
+    assert_eq!(
+        parse_cluster_nodes(&format!(
+            "id 127.0.0.1:7000@17000,{too_long_host} master - 0 0 1 connected"
+        )),
+        Err(AppError::ClusterTopologyFailed)
+    );
+
+    let slots = std::iter::repeat_n("0", 16_384)
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(parse_cluster_nodes(&format!(
+        "id 127.0.0.1:7000@17000 master - 0 0 1 connected {slots}"
+    ))
+    .is_ok());
+    let too_many_slots = std::iter::repeat_n("0", 16_385)
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        parse_cluster_nodes(&format!(
+            "id 127.0.0.1:7000@17000 master - 0 0 1 connected {too_many_slots}"
+        )),
+        Err(AppError::ClusterTopologyFailed)
+    );
+}
+
+#[test]
+fn shards_parser_counts_resp_framing_in_its_conservative_size_bound() {
+    let padding = Value::BulkString(vec![b'x'; 4 * 1024 * 1024 - 245]);
+    let reply = Value::Array(vec![Value::Array(vec![
+        bulk("slots"),
+        Value::Array(vec![Value::Int(0), Value::Int(1)]),
+        bulk("padding"),
+        padding,
+        bulk("nodes"),
+        Value::Array(vec![Value::Array(vec![
+            bulk("id"),
+            bulk("node"),
+            bulk("role"),
+            bulk("master"),
+            bulk("endpoint"),
+            bulk("cache.internal"),
+            bulk("port"),
+            Value::Int(6379),
+            bulk("health"),
+            bulk("online"),
+        ])]),
+    ])]);
+
+    assert_eq!(
+        parse_cluster_shards(reply),
+        Err(AppError::ClusterTopologyFailed)
+    );
 }
