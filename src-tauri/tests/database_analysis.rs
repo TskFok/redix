@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use redix_lib::domain::{
     parse_command_stats, AnalysisAccumulator, AnalysisKeyMetadata, AnalyzeDatabaseInput,
-    InstanceDetails, ModuleSummary,
+    ClusterConfig, ConnectionEndpoint, ConnectionProfile, InstanceDetails, ModuleSummary,
 };
 use redix_lib::{
     error::AppError,
@@ -54,6 +54,132 @@ mod fixtures {
 }
 
 use fixtures::{TestProfiles, TestSecrets};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+fn cluster_profile(port: u16) -> ConnectionProfile {
+    ConnectionProfile {
+        ssh: None,
+        sentinel: None,
+        cluster: Some(ClusterConfig {
+            nodes: vec![ConnectionEndpoint {
+                host: "127.0.0.1".into(),
+                port,
+            }],
+            read_from_replicas: false,
+        }),
+        id: "cluster-analysis".into(),
+        name: "Cluster analysis".into(),
+        host: "127.0.0.1".into(),
+        port,
+        username: None,
+        database: 0,
+        has_password: false,
+        tls: false,
+        verify_server_cert: true,
+        ca_certificate_name: None,
+        client_certificate_name: None,
+        has_ca_certificate: false,
+        has_client_certificate: false,
+    }
+}
+
+async fn spawn_analysis_cluster() -> u16 {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut pending = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let size = match socket.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(size) => size,
+                    };
+                    pending.extend_from_slice(&buffer[..size]);
+                    while let Some((consumed, command)) = parse_resp_command(&pending) {
+                        pending.drain(..consumed);
+                        let response = match command.first().map(Vec::as_slice) {
+                            Some(b"CLUSTER") => format!(
+                                "*1\r\n*3\r\n:0\r\n:16383\r\n*2\r\n$9\r\n127.0.0.1\r\n:{port}\r\n"
+                            ),
+                            Some(b"PING") => "+PONG\r\n".into(),
+                            Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                            Some(b"MODULE") => "*0\r\n".into(),
+                            Some(b"SCAN") => "*2\r\n$1\r\n0\r\n*1\r\n$5\r\nkey:1\r\n".into(),
+                            Some(b"TYPE") => "+string\r\n".into(),
+                            Some(b"MEMORY") => ":64\r\n".into(),
+                            Some(b"TTL") => ":-1\r\n".into(),
+                            Some(b"STRLEN") => ":3\r\n".into(),
+                            _ => "+OK\r\n".into(),
+                        };
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+fn parse_resp_command(buffer: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
+    if buffer.first() != Some(&b'*') {
+        return None;
+    }
+    let header_end = buffer.windows(2).position(|pair| pair == b"\r\n")?;
+    let count = std::str::from_utf8(&buffer[1..header_end])
+        .ok()?
+        .parse::<usize>()
+        .ok()?;
+    let mut offset = header_end + 2;
+    let mut args = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length_end = buffer[offset..]
+            .windows(2)
+            .position(|pair| pair == b"\r\n")?
+            + offset;
+        let length = std::str::from_utf8(&buffer[offset + 1..length_end])
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        offset = length_end + 2;
+        let end = offset.checked_add(length)?;
+        if buffer.get(end..end + 2)? != b"\r\n" {
+            return None;
+        }
+        args.push(buffer[offset..end].to_vec());
+        offset = end + 2;
+    }
+    Some((offset, args))
+}
+
+#[tokio::test]
+async fn cluster_routes_existing_database_analysis_helpers() {
+    let port = spawn_analysis_cluster().await;
+    let service = RedisService::new(
+        Arc::new(TestProfiles {
+            profiles: vec![cluster_profile(port)],
+        }),
+        Arc::new(TestSecrets),
+    );
+    service.open_connection("cluster-analysis").await.unwrap();
+
+    let report = service
+        .analyze_database(AnalyzeDatabaseInput {
+            connection_id: "cluster-analysis".into(),
+            pattern: "*".into(),
+            delimiter: ":".into(),
+            max_keys: 1_000,
+        })
+        .await
+        .unwrap();
+    assert_eq!(report.database, 0);
+    assert_eq!(report.progress.processed, 1);
+    assert_eq!(report.total_memory.total, 64);
+}
 
 #[tokio::test]
 async fn analysis_and_details_require_an_open_connection() {

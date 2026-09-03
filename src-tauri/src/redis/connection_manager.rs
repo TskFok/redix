@@ -9,13 +9,13 @@ use crate::{
         validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AddVectorSetElementsInput,
         AggregateArrayInput, AnalyzeDatabaseInput, AppendArrayInput, AppendJsonArrayInput,
         ArrayKeyInput, ArrayMultiGetInput, ArrayRangeInput, ArrayScanInput, CommandDefinition,
-        CommandExecutionItem, CommandResult, ConnectionInfo, ConnectionProfile, CreateArrayInput,
-        CreateKeyInput, CreateSearchIndexInput, CreateStreamConsumerGroupInput,
-        CreateVectorSetInput, DatabaseAnalysisReport, DatabaseOverview, DeleteArrayElementsInput,
-        DeleteArrayRangeInput, DeleteJsonPathInput, DeleteKeysInput,
-        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, DeleteVectorSetElementsInput,
-        ExecuteCommandsInput, ExportKeysInput, ExportedKey, GetJsonPathInput,
-        GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        CommandExecutionItem, CommandResult, ConnectionEndpoint, ConnectionInfo, ConnectionProfile,
+        ConnectionTarget, CreateArrayInput, CreateKeyInput, CreateSearchIndexInput,
+        CreateStreamConsumerGroupInput, CreateVectorSetInput, DatabaseAnalysisReport,
+        DatabaseOverview, DeleteArrayElementsInput, DeleteArrayRangeInput, DeleteJsonPathInput,
+        DeleteKeysInput, DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput,
+        DeleteVectorSetElementsInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
+        GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
         GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
         InstanceDetails, InstanceOverview, JsonMutationResult, JsonPathValue, KeyInfo,
         KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue, ListSearchIndexesResult,
@@ -54,10 +54,12 @@ use super::{
     observability::{
         parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager, PubSubManager,
     },
+    routed_connection::{RoutedClient, RoutedConnection},
     search::{
         build_create_search_index_command, parse_max_search_results, parse_search_index_info,
         parse_search_index_list, parse_search_query,
     },
+    standalone_transport::{StandaloneClient, TlsClientMaterial, TunneledClient},
     stream_groups::{
         parse_stream_consumer_groups, parse_stream_consumers, parse_stream_pending_entries,
     },
@@ -270,9 +272,10 @@ pub struct RedisService {
 
 #[derive(Clone)]
 struct ConnectionHandle {
-    client: Client,
+    client: RoutedClient,
     profile: ConnectionProfile,
-    _ssh_forward: Option<Arc<super::ssh::SshForward>>,
+    target: ConnectionTarget,
+    _ssh: Option<super::ssh::SshTransport>,
 }
 
 impl RedisService {
@@ -355,8 +358,9 @@ impl RedisService {
         input: StartPubSubInput,
     ) -> Result<PubSubSession, AppError> {
         input.validate()?;
-        let client = self.client(&input.connection_id).await?;
-        self.pubsub.start(app, &client, input).await
+        let client = self.standalone_client(&input.connection_id).await?;
+        let pubsub = client.pubsub().await?;
+        self.pubsub.start(app, pubsub, input).await
     }
 
     /// Browser collection values are placeholders; the dedicated editor reads bounded pages.
@@ -398,15 +402,16 @@ impl RedisService {
         input: StartProfilerInput,
     ) -> Result<ProfilerSession, AppError> {
         input.validate()?;
-        let client = self.client(&input.connection_id).await?;
-        self.profiler.start(app, &client, input).await
+        let client = self.standalone_client(&input.connection_id).await?;
+        let monitor = client.monitor_stream().await?;
+        self.profiler.start(app, monitor, input).await
     }
 
     pub async fn stop_profiler(&self, input: StopProfilerInput) -> Result<(), AppError> {
         self.profiler.stop(input)
     }
 
-    async fn client(&self, connection_id: &str) -> Result<Client, AppError> {
+    async fn client(&self, connection_id: &str) -> Result<RoutedClient, AppError> {
         self.active
             .read()
             .await
@@ -415,15 +420,40 @@ impl RedisService {
             .ok_or(AppError::ConnectionFailed)
     }
 
+    pub async fn standalone_client(
+        &self,
+        connection_id: &str,
+    ) -> Result<StandaloneClient, AppError> {
+        self.client(connection_id)
+            .await?
+            .standalone_client()
+            .cloned()
+    }
+
+    pub async fn connection_target(
+        &self,
+        connection_id: &str,
+    ) -> Result<ConnectionTarget, AppError> {
+        self.active
+            .read()
+            .await
+            .get(connection_id)
+            .map(|handle| handle.target.clone())
+            .ok_or(AppError::ConnectionFailed)
+    }
+
+    pub async fn routed_connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<RoutedConnection, AppError> {
+        self.client(connection_id).await?.connection().await
+    }
+
     pub(crate) async fn connection(
         &self,
         connection_id: &str,
-    ) -> Result<::redis::aio::MultiplexedConnection, AppError> {
-        self.client(connection_id)
-            .await?
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(map_connection_error)
+    ) -> Result<RoutedConnection, AppError> {
+        self.routed_connection(connection_id).await
     }
 
     async fn ensure_search_supported(&self, connection_id: &str) -> Result<(), AppError> {
@@ -453,11 +483,8 @@ impl RedisService {
         }
     }
 
-    async fn inspect_client(client: &Client) -> Result<ConnectionInfo, AppError> {
-        let mut connection = client
-            .get_multiplexed_async_connection()
-            .await
-            .map_err(map_connection_error)?;
+    async fn inspect_client(client: &RoutedClient) -> Result<ConnectionInfo, AppError> {
+        let mut connection = client.connection().await?;
         let pong: String = ::redis::cmd("PING")
             .query_async::<String>(&mut connection)
             .await
@@ -1854,6 +1881,9 @@ impl RedisOperations for RedisService {
         input.validate()?;
         let token = self.bump_connection_generation(&input.connection_id).await;
         let (old_profile, secrets) = self.connection_snapshot(&input.connection_id).await?;
+        if old_profile.cluster.is_some() && input.database != 0 {
+            return Err(AppError::UnsupportedFeature);
+        }
         let mut new_profile = old_profile.clone();
         new_profile.database = input.database;
         let (handle, _) = connect_handle(&new_profile, &secrets).await?;
@@ -1915,7 +1945,7 @@ impl RedisOperations for RedisService {
 }
 
 async fn execute_tokenized_command(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     input: &str,
 ) -> Result<CommandResult, AppError> {
     let arguments = tokenize_command(input)?;
@@ -1929,7 +1959,7 @@ async fn execute_tokenized_command(
 }
 
 async fn get_slow_log_config_with_connection(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
 ) -> Result<SlowLogConfig, AppError> {
     let reply = ::redis::cmd("CONFIG")
         .arg("GET")
@@ -1957,7 +1987,7 @@ fn search_index_covers_key(info: &SearchIndexInfo, key: &str, redis_key_type: &s
 }
 
 async fn key_size(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
     key_type: &str,
 ) -> Result<Option<u64>, AppError> {
@@ -1982,7 +2012,7 @@ async fn key_size(
 }
 
 async fn ensure_existing_key_type(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
     expected: &str,
 ) -> Result<(), AppError> {
@@ -2000,10 +2030,7 @@ async fn ensure_existing_key_type(
     Ok(())
 }
 
-async fn redis_key_exists(
-    connection: &mut ::redis::aio::MultiplexedConnection,
-    key: &str,
-) -> Result<bool, AppError> {
+async fn redis_key_exists(connection: &mut RoutedConnection, key: &str) -> Result<bool, AppError> {
     let exists: i64 = ::redis::cmd("EXISTS")
         .arg(key)
         .query_async::<i64>(connection)
@@ -2013,7 +2040,7 @@ async fn redis_key_exists(
 }
 
 async fn read_vector_set_dimension(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
 ) -> Result<Option<u32>, AppError> {
     let reply = ::redis::cmd("VINFO")
@@ -2025,7 +2052,7 @@ async fn read_vector_set_dimension(
 }
 
 async fn read_vector_set_element_with_connection(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
     element: &str,
 ) -> Result<VectorSetElement, AppError> {
@@ -2047,7 +2074,7 @@ async fn read_vector_set_element_with_connection(
 }
 
 async fn load_vector_set_page_elements(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
     names: Vec<String>,
 ) -> Result<Vec<VectorSetElement>, AppError> {
@@ -2080,7 +2107,7 @@ async fn load_vector_set_page_elements(
 }
 
 async fn load_vector_set_match_attributes(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
     matches: &mut [VectorSimilarityMatch],
 ) -> Result<(), AppError> {
@@ -2105,7 +2132,7 @@ async fn load_vector_set_match_attributes(
 }
 
 async fn apply_ttl(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
     ttl_ms: i64,
 ) -> Result<i64, AppError> {
@@ -2126,10 +2153,7 @@ async fn apply_ttl(
         .map_err(map_command_error)
 }
 
-async fn read_key_info(
-    connection: &mut ::redis::aio::MultiplexedConnection,
-    key: &str,
-) -> Result<KeyInfo, AppError> {
+async fn read_key_info(connection: &mut RoutedConnection, key: &str) -> Result<KeyInfo, AppError> {
     let key_type: String = ::redis::cmd("TYPE")
         .arg(key)
         .query_async::<String>(connection)
@@ -2177,15 +2201,12 @@ async fn read_key_info(
     })
 }
 
-async fn read_key(
-    connection: &mut ::redis::aio::MultiplexedConnection,
-    key: &str,
-) -> Result<KeyValue, AppError> {
+async fn read_key(connection: &mut RoutedConnection, key: &str) -> Result<KeyValue, AppError> {
     read_key_mode(connection, key, false).await
 }
 
 async fn read_key_mode(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
     preview: bool,
 ) -> Result<KeyValue, AppError> {
@@ -2392,7 +2413,7 @@ fn stream_entry_from_reply(entry: ::redis::streams::StreamId) -> Result<StreamEn
 }
 
 async fn write_key(
-    connection: &mut ::redis::aio::MultiplexedConnection,
+    connection: &mut RoutedConnection,
     key: &str,
     value: &RedisValue,
 ) -> Result<(), AppError> {
@@ -2492,10 +2513,7 @@ async fn write_key(
     Ok(())
 }
 
-async fn replace_collection(
-    connection: &mut ::redis::aio::MultiplexedConnection,
-    key: &str,
-) -> Result<(), AppError> {
+async fn replace_collection(connection: &mut RoutedConnection, key: &str) -> Result<(), AppError> {
     ::redis::cmd("DEL")
         .arg(key)
         .query_async::<i64>(connection)
@@ -2517,6 +2535,9 @@ pub(crate) fn command_result(value: Value) -> Result<CommandResult, AppError> {
         | Value::VerbatimString { .. }
         | Value::BigNumber(_) => "string",
         Value::Attribute { data, .. } => return command_result(*data.clone()),
+        Value::ServerError(error) if error.kind() == Some(::redis::ServerErrorKind::CrossSlot) => {
+            return Err(AppError::CrossSlot);
+        }
         Value::ServerError(_) => return Err(AppError::CommandFailed),
         _ => "unknown",
     }
@@ -2561,6 +2582,9 @@ fn value_to_json(value: Value) -> Result<serde_json::Value, AppError> {
             .map(value_to_json)
             .collect::<Result<Vec<_>, _>>()
             .map(serde_json::Value::Array),
+        Value::ServerError(error) if error.kind() == Some(::redis::ServerErrorKind::CrossSlot) => {
+            Err(AppError::CrossSlot)
+        }
         Value::ServerError(_) => Err(AppError::CommandFailed),
         _ => Err(AppError::CommandFailed),
     }
@@ -2576,35 +2600,21 @@ pub fn connection_url(
 async fn connect_handle(
     profile: &ConnectionProfile,
     secrets: &ConnectionSecrets,
-) -> Result<(ConnectionHandle, Option<crate::domain::ConnectionEndpoint>), AppError> {
+) -> Result<(ConnectionHandle, Option<ConnectionEndpoint>), AppError> {
     profile.validate()?;
-    ensure_supported_connection_combination(profile)?;
-    let ssh_forward = if let Some(ssh) = profile.ssh.as_ref() {
-        let transport = super::ssh::SshTransport::connect(ssh, secrets).await?;
-        Some(
-            transport
-                .forward(&crate::domain::ConnectionEndpoint {
-                    host: profile.host.clone(),
-                    port: profile.port,
-                })
-                .await?,
-        )
+    let target = ConnectionTarget::try_from(profile)?;
+    let ssh = if let Some(config) = profile.ssh.as_ref() {
+        Some(super::ssh::SshTransport::connect(config, secrets).await?)
     } else {
         None
     };
-    let mut effective = profile.clone();
-    if let Some(forward) = &ssh_forward {
-        let endpoint = forward.local_endpoint();
-        effective.ssh = None;
-        effective.host = endpoint.host;
-        effective.port = endpoint.port;
-    }
-    let (client, endpoint) = discover_client(&effective, secrets).await?;
+    let (client, endpoint) = discover_client(profile, secrets, &target, ssh.as_ref()).await?;
     Ok((
         ConnectionHandle {
             client,
             profile: profile.clone(),
-            _ssh_forward: ssh_forward,
+            target,
+            _ssh: ssh,
         },
         endpoint,
     ))
@@ -2613,16 +2623,42 @@ async fn connect_handle(
 async fn discover_client(
     profile: &ConnectionProfile,
     secrets: &ConnectionSecrets,
-) -> Result<(Client, Option<crate::domain::ConnectionEndpoint>), AppError> {
-    profile.validate()?;
-    ensure_supported_connection_combination(profile)?;
-    let Some(sentinel) = &profile.sentinel else {
-        return Ok((build_client(profile, secrets)?, None));
-    };
-    // Bound every seed attempt so an unavailable seed cannot prevent fallback.
-    let config = ::redis::AsyncConnectionConfig::new()
-        .set_connection_timeout(Some(std::time::Duration::from_secs(3)))
-        .set_response_timeout(Some(std::time::Duration::from_secs(3)));
+    target: &ConnectionTarget,
+    ssh: Option<&super::ssh::SshTransport>,
+) -> Result<(RoutedClient, Option<ConnectionEndpoint>), AppError> {
+    match target {
+        ConnectionTarget::Standalone => Ok((
+            RoutedClient::Standalone(build_standalone_client(profile, secrets, ssh).await?),
+            None,
+        )),
+        ConnectionTarget::Cluster(cluster) => {
+            let tls = profile
+                .tls
+                .then(|| tls_client_material(profile, secrets))
+                .transpose()?;
+            Ok((
+                RoutedClient::cluster(
+                    cluster,
+                    profile.username.as_deref(),
+                    secrets.password.as_deref(),
+                    tls,
+                )
+                .await?,
+                None,
+            ))
+        }
+        ConnectionTarget::Sentinel(sentinel) => {
+            discover_sentinel_client(profile, secrets, sentinel, ssh).await
+        }
+    }
+}
+
+async fn discover_sentinel_client(
+    profile: &ConnectionProfile,
+    secrets: &ConnectionSecrets,
+    sentinel: &crate::domain::SentinelConfig,
+    ssh: Option<&super::ssh::SshTransport>,
+) -> Result<(RoutedClient, Option<ConnectionEndpoint>), AppError> {
     let mut last_error = AppError::ConnectionFailed;
     for node in &sentinel.nodes {
         let attempt = async {
@@ -2635,11 +2671,8 @@ async fn discover_client(
             seed_profile.tls = sentinel.tls;
             let mut seed_secrets = secrets.clone();
             seed_secrets.password = secrets.sentinel_password.clone();
-            let seed = build_client(&seed_profile, &seed_secrets)?;
-            let mut connection = seed
-                .get_multiplexed_async_connection_with_config(&config)
-                .await
-                .map_err(map_connection_error)?;
+            let seed = build_standalone_client(&seed_profile, &seed_secrets, ssh).await?;
+            let mut connection = seed.connection().await?;
             let address = ::redis::cmd("SENTINEL")
                 .arg("GET-MASTER-ADDR-BY-NAME")
                 .arg(&sentinel.master_name)
@@ -2655,11 +2688,8 @@ async fn discover_client(
             master_profile.sentinel = None;
             master_profile.host = endpoint.host.clone();
             master_profile.port = endpoint.port;
-            let master = build_client(&master_profile, secrets)?;
-            let mut connection = master
-                .get_multiplexed_async_connection_with_config(&config)
-                .await
-                .map_err(map_connection_error)?;
+            let master = build_standalone_client(&master_profile, secrets, ssh).await?;
+            let mut connection = master.connection().await?;
             let role = ::redis::cmd("ROLE")
                 .query_async::<Vec<Value>>(&mut connection)
                 .await
@@ -2672,7 +2702,7 @@ async fn discover_client(
             {
                 return Err(AppError::ConnectionFailed);
             }
-            Ok((master, Some(endpoint)))
+            Ok((RoutedClient::Standalone(master), Some(endpoint)))
         }
         .await;
         match attempt {
@@ -2683,14 +2713,68 @@ async fn discover_client(
     Err(last_error)
 }
 
-fn ensure_supported_connection_combination(profile: &ConnectionProfile) -> Result<(), AppError> {
-    if profile.cluster.is_some()
-        || (profile.sentinel.is_some() && profile.ssh.is_some())
-        || (profile.tls && profile.ssh.is_some())
-    {
-        return Err(AppError::UnsupportedFeature);
-    }
-    Ok(())
+async fn build_standalone_client(
+    profile: &ConnectionProfile,
+    secrets: &ConnectionSecrets,
+    ssh: Option<&super::ssh::SshTransport>,
+) -> Result<StandaloneClient, AppError> {
+    let direct = build_client(profile, secrets)?;
+    let Some(ssh) = ssh else {
+        return Ok(StandaloneClient::Direct(direct));
+    };
+    let original_endpoint = ConnectionEndpoint {
+        host: profile.host.clone(),
+        port: profile.port,
+    };
+    let tls = profile
+        .tls
+        .then(|| tls_client_material(profile, secrets))
+        .transpose()?;
+    TunneledClient::from_ssh_transport(
+        direct
+            .get_connection_info()
+            .redis_settings()
+            .clone()
+            .set_skip_set_lib_name(),
+        original_endpoint,
+        tls,
+        ssh,
+    )
+    .await
+    .map(StandaloneClient::Tunneled)
+}
+
+fn tls_client_material(
+    profile: &ConnectionProfile,
+    secrets: &ConnectionSecrets,
+) -> Result<TlsClientMaterial, AppError> {
+    let root_cert = if let Some(certificate) = secrets.ca_certificate.as_deref() {
+        validate_certificate_pem(certificate)?;
+        Some(certificate.as_bytes().to_vec())
+    } else {
+        None
+    };
+    let (client_cert, client_key) = match (
+        secrets.client_certificate.as_deref(),
+        secrets.client_key.as_deref(),
+    ) {
+        (Some(certificate), Some(key)) => {
+            validate_certificate_pem(certificate)?;
+            validate_private_key_pem(key)?;
+            (
+                Some(certificate.as_bytes().to_vec()),
+                Some(key.as_bytes().to_vec()),
+            )
+        }
+        (None, None) => (None, None),
+        _ => return Err(AppError::InvalidInput),
+    };
+    Ok(TlsClientMaterial {
+        root_cert,
+        client_cert,
+        client_key,
+        verify_server_cert: profile.verify_server_cert,
+    })
 }
 
 fn build_client(
@@ -2829,6 +2913,7 @@ fn validate_connection_id(connection_id: &str) -> Result<(), AppError> {
 
 pub(crate) fn map_command_error(error: ::redis::RedisError) -> AppError {
     match error.kind() {
+        ::redis::ErrorKind::Server(::redis::ServerErrorKind::CrossSlot) => AppError::CrossSlot,
         ::redis::ErrorKind::AuthenticationFailed => AppError::AuthenticationFailed,
         ::redis::ErrorKind::Io => AppError::ConnectionFailed,
         _ => AppError::CommandFailed,
@@ -2855,6 +2940,9 @@ fn is_with_attributes_unsupported(error: &::redis::RedisError) -> bool {
 }
 
 pub(crate) fn map_json_command_error(error: ::redis::RedisError) -> AppError {
+    if error.kind() == ::redis::ErrorKind::Server(::redis::ServerErrorKind::CrossSlot) {
+        return AppError::CrossSlot;
+    }
     let unsupported = error.detail().is_some_and(|detail| {
         let detail = detail.to_ascii_lowercase();
         detail.contains("unknown command")
@@ -2871,6 +2959,7 @@ pub(crate) fn map_json_command_error(error: ::redis::RedisError) -> AppError {
 #[cfg(test)]
 mod tests {
     use std::{
+        net::SocketAddr,
         sync::{Arc, Mutex},
         time::Duration,
     };
@@ -2880,16 +2969,17 @@ mod tests {
 
     use crate::{
         domain::{
-            ConnectionProfile, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+            ConnectionEndpoint, ConnectionProfile, GetSlowLogsInput, GetStreamConsumerGroupsInput,
             GetStreamPendingEntriesInput, ModuleCapabilities, ModuleSummary, PublishPubSubInput,
-            SelectDatabaseInput, StopProfilerInput,
+            SelectDatabaseInput, SentinelConfig, StopProfilerInput,
         },
         error::AppError,
         persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
     };
 
     use super::{
-        build_client, command_result, connection_url, validate_ttl, RedisOperations, RedisService,
+        build_client, build_standalone_client, command_result, connection_url,
+        discover_sentinel_client, validate_ttl, RedisOperations, RedisService,
     };
 
     struct EmptyProfiles;
@@ -2943,6 +3033,212 @@ mod tests {
             has_ca_certificate: false,
             has_client_certificate: false,
         }
+    }
+
+    const TEST_TLS_CERT: &str = r#"-----BEGIN CERTIFICATE-----
+MIIBxTCCAWugAwIBAgIUJrqzrus0OeHJc4plw8TswbjYNhAwCgYIKoZIzj0EAwIw
+GDEWMBQGA1UEAwwNUmVkaXggVGVzdCBDQTAeFw0yNjA5MDIwOTIzMDRaFw0zNjA4
+MzAwOTIzMDRaMBkxFzAVBgNVBAMMDmNhY2hlLmludGVybmFsMFkwEwYHKoZIzj0C
+AQYIKoZIzj0DAQcDQgAE9vYoE+AAk3CmXwFFM/EtIcDg4oscPWEiTb+FOm0VsiIu
+973FLq4/eXTDtzxbZ/TlTgxUYq0+zKgSTNzo7bZ7E6OBkTCBjjAMBgNVHRMBAf8E
+AjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDATAZBgNVHREE
+EjAQgg5jYWNoZS5pbnRlcm5hbDAdBgNVHQ4EFgQUW2ST5EeDywrEQXCq6V/szpaX
+SnkwHwYDVR0jBBgwFoAU8665SzPKr5cvfi3TMbORTiT7Av4wCgYIKoZIzj0EAwID
+SAAwRQIhAIf4cSkcsInz1Gs/XcFflIkmZzkM5ikRYN598hQP19WIAiBxGKqXQQmD
+kOq6G4FuxZ3fU3d5yW+BLVwSneRiIaCbww==
+-----END CERTIFICATE-----
+"#;
+    const TEST_TLS_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgmIYd7cs7Gxzdq0rS
+Ymnw0YzaAQkbf2ywPQ+isYIgv++hRANCAAT29igT4ACTcKZfAUUz8S0hwODiixw9
+YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
+-----END PRIVATE KEY-----
+"#;
+
+    async fn spawn_tls_sentinel_fixture(response: String) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
+        let certs = rustls_pemfile::certs(&mut TEST_TLS_CERT.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let key = rustls_pemfile::private_key(&mut TEST_TLS_KEY.as_bytes())
+            .unwrap()
+            .unwrap();
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server_names = Arc::new(Mutex::new(Vec::new()));
+        let observed = server_names.clone();
+        tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let config = Arc::new(config.clone());
+                let observed = observed.clone();
+                let response = response.clone();
+                tokio::spawn(async move {
+                    let Ok(start) = tokio_rustls::LazyConfigAcceptor::new(
+                        rustls::server::Acceptor::default(),
+                        socket,
+                    )
+                    .await
+                    else {
+                        return;
+                    };
+                    observed.lock().unwrap().push(
+                        start
+                            .client_hello()
+                            .server_name()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    );
+                    let Ok(mut stream) = start.into_stream(config).await else {
+                        return;
+                    };
+                    let mut buffer = [0_u8; 4096];
+                    loop {
+                        match stream.read(&mut buffer).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(_) => stream.write_all(response.as_bytes()).await.unwrap(),
+                        }
+                    }
+                });
+            }
+        });
+        (address, server_names)
+    }
+
+    #[tokio::test]
+    async fn sentinel_over_ssh_tls_forwards_each_target_and_uses_original_sni_without_direct_dials()
+    {
+        let (unavailable_sentinel_address, unavailable_sni) =
+            spawn_tls_sentinel_fixture("$-1\r\n".into()).await;
+        let (sentinel_address, sentinel_sni) =
+            spawn_tls_sentinel_fixture("*2\r\n$16\r\nprimary.internal\r\n$4\r\n6379\r\n".into())
+                .await;
+        let (primary_address, primary_sni) =
+            spawn_tls_sentinel_fixture("*1\r\n$6\r\nmaster\r\n".into()).await;
+        let unavailable_sentinel_endpoint = ConnectionEndpoint {
+            host: "sentinel-one.internal".into(),
+            port: 26379,
+        };
+        let sentinel_endpoint = ConnectionEndpoint {
+            host: "sentinel-two.internal".into(),
+            port: 26379,
+        };
+        let primary_endpoint = ConnectionEndpoint {
+            host: "primary.internal".into(),
+            port: 6379,
+        };
+        let (transport, backend) = crate::redis::ssh::test_forwarding_transport(vec![
+            (
+                unavailable_sentinel_endpoint.clone(),
+                unavailable_sentinel_address,
+            ),
+            (sentinel_endpoint.clone(), sentinel_address),
+            (primary_endpoint.clone(), primary_address),
+        ]);
+        let mut profile = valid_profile();
+        profile.host = "sentinel-one.internal".into();
+        profile.port = 26379;
+        profile.tls = true;
+        profile.verify_server_cert = false;
+        profile.ssh = Some(
+            serde_json::from_value(serde_json::json!({
+                "host": "jump.internal",
+                "port": 22,
+                "username": "operator"
+            }))
+            .unwrap(),
+        );
+        let sentinel = SentinelConfig {
+            master_name: "redix-primary".into(),
+            nodes: vec![
+                unavailable_sentinel_endpoint.clone(),
+                sentinel_endpoint.clone(),
+            ],
+            username: None,
+            has_password: false,
+            tls: true,
+        };
+        profile.sentinel = Some(sentinel.clone());
+
+        let result = discover_sentinel_client(
+            &profile,
+            &ConnectionSecrets::default(),
+            &sentinel,
+            Some(&transport),
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "sentinel discovery failed after forwards {:?}: {:?}",
+            backend.forwarded_targets(),
+            result.as_ref().err()
+        );
+        let (client, endpoint) = result.unwrap();
+        assert_eq!(endpoint, Some(primary_endpoint.clone()));
+        assert!(client.standalone_client().is_ok());
+        assert_eq!(
+            backend.forwarded_targets(),
+            vec![
+                unavailable_sentinel_endpoint,
+                sentinel_endpoint,
+                primary_endpoint
+            ]
+        );
+        assert_eq!(
+            unavailable_sni.lock().unwrap().as_slice(),
+            ["sentinel-one.internal"]
+        );
+        assert_eq!(
+            sentinel_sni.lock().unwrap().as_slice(),
+            ["sentinel-two.internal"]
+        );
+        assert_eq!(primary_sni.lock().unwrap().as_slice(), ["primary.internal"]);
+    }
+
+    #[tokio::test]
+    async fn standalone_ssh_tls_keeps_the_original_endpoint_for_sni_and_owns_its_forward() {
+        let original = ConnectionEndpoint {
+            host: "cache.internal".into(),
+            port: 6380,
+        };
+        let (_unused_listener, address) = {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            (listener, address)
+        };
+        let (transport, _) =
+            crate::redis::ssh::test_forwarding_transport(vec![(original.clone(), address)]);
+        let mut profile = valid_profile();
+        profile.host = original.host.clone();
+        profile.port = original.port;
+        profile.tls = true;
+        profile.verify_server_cert = false;
+        profile.ssh = Some(
+            serde_json::from_value(serde_json::json!({
+                "host": "jump.internal",
+                "port": 22,
+                "username": "operator"
+            }))
+            .unwrap(),
+        );
+
+        let client =
+            build_standalone_client(&profile, &ConnectionSecrets::default(), Some(&transport))
+                .await
+                .unwrap();
+        let crate::redis::StandaloneClient::Tunneled(client) = client else {
+            panic!("SSH + TLS must use the tunneled standalone path");
+        };
+        assert_eq!(client.original_endpoint, original);
+        assert_eq!(client.local_endpoint.host, "127.0.0.1");
+        assert!(client.tls.is_some());
     }
 
     struct MutableProfiles(Mutex<Vec<ConnectionProfile>>);

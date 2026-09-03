@@ -1,4 +1,4 @@
-use ::redis::{aio::MultiplexedConnection, Value};
+use ::redis::Value;
 
 use crate::{
     domain::{
@@ -8,7 +8,10 @@ use crate::{
     error::AppError,
 };
 
-use super::connection_manager::{map_command_error, map_json_command_error};
+use super::{
+    connection_manager::{map_command_error, map_json_command_error},
+    RoutedConnection,
+};
 
 const MAX_JSON_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const UNKNOWN_TTL_MS: i64 = -3;
@@ -38,7 +41,7 @@ pub(crate) fn json_path_uses_legacy_syntax(capabilities: &ModuleCapabilities) ->
 }
 
 pub(crate) async fn read_json_path(
-    connection: &mut MultiplexedConnection,
+    connection: &mut RoutedConnection,
     input: GetJsonPathInput,
     legacy: bool,
 ) -> Result<JsonPathValue, AppError> {
@@ -61,7 +64,7 @@ pub(crate) async fn read_json_path(
 }
 
 pub(crate) async fn write_json_path(
-    connection: &mut MultiplexedConnection,
+    connection: &mut RoutedConnection,
     input: SetJsonPathInput,
     legacy: bool,
 ) -> Result<JsonMutationResult, AppError> {
@@ -86,7 +89,7 @@ pub(crate) async fn write_json_path(
 }
 
 pub(crate) async fn append_json_array_path(
-    connection: &mut MultiplexedConnection,
+    connection: &mut RoutedConnection,
     input: AppendJsonArrayInput,
     legacy: bool,
 ) -> Result<JsonMutationResult, AppError> {
@@ -112,7 +115,7 @@ pub(crate) async fn append_json_array_path(
 }
 
 pub(crate) async fn delete_json_path_value(
-    connection: &mut MultiplexedConnection,
+    connection: &mut RoutedConnection,
     input: DeleteJsonPathInput,
     legacy: bool,
 ) -> Result<JsonMutationResult, AppError> {
@@ -212,7 +215,7 @@ fn parse_json_array_append_values(values: Vec<Value>) -> Result<(u64, Option<u64
     Ok((affected, new_length))
 }
 
-async fn read_ttl_ms(connection: &mut MultiplexedConnection, key: &str) -> Result<i64, AppError> {
+async fn read_ttl_ms(connection: &mut RoutedConnection, key: &str) -> Result<i64, AppError> {
     ::redis::cmd("PTTL")
         .arg(key)
         .query_async::<i64>(connection)
@@ -220,7 +223,7 @@ async fn read_ttl_ms(connection: &mut MultiplexedConnection, key: &str) -> Resul
         .map_err(map_command_error)
 }
 
-async fn read_mutation_ttl_ms(connection: &mut MultiplexedConnection, key: &str) -> i64 {
+async fn read_mutation_ttl_ms(connection: &mut RoutedConnection, key: &str) -> i64 {
     resolve_mutation_ttl_ms(read_ttl_ms(connection, key).await)
 }
 

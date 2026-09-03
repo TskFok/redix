@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
@@ -8,13 +8,16 @@ use redix_lib::{
         query_library, search, search_aggregate, settings, stream_entries, vector_set, workbench,
     },
     domain::{
-        AppSettings, CommandHistoryEntry, CommandResult, QueryLibraryItemInput,
-        SaveCommandHistoryInput,
+        AppSettings, CliCommandInput, CliSessionInput, ClusterConfig, CommandHistoryEntry,
+        CommandResult, ConnectionEndpoint, ConnectionProfile, GetJsonPathInput,
+        QueryLibraryItemInput, SaveCommandHistoryInput, SelectDatabaseInput,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
+    redis::{CliManager, RedisOperations, RedisService},
     AppState,
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 struct EmptyProfiles;
 
@@ -411,4 +414,342 @@ fn local_query_library_and_settings_commands_support_crud_and_safe_defaults() {
         settings
     );
     assert_eq!(settings::get_app_settings(app.state()).unwrap(), settings);
+}
+
+struct StoredProfiles(Mutex<Vec<ConnectionProfile>>);
+
+impl ProfileRepository for StoredProfiles {
+    fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+
+    fn save(&self, profiles: &[ConnectionProfile]) -> Result<(), AppError> {
+        *self.0.lock().unwrap() = profiles.to_vec();
+        Ok(())
+    }
+}
+
+fn cluster_profile(port: u16) -> ConnectionProfile {
+    ConnectionProfile {
+        ssh: None,
+        sentinel: None,
+        cluster: Some(ClusterConfig {
+            nodes: vec![ConnectionEndpoint {
+                host: "127.0.0.1".into(),
+                port,
+            }],
+            read_from_replicas: false,
+        }),
+        id: "cluster".into(),
+        name: "Cluster".into(),
+        host: "127.0.0.1".into(),
+        port,
+        username: None,
+        database: 0,
+        has_password: false,
+        tls: false,
+        verify_server_cert: true,
+        ca_certificate_name: None,
+        client_certificate_name: None,
+        has_ca_certificate: false,
+        has_client_certificate: false,
+    }
+}
+
+async fn spawn_command_cluster() -> u16 {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            tokio::spawn(async move {
+                let mut pending = Vec::new();
+                let mut read = [0_u8; 4096];
+                loop {
+                    let size = match socket.read(&mut read).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(size) => size,
+                    };
+                    pending.extend_from_slice(&read[..size]);
+                    while let Some((consumed, command)) = parse_resp_command(&pending) {
+                        pending.drain(..consumed);
+                        let response = match command.first().map(Vec::as_slice) {
+                            Some(b"CLUSTER")
+                                if command.get(1).map(Vec::as_slice) == Some(b"SLOTS") =>
+                            {
+                                format!(
+                                    "*1\r\n*3\r\n:0\r\n:16383\r\n*2\r\n$9\r\n127.0.0.1\r\n:{port}\r\n"
+                                )
+                            }
+                            Some(b"PING") => "+PONG\r\n".into(),
+                            Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                            Some(b"SET") => "+OK\r\n".into(),
+                            Some(b"TYPE") => "+string\r\n".into(),
+                            Some(b"GET") => "$3\r\nAda\r\n".into(),
+                            Some(b"PTTL") => ":-1\r\n".into(),
+                            Some(b"MODULE") => {
+                                "*1\r\n*4\r\n$4\r\nname\r\n$6\r\nReJSON\r\n$3\r\nver\r\n:20810\r\n"
+                                    .into()
+                            }
+                            Some(b"JSON.GET") => "$7\r\n[\"Ada\"]\r\n".into(),
+                            Some(b"EVAL") => "-CROSSSLOT private server detail\r\n".into(),
+                            _ => "+OK\r\n".into(),
+                        };
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
+async fn spawn_paused_cluster() -> (
+    u16,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (ping_tx, ping_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    let ping_tx = Arc::new(Mutex::new(Some(ping_tx)));
+    let resume_rx = Arc::new(tokio::sync::Mutex::new(Some(resume_rx)));
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let ping_tx = ping_tx.clone();
+            let resume_rx = resume_rx.clone();
+            tokio::spawn(async move {
+                let mut pending = Vec::new();
+                let mut read = [0_u8; 4096];
+                loop {
+                    let size = match socket.read(&mut read).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(size) => size,
+                    };
+                    pending.extend_from_slice(&read[..size]);
+                    while let Some((consumed, command)) = parse_resp_command(&pending) {
+                        pending.drain(..consumed);
+                        let response = match command.first().map(Vec::as_slice) {
+                            Some(b"CLUSTER") => format!(
+                                "*1\r\n*3\r\n:0\r\n:16383\r\n*2\r\n$9\r\n127.0.0.1\r\n:{port}\r\n"
+                            ),
+                            Some(b"PING") => {
+                                let ping_sender = ping_tx.lock().unwrap().take();
+                                if let Some(ping_tx) = ping_sender {
+                                    ping_tx.send(()).unwrap();
+                                    let resume = resume_rx.lock().await.take();
+                                    if let Some(resume_rx) = resume {
+                                        let _ = resume_rx.await;
+                                    }
+                                }
+                                "+PONG\r\n".into()
+                            }
+                            Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                            _ => "+OK\r\n".into(),
+                        };
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                }
+            });
+        }
+    });
+    (port, ping_rx, resume_tx)
+}
+
+fn parse_resp_command(buffer: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
+    if buffer.first() != Some(&b'*') {
+        return None;
+    }
+    let header_end = buffer.windows(2).position(|pair| pair == b"\r\n")?;
+    let count = std::str::from_utf8(&buffer[1..header_end])
+        .ok()?
+        .parse::<usize>()
+        .ok()?;
+    let mut offset = header_end + 2;
+    let mut args = Vec::with_capacity(count);
+    for _ in 0..count {
+        if buffer.get(offset) != Some(&b'$') {
+            return None;
+        }
+        let length_end = buffer[offset..]
+            .windows(2)
+            .position(|pair| pair == b"\r\n")?
+            + offset;
+        let length = std::str::from_utf8(&buffer[offset + 1..length_end])
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        offset = length_end + 2;
+        let end = offset.checked_add(length)?;
+        if buffer.len() < end + 2 || &buffer[end..end + 2] != b"\r\n" {
+            return None;
+        }
+        args.push(buffer[offset..end].to_vec());
+        offset = end + 2;
+    }
+    Some((offset, args))
+}
+
+#[tokio::test]
+async fn existing_browser_workbench_and_cli_paths_use_cluster_routing() {
+    let port = spawn_command_cluster().await;
+    let service = RedisService::new(
+        Arc::new(StoredProfiles(Mutex::new(vec![cluster_profile(port)]))),
+        Arc::new(EmptySecrets),
+    );
+    service.open_connection("cluster").await.unwrap();
+    assert_eq!(
+        service.connection_target("cluster").await.unwrap().kind(),
+        "cluster"
+    );
+
+    service
+        .execute_command("cluster", "SET {user:1}:name Ada")
+        .await
+        .unwrap();
+    assert_eq!(
+        service
+            .get_key("cluster", "{user:1}:name")
+            .await
+            .unwrap()
+            .key_type,
+        "string"
+    );
+    assert_eq!(
+        service
+            .execute_command("cluster", "GET {user:1}:name")
+            .await
+            .unwrap()
+            .value,
+        serde_json::json!("Ada")
+    );
+    assert_eq!(
+        service
+            .get_json_path(GetJsonPathInput {
+                connection_id: "cluster".into(),
+                key: "{user:1}:json".into(),
+                path: "$.name".into(),
+            })
+            .await
+            .unwrap()
+            .value,
+        Some(serde_json::json!("Ada"))
+    );
+
+    let cli = CliManager::new();
+    cli.open(
+        &service,
+        CliSessionInput {
+            connection_id: "cluster".into(),
+            session_id: "00000000-0000-4000-8000-000000000005".into(),
+        },
+    )
+    .await
+    .unwrap();
+    let reply = cli
+        .execute(CliCommandInput {
+            connection_id: "cluster".into(),
+            session_id: "00000000-0000-4000-8000-000000000005".into(),
+            command: "PING".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(reply.result.unwrap().value, serde_json::json!("PONG"));
+}
+
+#[tokio::test]
+async fn failed_cluster_open_never_publishes_a_standalone_handle() {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let service = RedisService::new(
+        Arc::new(StoredProfiles(Mutex::new(vec![cluster_profile(port)]))),
+        Arc::new(EmptySecrets),
+    );
+
+    assert_eq!(
+        service.open_connection("cluster").await,
+        Err(AppError::ConnectionFailed)
+    );
+    assert_eq!(
+        service.execute_command("cluster", "PING").await,
+        Err(AppError::ConnectionFailed)
+    );
+}
+
+#[tokio::test]
+async fn closing_a_cluster_while_inspection_is_pending_prevents_stale_publication() {
+    let (port, ping, resume) = spawn_paused_cluster().await;
+    let service = Arc::new(RedisService::new(
+        Arc::new(StoredProfiles(Mutex::new(vec![cluster_profile(port)]))),
+        Arc::new(EmptySecrets),
+    ));
+    let opening_service = service.clone();
+    let opening = tokio::spawn(async move { opening_service.open_connection("cluster").await });
+    tokio::time::timeout(std::time::Duration::from_secs(3), ping)
+        .await
+        .unwrap()
+        .unwrap();
+
+    service.close_connection("cluster").await.unwrap();
+    resume.send(()).unwrap();
+
+    assert_eq!(opening.await.unwrap(), Err(AppError::OperationCancelled));
+    assert_eq!(
+        service.execute_command("cluster", "PING").await,
+        Err(AppError::ConnectionFailed)
+    );
+}
+
+#[tokio::test]
+async fn cluster_rejects_nonzero_database_pubsub_and_profiler_without_node_fallback() {
+    let port = spawn_command_cluster().await;
+    let service = RedisService::new(
+        Arc::new(StoredProfiles(Mutex::new(vec![cluster_profile(port)]))),
+        Arc::new(EmptySecrets),
+    );
+    service.open_connection("cluster").await.unwrap();
+    assert_eq!(
+        service
+            .select_database(SelectDatabaseInput {
+                connection_id: "cluster".into(),
+                database: 1,
+            })
+            .await,
+        Err(AppError::UnsupportedFeature)
+    );
+
+    assert!(matches!(
+        service.standalone_client("cluster").await,
+        Err(AppError::UnsupportedFeature)
+    ));
+}
+
+#[tokio::test]
+async fn cluster_crossslot_maps_to_fixed_error_without_server_detail() {
+    let port = spawn_command_cluster().await;
+    let service = RedisService::new(
+        Arc::new(StoredProfiles(Mutex::new(vec![cluster_profile(port)]))),
+        Arc::new(EmptySecrets),
+    );
+    service.open_connection("cluster").await.unwrap();
+
+    let error = service
+        .execute_command(
+            "cluster",
+            "EVAL \"return redis.call('mget', KEYS[1], KEYS[2])\" 2 {one}:key {two}:key",
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error, AppError::CrossSlot);
+    assert_eq!(error.message(), "Redis 集群键槽不一致");
+    assert!(!error.message().contains("private server detail"));
 }

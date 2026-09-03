@@ -17,7 +17,7 @@ use crate::{
     error::AppError,
 };
 
-use super::tokenize_command;
+use super::{tokenize_command, MonitorLineStream};
 
 pub const PUBSUB_MESSAGE_EVENT: &str = "redix://pubsub/message";
 pub const PUBSUB_STATUS_EVENT: &str = "redix://pubsub/status";
@@ -103,12 +103,11 @@ impl PubSubManager {
     pub async fn start(
         &self,
         app: tauri::AppHandle,
-        client: &::redis::Client,
+        mut pubsub: ::redis::aio::PubSub,
         input: StartPubSubInput,
     ) -> Result<PubSubSession, AppError> {
         input.validate()?;
         let topics = input.normalized_topics();
-        let mut pubsub = client.get_async_pubsub().await.map_err(map_pubsub_error)?;
 
         for topic in &topics {
             if topic.pattern {
@@ -240,14 +239,10 @@ impl ProfilerManager {
     pub async fn start(
         &self,
         app: tauri::AppHandle,
-        client: &::redis::Client,
+        mut monitor: MonitorLineStream,
         input: StartProfilerInput,
     ) -> Result<ProfilerSession, AppError> {
         input.validate()?;
-        let monitor = client
-            .get_async_monitor()
-            .await
-            .map_err(map_profiler_error)?;
         self.cancel_connection(&input.connection_id);
 
         let connection_id = input.connection_id.clone();
@@ -256,8 +251,7 @@ impl ProfilerManager {
         let task_session_id = session_id.clone();
         let task_app = app.clone();
         let handle = tokio::spawn(async move {
-            let mut stream = monitor.into_on_message::<String>();
-            while let Some(line) = stream.next().await {
+            while let Some(Ok(line)) = monitor.next().await {
                 let Ok(entry) = parse_monitor_line(&line) else {
                     continue;
                 };
@@ -358,14 +352,6 @@ fn stop_profiler_task(task: ProfilerTask) {
         },
     );
     task.handle.abort();
-}
-
-fn map_profiler_error(error: ::redis::RedisError) -> AppError {
-    match error.kind() {
-        ::redis::ErrorKind::AuthenticationFailed => AppError::AuthenticationFailed,
-        ::redis::ErrorKind::Io => AppError::ConnectionFailed,
-        _ => AppError::CommandFailed,
-    }
 }
 
 fn current_unix_millis() -> u64 {

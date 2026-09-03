@@ -136,10 +136,11 @@ impl ConnectionLike for RoutedConnection {
         &'a mut self,
         cmd: &'a redis::Cmd,
     ) -> redis::RedisFuture<'a, redis::Value> {
-        match self {
+        let request = match self {
             Self::Standalone(connection) => connection.req_packed_command(cmd),
             Self::Cluster(connection) => connection.req_packed_command(cmd),
-        }
+        };
+        Box::pin(async move { normalize_cross_slot_value(request.await?) })
     }
 
     fn req_packed_commands<'a>(
@@ -148,10 +149,21 @@ impl ConnectionLike for RoutedConnection {
         offset: usize,
         count: usize,
     ) -> redis::RedisFuture<'a, Vec<redis::Value>> {
-        match self {
+        let request = match self {
             Self::Standalone(connection) => connection.req_packed_commands(pipeline, offset, count),
             Self::Cluster(connection) => connection.req_packed_commands(pipeline, offset, count),
-        }
+        };
+        Box::pin(async move {
+            let values = request.await?;
+            for value in &values {
+                if let redis::Value::ServerError(error) = value {
+                    if error.kind() == Some(redis::ServerErrorKind::CrossSlot) {
+                        return Err(error.clone().into());
+                    }
+                }
+            }
+            Ok(values)
+        })
     }
 
     fn get_db(&self) -> i64 {
@@ -159,6 +171,17 @@ impl ConnectionLike for RoutedConnection {
             Self::Standalone(connection) => connection.get_db(),
             Self::Cluster(_) => 0,
         }
+    }
+}
+
+fn normalize_cross_slot_value(value: redis::Value) -> Result<redis::Value, redis::RedisError> {
+    match value {
+        redis::Value::ServerError(error)
+            if error.kind() == Some(redis::ServerErrorKind::CrossSlot) =>
+        {
+            Err(error.into())
+        }
+        value => Ok(value),
     }
 }
 

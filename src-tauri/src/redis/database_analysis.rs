@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use ::redis::{aio::MultiplexedConnection, Value};
+use ::redis::Value;
 
 use crate::{
     domain::{
@@ -10,12 +10,12 @@ use crate::{
     error::AppError,
 };
 
-use super::connection_manager::map_command_error;
+use super::{connection_manager::map_command_error, RoutedConnection};
 
 const METADATA_BATCH_SIZE: usize = 500;
 
 pub(crate) async fn load_instance_details(
-    connection: &mut MultiplexedConnection,
+    connection: &mut RoutedConnection,
 ) -> Result<InstanceDetails, AppError> {
     let info = ::redis::cmd("INFO")
         .query_async::<String>(connection)
@@ -60,7 +60,7 @@ fn merge_command_stats_sections(
 }
 
 pub(crate) async fn analyze_connection(
-    connection: &mut MultiplexedConnection,
+    connection: &mut RoutedConnection,
     database: u8,
     input: &AnalyzeDatabaseInput,
 ) -> Result<DatabaseAnalysisReport, AppError> {
@@ -148,7 +148,7 @@ fn metadata_key_batches(keys: &[String]) -> impl Iterator<Item = &[String]> {
 }
 
 async fn load_key_metadata(
-    connection: &mut MultiplexedConnection,
+    connection: &mut RoutedConnection,
     keys: &[String],
 ) -> Result<Vec<AnalysisKeyMetadata>, AppError> {
     if keys.is_empty() {

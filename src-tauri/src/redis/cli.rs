@@ -3,7 +3,7 @@ use crate::{
     domain::{CliCommandInput, CliReply, CliSessionInput, CommandResult},
     error::AppError,
 };
-use redis::aio::{ConnectionLike, MultiplexedConnection};
+use redis::aio::ConnectionLike;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::{watch, Mutex};
 
@@ -13,7 +13,7 @@ const MAX_OUTPUT_BYTES: usize = 256 * 1024;
 
 struct CliSession {
     connection_id: String,
-    socket: Mutex<Option<MultiplexedConnection>>,
+    socket: Mutex<Option<super::RoutedConnection>>,
     closed: watch::Sender<bool>,
 }
 
@@ -46,7 +46,7 @@ impl CliManager {
         let result = tokio::select! {
             biased;
             _ = cancelled.changed() => Err(AppError::OperationCancelled),
-            result = tokio::time::timeout(COMMAND_TIMEOUT, redis.connection(&input.connection_id)) => {
+            result = tokio::time::timeout(COMMAND_TIMEOUT, redis.routed_connection(&input.connection_id)) => {
                 result.unwrap_or(Err(AppError::ConnectionFailed))
             },
         };
@@ -112,6 +112,10 @@ impl CliManager {
                             "COMMAND_TIMEOUT"
                         } else if discard {
                             "CONNECTION_FAILED"
+                        } else if error.kind()
+                            == redis::ErrorKind::Server(redis::ServerErrorKind::CrossSlot)
+                        {
+                            "CROSS_SLOT"
                         } else {
                             "COMMAND_FAILED"
                         },

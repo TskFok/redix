@@ -148,7 +148,7 @@ fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_co
 }
 
 #[tokio::test]
-async fn unsupported_topology_and_routed_ssh_combinations_fail_before_network_io() {
+async fn routed_topologies_and_ssh_tls_fail_closed_without_silent_standalone_downgrade() {
     let mut profiles = Vec::new();
     let mut cluster = support::valid_profile();
     cluster.host = "invalid.example".into();
@@ -185,13 +185,17 @@ async fn unsupported_topology_and_routed_ssh_combinations_fail_before_network_io
         Arc::new(Profiles(Mutex::new(profiles.clone()))),
         Arc::new(Secrets(ConnectionSecrets::default())),
     );
-    for profile in profiles {
+    for (index, profile) in profiles.into_iter().enumerate() {
         assert_eq!(
             service
                 .test_connection(&profile, &ConnectionSecrets::default())
                 .await
                 .unwrap_err(),
-            AppError::UnsupportedFeature
+            if index == 0 {
+                AppError::ConnectionFailed
+            } else {
+                AppError::SshTunnelFailed
+            }
         );
     }
 }

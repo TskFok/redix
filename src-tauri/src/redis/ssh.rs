@@ -510,6 +510,103 @@ impl Drop for SshForward {
     }
 }
 
+#[cfg(test)]
+pub(super) struct TestForwardingBackend {
+    routes: Vec<(ConnectionEndpoint, SocketAddr)>,
+    forwarded: Mutex<Vec<ConnectionEndpoint>>,
+}
+
+#[cfg(test)]
+impl TestForwardingBackend {
+    pub(super) fn forwarded_targets(&self) -> Vec<ConnectionEndpoint> {
+        self.forwarded.lock().unwrap().clone()
+    }
+}
+
+#[cfg(test)]
+struct TcpProxyChannel {
+    stream: TcpStream,
+    eof: bool,
+}
+
+#[cfg(test)]
+impl Read for TcpProxyChannel {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let size = self.stream.read(buffer)?;
+        if size == 0 {
+            self.eof = true;
+        }
+        Ok(size)
+    }
+}
+
+#[cfg(test)]
+impl Write for TcpProxyChannel {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.stream.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+#[cfg(test)]
+impl ProxyChannel for TcpProxyChannel {
+    fn eof(&self) -> bool {
+        self.eof
+    }
+
+    fn send_eof(&mut self) -> io::Result<()> {
+        self.stream.shutdown(Shutdown::Write)
+    }
+}
+
+#[cfg(test)]
+impl SessionBackend for TestForwardingBackend {
+    fn authenticate(
+        &self,
+        _config: &SshConfig,
+        _secrets: &ConnectionSecrets,
+    ) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn open_channel(
+        &self,
+        target: &ConnectionEndpoint,
+        _cancelled: &AtomicBool,
+    ) -> Result<Box<dyn ProxyChannel>, AppError> {
+        let address = self
+            .routes
+            .iter()
+            .find_map(|(candidate, address)| (candidate == target).then_some(*address))
+            .ok_or(AppError::SshTunnelFailed)?;
+        let stream = TcpStream::connect(address).map_err(|_| AppError::SshTunnelFailed)?;
+        stream
+            .set_nonblocking(true)
+            .map_err(|_| AppError::SshTunnelFailed)?;
+        self.forwarded
+            .lock()
+            .map_err(|_| AppError::SshTunnelFailed)?
+            .push(target.clone());
+        Ok(Box::new(TcpProxyChannel { stream, eof: false }))
+    }
+
+    fn disconnect(&self) {}
+}
+
+#[cfg(test)]
+pub(super) fn test_forwarding_transport(
+    routes: Vec<(ConnectionEndpoint, SocketAddr)>,
+) -> (SshTransport, Arc<TestForwardingBackend>) {
+    let backend = Arc::new(TestForwardingBackend {
+        routes,
+        forwarded: Mutex::new(Vec::new()),
+    });
+    (SshTransport::from_backend(backend.clone()), backend)
+}
+
 fn spawn_accept_task(
     listener: tokio::net::TcpListener,
     session: std::sync::Weak<SessionOwner>,
