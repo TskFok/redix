@@ -92,6 +92,7 @@ pub(crate) async fn delete_connection_inner(
     state: &AppState,
     connection_id: &str,
 ) -> Result<(), AppError> {
+    let _cli_lifecycle = state.cli.lifecycle_guard().await;
     let _transaction = state.redis.profile_transaction().await;
     let old_profiles = state.profiles.load()?;
     if !old_profiles
@@ -409,7 +410,17 @@ pub async fn open_connection(
     state: tauri::State<'_, AppState>,
     connection_id: String,
 ) -> Result<ConnectionInfo, AppError> {
-    state.redis.open_connection(&connection_id).await
+    open_connection_inner(state.inner(), &connection_id).await
+}
+
+pub(crate) async fn open_connection_inner(
+    state: &AppState,
+    connection_id: &str,
+) -> Result<ConnectionInfo, AppError> {
+    let _cli_lifecycle = state.cli.lifecycle_guard().await;
+    let info = state.redis.open_connection(connection_id).await?;
+    state.cli.close_connection(connection_id).await;
+    Ok(info)
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -417,6 +428,7 @@ pub async fn close_connection(
     state: tauri::State<'_, AppState>,
     connection_id: String,
 ) -> Result<(), AppError> {
+    let _cli_lifecycle = state.cli.lifecycle_guard().await;
     state.redis.close_connection(&connection_id).await?;
     state.cli.close_connection(&connection_id).await;
     Ok(())
@@ -433,7 +445,147 @@ mod tests {
     };
 
     use super::*;
+    use crate::domain::{CliCommandInput, CliSessionInput};
     use crate::persistence::{ConnectionSecrets, ProfileRepository, SecretStore};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn spawn_cli_redis(label: &'static str) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_active = Arc::clone(&active);
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let active = Arc::clone(&server_active);
+                active.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    struct ActiveGuard(Arc<std::sync::atomic::AtomicUsize>);
+                    impl Drop for ActiveGuard {
+                        fn drop(&mut self) {
+                            self.0.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    }
+                    let _active = ActiveGuard(active);
+                    let mut pending = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    loop {
+                        let size = match socket.read(&mut buffer).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(size) => size,
+                        };
+                        pending.extend_from_slice(&buffer[..size]);
+                        while let Some((consumed, command)) = parse_test_resp_command(&pending) {
+                            pending.drain(..consumed);
+                            let response = match command.first().map(Vec::as_slice) {
+                                Some(b"PING") => "+PONG\r\n".into(),
+                                Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                                Some(b"GET") => format!("${}\r\n{label}\r\n", label.len()),
+                                _ => "+OK\r\n".into(),
+                            };
+                            socket.write_all(response.as_bytes()).await.unwrap();
+                        }
+                    }
+                });
+            }
+        });
+        (port, active)
+    }
+
+    async fn spawn_paused_cli_redis(
+        label: &'static str,
+    ) -> (
+        u16,
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let gate = Arc::new(tokio::sync::Mutex::new(Some((entered_tx, resume_rx))));
+        tokio::spawn(async move {
+            loop {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let gate = Arc::clone(&gate);
+                tokio::spawn(async move {
+                    let mut pending = Vec::new();
+                    let mut buffer = [0_u8; 4096];
+                    loop {
+                        let size = match socket.read(&mut buffer).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(size) => size,
+                        };
+                        pending.extend_from_slice(&buffer[..size]);
+                        while let Some((consumed, command)) = parse_test_resp_command(&pending) {
+                            pending.drain(..consumed);
+                            let response = match command.first().map(Vec::as_slice) {
+                                Some(b"PING") => {
+                                    if let Some((entered, resume)) = gate.lock().await.take() {
+                                        entered.send(()).unwrap();
+                                        resume.await.unwrap();
+                                    }
+                                    "+PONG\r\n".into()
+                                }
+                                Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                                Some(b"GET") => {
+                                    format!("${}\r\n{label}\r\n", label.len())
+                                }
+                                _ => "+OK\r\n".into(),
+                            };
+                            socket.write_all(response.as_bytes()).await.unwrap();
+                        }
+                    }
+                });
+            }
+        });
+        (port, entered_rx, resume_tx)
+    }
+
+    fn parse_test_resp_command(buffer: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
+        if buffer.first() != Some(&b'*') {
+            return None;
+        }
+        let header_end = buffer.windows(2).position(|pair| pair == b"\r\n")?;
+        let count = std::str::from_utf8(&buffer[1..header_end])
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        let mut offset = header_end + 2;
+        let mut args = Vec::with_capacity(count);
+        for _ in 0..count {
+            let length_end = buffer[offset..]
+                .windows(2)
+                .position(|pair| pair == b"\r\n")?
+                + offset;
+            let length = std::str::from_utf8(&buffer[offset + 1..length_end])
+                .ok()?
+                .parse::<usize>()
+                .ok()?;
+            offset = length_end + 2;
+            let end = offset.checked_add(length)?;
+            if buffer.get(end..end + 2)? != b"\r\n" {
+                return None;
+            }
+            args.push(buffer[offset..end].to_vec());
+            offset = end + 2;
+        }
+        Some((offset, args))
+    }
+
+    async fn wait_for_active_connections(active: &std::sync::atomic::AtomicUsize, expected: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while active.load(Ordering::SeqCst) != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
 
     struct RecordingProfileRepository {
         profiles: Mutex<Vec<ConnectionProfile>>,
@@ -632,6 +784,149 @@ mod tests {
             clear_ca_certificate: false,
             clear_client_certificate: false,
         }
+    }
+
+    #[tokio::test]
+    async fn successful_reopen_closes_existing_cli_socket_before_new_commands() {
+        let (old_port, old_active) = spawn_cli_redis("old").await;
+        let (new_port, _) = spawn_cli_redis("new").await;
+        let mut old_profile = profile("local", "Old", false);
+        old_profile.port = old_port;
+        let (state, profiles, _) = state_with(vec![old_profile], None);
+        state.redis.open_connection("local").await.unwrap();
+        let session = CliSessionInput {
+            connection_id: "local".into(),
+            session_id: "00000000-0000-4000-8000-000000000071".into(),
+        };
+        state.cli.open(&state.redis, session.clone()).await.unwrap();
+        wait_for_active_connections(old_active.as_ref(), 1).await;
+
+        let mut new_profile = profile("local", "New", false);
+        new_profile.port = new_port;
+        profiles.save(&[new_profile]).unwrap();
+        open_connection_inner(&state, "local").await.unwrap();
+
+        assert!(matches!(
+            state
+                .cli
+                .execute(CliCommandInput {
+                    connection_id: "local".into(),
+                    session_id: session.session_id.clone(),
+                    command: "GET source".into(),
+                })
+                .await,
+            Err(AppError::ConnectionFailed)
+        ));
+        wait_for_active_connections(old_active.as_ref(), 0).await;
+        state.cli.open(&state.redis, session.clone()).await.unwrap();
+        assert_eq!(
+            state
+                .cli
+                .execute(CliCommandInput {
+                    connection_id: "local".into(),
+                    session_id: session.session_id,
+                    command: "GET source".into(),
+                })
+                .await
+                .unwrap()
+                .result
+                .unwrap()
+                .value,
+            serde_json::json!("new")
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_reopen_preserves_existing_cli_session() {
+        let (old_port, old_active) = spawn_cli_redis("old").await;
+        let mut old_profile = profile("local", "Old", false);
+        old_profile.port = old_port;
+        let (state, profiles, _) = state_with(vec![old_profile], None);
+        state.redis.open_connection("local").await.unwrap();
+        let session = CliSessionInput {
+            connection_id: "local".into(),
+            session_id: "00000000-0000-4000-8000-000000000072".into(),
+        };
+        state.cli.open(&state.redis, session.clone()).await.unwrap();
+        wait_for_active_connections(old_active.as_ref(), 1).await;
+        let unavailable = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let unavailable_port = unavailable.local_addr().unwrap().port();
+        drop(unavailable);
+        let mut broken = profile("local", "Broken", false);
+        broken.port = unavailable_port;
+        profiles.save(&[broken]).unwrap();
+
+        assert_eq!(
+            open_connection_inner(&state, "local").await,
+            Err(AppError::ConnectionFailed)
+        );
+        assert_eq!(
+            state
+                .cli
+                .execute(CliCommandInput {
+                    connection_id: "local".into(),
+                    session_id: session.session_id,
+                    command: "GET source".into(),
+                })
+                .await
+                .unwrap()
+                .result
+                .unwrap()
+                .value,
+            serde_json::json!("old")
+        );
+        assert_eq!(old_active.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cli_open_waits_for_reopen_and_uses_the_new_handle() {
+        let (old_port, _) = spawn_cli_redis("old").await;
+        let (new_port, reopen_entered, resume_reopen) = spawn_paused_cli_redis("new").await;
+        let mut old_profile = profile("local", "Old", false);
+        old_profile.port = old_port;
+        let (state, profiles, _) = state_with(vec![old_profile], None);
+        let state = Arc::new(state);
+        state.redis.open_connection("local").await.unwrap();
+        let mut new_profile = profile("local", "New", false);
+        new_profile.port = new_port;
+        profiles.save(&[new_profile]).unwrap();
+        let reopen_state = Arc::clone(&state);
+        let reopen =
+            tokio::spawn(async move { open_connection_inner(&reopen_state, "local").await });
+        reopen_entered.await.unwrap();
+
+        let session = CliSessionInput {
+            connection_id: "local".into(),
+            session_id: "00000000-0000-4000-8000-000000000073".into(),
+        };
+        let cli_state = Arc::clone(&state);
+        let cli_session = session.clone();
+        let mut cli_open =
+            tokio::spawn(async move { cli_state.cli.open(&cli_state.redis, cli_session).await });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut cli_open)
+                .await
+                .is_err()
+        );
+        resume_reopen.send(()).unwrap();
+        reopen.await.unwrap().unwrap();
+        cli_open.await.unwrap().unwrap();
+
+        assert_eq!(
+            state
+                .cli
+                .execute(CliCommandInput {
+                    connection_id: "local".into(),
+                    session_id: session.session_id,
+                    command: "GET source".into(),
+                })
+                .await
+                .unwrap()
+                .result
+                .unwrap()
+                .value,
+            serde_json::json!("new")
+        );
     }
 
     struct PausedFailingProfiles {

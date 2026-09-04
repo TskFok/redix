@@ -52,7 +52,8 @@ use super::{
     },
     key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
     observability::{
-        parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager, PubSubManager,
+        map_pubsub_error, parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager,
+        PubSubManager,
     },
     routed_connection::{RoutedClient, RoutedConnection},
     search::{
@@ -268,6 +269,8 @@ pub struct RedisService {
     generations: Arc<RwLock<HashMap<String, u64>>>,
     pubsub: Arc<PubSubManager>,
     profiler: Arc<ProfilerManager>,
+    #[cfg(test)]
+    test_ssh_transport: Option<super::ssh::SshTransport>,
 }
 
 #[derive(Clone)]
@@ -276,6 +279,19 @@ struct ConnectionHandle {
     profile: ConnectionProfile,
     target: ConnectionTarget,
     _ssh: Option<super::ssh::SshTransport>,
+}
+
+#[derive(Clone)]
+struct ActiveConnectionSnapshot {
+    token: u64,
+    client: RoutedClient,
+    profile: ConnectionProfile,
+    target: ConnectionTarget,
+}
+
+struct CapabilityConnection {
+    capabilities: ModuleCapabilities,
+    connection: RoutedConnection,
 }
 
 impl RedisService {
@@ -289,7 +305,27 @@ impl RedisService {
             generations: Arc::new(RwLock::new(HashMap::new())),
             pubsub: Arc::new(PubSubManager::new()),
             profiler: Arc::new(ProfilerManager::new()),
+            #[cfg(test)]
+            test_ssh_transport: None,
         }
+    }
+
+    #[cfg(test)]
+    fn with_test_ssh_transport(mut self, transport: super::ssh::SshTransport) -> Self {
+        self.test_ssh_transport = Some(transport);
+        self
+    }
+
+    async fn connect_handle(
+        &self,
+        profile: &ConnectionProfile,
+        secrets: &ConnectionSecrets,
+    ) -> Result<(ConnectionHandle, Option<ConnectionEndpoint>), AppError> {
+        #[cfg(test)]
+        if let Some(transport) = self.test_ssh_transport.as_ref() {
+            return connect_handle_with_transport(profile, secrets, Some(transport.clone())).await;
+        }
+        connect_handle_with_transport(profile, secrets, None).await
     }
 
     // Shared with commands so profile and keyring writes, including rollback, are atomic
@@ -358,9 +394,27 @@ impl RedisService {
         input: StartPubSubInput,
     ) -> Result<PubSubSession, AppError> {
         input.validate()?;
-        let client = self.standalone_client(&input.connection_id).await?;
-        let pubsub = client.pubsub().await?;
-        self.pubsub.start(app, pubsub, input).await
+        let (snapshot, _) = self.active_snapshot(&input.connection_id).await?;
+        let client = snapshot.client.standalone_client()?.clone();
+        let mut pubsub = client.pubsub().await?;
+        for topic in input.normalized_topics() {
+            if topic.pattern {
+                pubsub
+                    .psubscribe(topic.name)
+                    .await
+                    .map_err(map_pubsub_error)?;
+            } else {
+                pubsub
+                    .subscribe(topic.name)
+                    .await
+                    .map_err(map_pubsub_error)?;
+            }
+        }
+        let connection_id = input.connection_id.clone();
+        self.register_observability_if_current(&connection_id, snapshot.token, || {
+            self.pubsub.start(app, pubsub, input)
+        })
+        .await
     }
 
     /// Browser collection values are placeholders; the dedicated editor reads bounded pages.
@@ -402,22 +456,44 @@ impl RedisService {
         input: StartProfilerInput,
     ) -> Result<ProfilerSession, AppError> {
         input.validate()?;
-        let client = self.standalone_client(&input.connection_id).await?;
+        let (snapshot, _) = self.active_snapshot(&input.connection_id).await?;
+        let client = snapshot.client.standalone_client()?.clone();
         let monitor = client.monitor_stream().await?;
-        self.profiler.start(app, monitor, input).await
+        let connection_id = input.connection_id.clone();
+        self.register_observability_if_current(&connection_id, snapshot.token, || {
+            self.profiler.start(app, monitor, input)
+        })
+        .await
     }
 
     pub async fn stop_profiler(&self, input: StopProfilerInput) -> Result<(), AppError> {
         self.profiler.stop(input)
     }
 
-    async fn client(&self, connection_id: &str) -> Result<RoutedClient, AppError> {
-        self.active
-            .read()
-            .await
+    async fn active_snapshot(
+        &self,
+        connection_id: &str,
+    ) -> Result<(ActiveConnectionSnapshot, Option<ModuleCapabilities>), AppError> {
+        // Keep this acquisition order aligned with every lifecycle writer. Holding the
+        // generation guard until the handle is cloned makes the token, cache and handle one
+        // indivisible view without retaining any lock across network I/O.
+        let generations = self.generations.read().await;
+        let capabilities = self.capabilities.read().await;
+        let active = self.active.read().await;
+        let handle = active
             .get(connection_id)
-            .map(|handle| handle.client.clone())
-            .ok_or(AppError::ConnectionFailed)
+            .ok_or(AppError::ConnectionFailed)?;
+        let snapshot = ActiveConnectionSnapshot {
+            token: generations.get(connection_id).copied().unwrap_or(0),
+            client: handle.client.clone(),
+            profile: handle.profile.clone(),
+            target: handle.target.clone(),
+        };
+        Ok((snapshot, capabilities.get(connection_id).cloned()))
+    }
+
+    async fn client(&self, connection_id: &str) -> Result<RoutedClient, AppError> {
+        Ok(self.active_snapshot(connection_id).await?.0.client)
     }
 
     pub async fn standalone_client(
@@ -434,12 +510,7 @@ impl RedisService {
         &self,
         connection_id: &str,
     ) -> Result<ConnectionTarget, AppError> {
-        self.active
-            .read()
-            .await
-            .get(connection_id)
-            .map(|handle| handle.target.clone())
-            .ok_or(AppError::ConnectionFailed)
+        Ok(self.active_snapshot(connection_id).await?.0.target)
     }
 
     pub async fn routed_connection(
@@ -456,31 +527,73 @@ impl RedisService {
         self.routed_connection(connection_id).await
     }
 
-    async fn ensure_search_supported(&self, connection_id: &str) -> Result<(), AppError> {
-        let capabilities = self.get_module_capabilities(connection_id).await?;
-        if capabilities.search_compatible() {
-            Ok(())
-        } else {
-            Err(AppError::UnsupportedFeature)
-        }
+    async fn capability_connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<CapabilityConnection, AppError> {
+        let (snapshot, cached) = self.active_snapshot(connection_id).await?;
+        let mut connection = snapshot.client.connection().await?;
+        let capabilities = match cached {
+            Some(capabilities) => capabilities,
+            None => {
+                let capabilities = probe_module_capabilities(&mut connection).await?;
+                let _ = self
+                    .cache_capabilities_if_current(
+                        connection_id,
+                        snapshot.token,
+                        capabilities.clone(),
+                    )
+                    .await;
+                capabilities
+            }
+        };
+        Ok(CapabilityConnection {
+            capabilities,
+            connection,
+        })
     }
 
-    async fn ensure_array_supported(&self, connection_id: &str) -> Result<(), AppError> {
-        let capabilities = self.get_module_capabilities(connection_id).await?;
-        if capabilities.array_supported {
-            Ok(())
-        } else {
-            Err(AppError::UnsupportedFeature)
+    async fn register_observability_if_current<T>(
+        &self,
+        connection_id: &str,
+        token: u64,
+        register: impl FnOnce() -> Result<T, AppError>,
+    ) -> Result<T, AppError> {
+        let generations = self.generations.read().await;
+        if generations.get(connection_id).copied().unwrap_or(0) != token {
+            return Err(AppError::OperationCancelled);
         }
+        register()
     }
 
-    async fn ensure_vector_set_supported(&self, connection_id: &str) -> Result<(), AppError> {
-        let capabilities = self.get_module_capabilities(connection_id).await?;
-        if capabilities.vector_set_supported {
-            Ok(())
-        } else {
-            Err(AppError::UnsupportedFeature)
+    pub(super) async fn search_connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<RoutedConnection, AppError> {
+        let context = self.capability_connection(connection_id).await?;
+        if !context.capabilities.search_compatible() {
+            return Err(AppError::UnsupportedFeature);
         }
+        Ok(context.connection)
+    }
+
+    async fn array_connection(&self, connection_id: &str) -> Result<RoutedConnection, AppError> {
+        let context = self.capability_connection(connection_id).await?;
+        if !context.capabilities.array_supported {
+            return Err(AppError::UnsupportedFeature);
+        }
+        Ok(context.connection)
+    }
+
+    async fn vector_set_connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<RoutedConnection, AppError> {
+        let context = self.capability_connection(connection_id).await?;
+        if !context.capabilities.vector_set_supported {
+            return Err(AppError::UnsupportedFeature);
+        }
+        Ok(context.connection)
     }
 
     async fn inspect_client(client: &RoutedClient) -> Result<ConnectionInfo, AppError> {
@@ -514,6 +627,7 @@ impl RedisService {
         })
     }
 
+    #[cfg(test)]
     async fn profile(&self, connection_id: &str) -> Result<ConnectionProfile, AppError> {
         if let Some(handle) = self.active.read().await.get(connection_id) {
             return Ok(handle.profile.clone());
@@ -526,6 +640,7 @@ impl RedisService {
             .ok_or(AppError::InvalidConnection)
     }
 
+    #[cfg(test)]
     async fn capture_capability_token(&self, connection_id: &str) -> u64 {
         self.generations
             .read()
@@ -624,6 +739,37 @@ fn bump_generation(generations: &mut HashMap<String, u64>, connection_id: &str) 
     next
 }
 
+async fn probe_module_capabilities(
+    connection: &mut RoutedConnection,
+) -> Result<ModuleCapabilities, AppError> {
+    let module_reply = match ::redis::cmd("MODULE")
+        .arg("LIST")
+        .query_async::<Value>(connection)
+        .await
+    {
+        Ok(reply) => reply,
+        Err(error) if is_unknown_command_error(&error) => Value::Array(Vec::new()),
+        Err(error) => return Err(map_command_error(error)),
+    };
+    let module_capabilities = parse_module_capabilities(module_reply)?;
+    let command_reply = match build_command_info_command()
+        .query_async::<Value>(connection)
+        .await
+    {
+        Ok(reply) => reply,
+        Err(error) if is_unknown_command_error(&error) => Value::Array(Vec::new()),
+        Err(error) => return Err(map_command_error(error)),
+    };
+    let commands = parse_command_info(command_reply)?;
+    let mut capabilities = ModuleCapabilities::from_modules_and_commands(
+        module_capabilities.modules,
+        commands.clone(),
+    );
+    capabilities.array_supported = is_array_command_set_supported(&commands);
+    capabilities.vector_set_supported = is_vector_set_command_set_supported(&commands);
+    Ok(capabilities)
+}
+
 impl RedisOperations for RedisService {
     async fn test_connection(
         &self,
@@ -631,7 +777,7 @@ impl RedisOperations for RedisService {
         secrets: &ConnectionSecrets,
     ) -> Result<ConnectionInfo, AppError> {
         profile.validate()?;
-        let (handle, endpoint) = connect_handle(profile, secrets).await?;
+        let (handle, endpoint) = self.connect_handle(profile, secrets).await?;
         let mut info = Self::inspect_client(&handle.client).await?;
         info.resolved_endpoint = endpoint;
         Ok(info)
@@ -640,7 +786,7 @@ impl RedisOperations for RedisService {
     async fn open_connection(&self, connection_id: &str) -> Result<ConnectionInfo, AppError> {
         let token = self.bump_connection_generation(connection_id).await;
         let (profile, secrets) = self.connection_snapshot(connection_id).await?;
-        let (handle, endpoint) = connect_handle(&profile, &secrets).await?;
+        let (handle, endpoint) = self.connect_handle(&profile, &secrets).await?;
         let mut info = Self::inspect_client(&handle.client).await?;
         info.resolved_endpoint = endpoint;
         self.publish_connection_if_current(connection_id, token, handle, None, &secrets)
@@ -813,8 +959,7 @@ impl RedisOperations for RedisService {
 
     async fn create_array(&self, input: CreateArrayInput) -> Result<KeyValue, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         let exists: i64 = ::redis::cmd("EXISTS")
             .arg(&input.key)
             .query_async::<i64>(&mut connection)
@@ -839,8 +984,7 @@ impl RedisOperations for RedisService {
         input: ArrayKeyInput,
     ) -> Result<crate::domain::ArraySummary, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let mut pipeline = ::redis::pipe();
         pipeline
@@ -870,8 +1014,7 @@ impl RedisOperations for RedisService {
         input: ArrayRangeInput,
     ) -> Result<crate::domain::ArrayRange, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let reply = build_array_range_command(&input)?
             .query_async::<Value>(&mut connection)
@@ -885,8 +1028,7 @@ impl RedisOperations for RedisService {
         input: ArrayScanInput,
     ) -> Result<crate::domain::ArrayScan, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let reply = build_array_scan_command(&input)?
             .query_async::<Value>(&mut connection)
@@ -900,8 +1042,7 @@ impl RedisOperations for RedisService {
         input: ArrayMultiGetInput,
     ) -> Result<Vec<Option<String>>, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let reply = build_array_multi_get_command(&input)?
             .query_async::<Value>(&mut connection)
@@ -915,8 +1056,7 @@ impl RedisOperations for RedisService {
         input: SetArrayElementInput,
     ) -> Result<crate::domain::ArrayMutationResult, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         build_array_set_command(&input)?
             .query_async::<Value>(&mut connection)
@@ -934,8 +1074,7 @@ impl RedisOperations for RedisService {
         input: AppendArrayInput,
     ) -> Result<crate::domain::ArrayMutationResult, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let length = ::redis::cmd("ARLEN")
             .arg(&input.key)
@@ -962,8 +1101,7 @@ impl RedisOperations for RedisService {
         input: DeleteArrayElementsInput,
     ) -> Result<crate::domain::ArrayMutationResult, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let reply = build_array_delete_command(&input)?
             .query_async::<Value>(&mut connection)
@@ -985,8 +1123,7 @@ impl RedisOperations for RedisService {
         input: DeleteArrayRangeInput,
     ) -> Result<crate::domain::ArrayMutationResult, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let reply = build_array_delete_range_command(&input)?
             .query_async::<Value>(&mut connection)
@@ -1008,8 +1145,7 @@ impl RedisOperations for RedisService {
         input: crate::domain::SearchArrayInput,
     ) -> Result<crate::domain::ArraySearchResult, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let reply = build_array_search_command(&input)?
             .query_async::<Value>(&mut connection)
@@ -1023,8 +1159,7 @@ impl RedisOperations for RedisService {
         input: AggregateArrayInput,
     ) -> Result<crate::domain::ArrayAggregateResult, AppError> {
         input.validate()?;
-        self.ensure_array_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.array_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "array").await?;
         let operation = input.operation.clone();
         let reply = build_array_aggregate_command(&input)?
@@ -1036,9 +1171,7 @@ impl RedisOperations for RedisService {
 
     async fn create_vector_set(&self, input: CreateVectorSetInput) -> Result<KeyValue, AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         if redis_key_exists(&mut connection, &input.key).await? {
             return Err(AppError::CommandFailed);
         }
@@ -1067,9 +1200,7 @@ impl RedisOperations for RedisService {
         input: AddVectorSetElementsInput,
     ) -> Result<(), AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
         let expected_dimension = read_vector_set_dimension(&mut connection, &input.key).await?;
         let mut pipeline = ::redis::pipe();
@@ -1088,9 +1219,7 @@ impl RedisOperations for RedisService {
         input: VectorSetKeyInput,
     ) -> Result<VectorSetSummary, AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
         let mut pipeline = ::redis::pipe();
         pipeline
@@ -1120,9 +1249,7 @@ impl RedisOperations for RedisService {
         input: crate::domain::ListVectorSetElementsInput,
     ) -> Result<VectorSetPage, AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
 
         let (names, pagination_supported) = match build_vrange_command(&input)?
@@ -1160,9 +1287,7 @@ impl RedisOperations for RedisService {
         input: VectorSetElementInput,
     ) -> Result<VectorSetElement, AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
         read_vector_set_element_with_connection(&mut connection, &input.key, &input.element).await
     }
@@ -1172,9 +1297,7 @@ impl RedisOperations for RedisService {
         input: SetVectorSetAttributesInput,
     ) -> Result<VectorSetElement, AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
         build_vsetattr_command(&input)?
             .query_async::<Value>(&mut connection)
@@ -1188,9 +1311,7 @@ impl RedisOperations for RedisService {
         input: VectorSetElementInput,
     ) -> Result<(), AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
         let mut command = ::redis::cmd("VSETATTR");
         command.arg(&input.key).arg(&input.element).arg("{}");
@@ -1206,9 +1327,7 @@ impl RedisOperations for RedisService {
         input: DeleteVectorSetElementsInput,
     ) -> Result<u64, AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
         let mut pipeline = ::redis::pipe();
         for element in &input.elements {
@@ -1244,9 +1363,7 @@ impl RedisOperations for RedisService {
         input: VectorSimilarityQueryInput,
     ) -> Result<VectorSimilarityResult, AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
 
         let (mut matches, with_attributes) = match build_vsim_command(&input)?
@@ -1282,9 +1399,7 @@ impl RedisOperations for RedisService {
         input: VectorSetElementInput,
     ) -> Result<String, AppError> {
         input.validate()?;
-        self.ensure_vector_set_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.vector_set_connection(&input.connection_id).await?;
         ensure_existing_key_type(&mut connection, &input.key, "vector-set").await?;
         let reply = build_vemb_command(&input.key, &input.element)?
             .query_async::<Value>(&mut connection)
@@ -1302,39 +1417,14 @@ impl RedisOperations for RedisService {
         connection_id: &str,
     ) -> Result<ModuleCapabilities, AppError> {
         validate_connection_id(connection_id)?;
-        if let Some(capabilities) = self.capabilities.read().await.get(connection_id).cloned() {
+        let (snapshot, cached) = self.active_snapshot(connection_id).await?;
+        if let Some(capabilities) = cached {
             return Ok(capabilities);
         }
-
-        let token = self.capture_capability_token(connection_id).await;
-        let mut connection = self.connection(connection_id).await?;
-        let module_reply = match ::redis::cmd("MODULE")
-            .arg("LIST")
-            .query_async::<Value>(&mut connection)
-            .await
-        {
-            Ok(reply) => reply,
-            Err(error) if is_unknown_command_error(&error) => Value::Array(Vec::new()),
-            Err(error) => return Err(map_command_error(error)),
-        };
-        let module_capabilities = parse_module_capabilities(module_reply)?;
-        let command_reply = match build_command_info_command()
-            .query_async::<Value>(&mut connection)
-            .await
-        {
-            Ok(reply) => reply,
-            Err(error) if is_unknown_command_error(&error) => Value::Array(Vec::new()),
-            Err(error) => return Err(map_command_error(error)),
-        };
-        let commands = parse_command_info(command_reply)?;
-        let mut capabilities = ModuleCapabilities::from_modules_and_commands(
-            module_capabilities.modules,
-            commands.clone(),
-        );
-        capabilities.array_supported = is_array_command_set_supported(&commands);
-        capabilities.vector_set_supported = is_vector_set_command_set_supported(&commands);
+        let mut connection = snapshot.client.connection().await?;
+        let capabilities = probe_module_capabilities(&mut connection).await?;
         let _ = self
-            .cache_capabilities_if_current(connection_id, token, capabilities.clone())
+            .cache_capabilities_if_current(connection_id, snapshot.token, capabilities.clone())
             .await;
         Ok(capabilities)
     }
@@ -1347,8 +1437,7 @@ impl RedisOperations for RedisService {
             connection_id: connection_id.to_owned(),
         };
         input.validate()?;
-        self.ensure_search_supported(connection_id).await?;
-        let mut connection = self.connection(connection_id).await?;
+        let mut connection = self.search_connection(connection_id).await?;
         let reply = ::redis::cmd("FT._LIST")
             .query_async::<Value>(&mut connection)
             .await
@@ -1360,8 +1449,7 @@ impl RedisOperations for RedisService {
 
     async fn create_search_index(&self, input: CreateSearchIndexInput) -> Result<(), AppError> {
         input.validate()?;
-        self.ensure_search_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.search_connection(&input.connection_id).await?;
         build_create_search_index_command(&input)?
             .query_async::<Value>(&mut connection)
             .await
@@ -1371,8 +1459,7 @@ impl RedisOperations for RedisService {
 
     async fn get_search_index(&self, input: SearchIndexInput) -> Result<SearchIndexInfo, AppError> {
         input.validate()?;
-        self.ensure_search_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.search_connection(&input.connection_id).await?;
         let reply = ::redis::cmd("FT.INFO")
             .arg(&input.index)
             .query_async::<Value>(&mut connection)
@@ -1383,8 +1470,7 @@ impl RedisOperations for RedisService {
 
     async fn delete_search_index(&self, input: SearchIndexInput) -> Result<(), AppError> {
         input.validate()?;
-        self.ensure_search_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.search_connection(&input.connection_id).await?;
         ::redis::cmd("FT.DROPINDEX")
             .arg(&input.index)
             .query_async::<Value>(&mut connection)
@@ -1395,8 +1481,7 @@ impl RedisOperations for RedisService {
 
     async fn search_keys(&self, input: SearchQueryInput) -> Result<SearchQueryResult, AppError> {
         input.validate()?;
-        self.ensure_search_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.search_connection(&input.connection_id).await?;
         let max_results = ::redis::cmd("FT.CONFIG")
             .arg("GET")
             .arg("MAXSEARCHRESULTS")
@@ -1454,8 +1539,7 @@ impl RedisOperations for RedisService {
         input: GetKeySearchIndexesInput,
     ) -> Result<Vec<KeySearchIndexSummary>, AppError> {
         input.validate()?;
-        self.ensure_search_supported(&input.connection_id).await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.search_connection(&input.connection_id).await?;
         let key_type = ::redis::cmd("TYPE")
             .arg(&input.key)
             .query_async::<String>(&mut connection)
@@ -1505,23 +1589,23 @@ impl RedisOperations for RedisService {
 
     async fn get_json_path(&self, input: GetJsonPathInput) -> Result<JsonPathValue, AppError> {
         input.validate()?;
-        let capabilities = self.get_module_capabilities(&input.connection_id).await?;
-        if !capabilities.json_supported {
+        let context = self.capability_connection(&input.connection_id).await?;
+        if !context.capabilities.json_supported {
             return Err(AppError::UnsupportedDataType);
         }
-        let legacy = json_path_uses_legacy_syntax(&capabilities);
-        let mut connection = self.connection(&input.connection_id).await?;
+        let legacy = json_path_uses_legacy_syntax(&context.capabilities);
+        let mut connection = context.connection;
         read_json_path(&mut connection, input, legacy).await
     }
 
     async fn set_json_path(&self, input: SetJsonPathInput) -> Result<JsonMutationResult, AppError> {
         input.validate()?;
-        let capabilities = self.get_module_capabilities(&input.connection_id).await?;
-        if !capabilities.json_supported {
+        let context = self.capability_connection(&input.connection_id).await?;
+        if !context.capabilities.json_supported {
             return Err(AppError::UnsupportedDataType);
         }
-        let legacy = json_path_uses_legacy_syntax(&capabilities);
-        let mut connection = self.connection(&input.connection_id).await?;
+        let legacy = json_path_uses_legacy_syntax(&context.capabilities);
+        let mut connection = context.connection;
         write_json_path(&mut connection, input, legacy).await
     }
 
@@ -1530,12 +1614,12 @@ impl RedisOperations for RedisService {
         input: AppendJsonArrayInput,
     ) -> Result<JsonMutationResult, AppError> {
         input.validate()?;
-        let capabilities = self.get_module_capabilities(&input.connection_id).await?;
-        if !capabilities.json_supported {
+        let context = self.capability_connection(&input.connection_id).await?;
+        if !context.capabilities.json_supported {
             return Err(AppError::UnsupportedDataType);
         }
-        let legacy = json_path_uses_legacy_syntax(&capabilities);
-        let mut connection = self.connection(&input.connection_id).await?;
+        let legacy = json_path_uses_legacy_syntax(&context.capabilities);
+        let mut connection = context.connection;
         append_json_array_path(&mut connection, input, legacy).await
     }
 
@@ -1544,12 +1628,12 @@ impl RedisOperations for RedisService {
         input: DeleteJsonPathInput,
     ) -> Result<JsonMutationResult, AppError> {
         input.validate()?;
-        let capabilities = self.get_module_capabilities(&input.connection_id).await?;
-        if !capabilities.json_supported {
+        let context = self.capability_connection(&input.connection_id).await?;
+        if !context.capabilities.json_supported {
             return Err(AppError::UnsupportedDataType);
         }
-        let legacy = json_path_uses_legacy_syntax(&capabilities);
-        let mut connection = self.connection(&input.connection_id).await?;
+        let legacy = json_path_uses_legacy_syntax(&context.capabilities);
+        let mut connection = context.connection;
         delete_json_path_value(&mut connection, input, legacy).await
     }
 
@@ -1828,18 +1912,18 @@ impl RedisOperations for RedisService {
         input: AnalyzeDatabaseInput,
     ) -> Result<DatabaseAnalysisReport, AppError> {
         input.validate()?;
-        let mut connection = self.connection(&input.connection_id).await?;
-        let profile = self.profile(&input.connection_id).await?;
-        analyze_connection(&mut connection, profile.database, &input).await
+        let (snapshot, _) = self.active_snapshot(&input.connection_id).await?;
+        let mut connection = snapshot.client.connection().await?;
+        analyze_connection(&mut connection, snapshot.profile.database, &input).await
     }
 
     async fn get_database_overview(
         &self,
         connection_id: &str,
     ) -> Result<Vec<DatabaseOverview>, AppError> {
-        let profile = self.profile(connection_id).await?;
-        profile.validate()?;
-        let mut connection = self.connection(connection_id).await?;
+        let (snapshot, _) = self.active_snapshot(connection_id).await?;
+        snapshot.profile.validate()?;
+        let mut connection = snapshot.client.connection().await?;
         let info = ::redis::cmd("INFO")
             .arg("keyspace")
             .query_async::<String>(&mut connection)
@@ -1867,7 +1951,7 @@ impl RedisOperations for RedisService {
             .await
             .map_err(map_command_error)?;
         Ok(vec![DatabaseOverview {
-            database: profile.database,
+            database: snapshot.profile.database,
             key_count: Some(key_count),
             expires: None,
             avg_ttl_ms: None,
@@ -1886,7 +1970,7 @@ impl RedisOperations for RedisService {
         }
         let mut new_profile = old_profile.clone();
         new_profile.database = input.database;
-        let (handle, _) = connect_handle(&new_profile, &secrets).await?;
+        let (handle, _) = self.connect_handle(&new_profile, &secrets).await?;
         Self::inspect_client(&handle.client).await?;
 
         self.publish_connection_if_current(
@@ -2597,13 +2681,16 @@ pub fn connection_url(
     connection_url_with_database(profile, password, profile.database)
 }
 
-async fn connect_handle(
+async fn connect_handle_with_transport(
     profile: &ConnectionProfile,
     secrets: &ConnectionSecrets,
+    injected_ssh: Option<super::ssh::SshTransport>,
 ) -> Result<(ConnectionHandle, Option<ConnectionEndpoint>), AppError> {
     profile.validate()?;
     let target = ConnectionTarget::try_from(profile)?;
-    let ssh = if let Some(config) = profile.ssh.as_ref() {
+    let ssh = if injected_ssh.is_some() {
+        injected_ssh
+    } else if let Some(config) = profile.ssh.as_ref() {
         Some(super::ssh::SshTransport::connect(config, secrets).await?)
     } else {
         None
@@ -2960,7 +3047,10 @@ pub(crate) fn map_json_command_error(error: ::redis::RedisError) -> AppError {
 mod tests {
     use std::{
         net::SocketAddr,
-        sync::{Arc, Mutex},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
         time::Duration,
     };
 
@@ -3112,6 +3202,90 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
         (address, server_names)
     }
 
+    async fn spawn_recording_sentinel_fixture(
+        discovered: Option<ConnectionEndpoint>,
+        primary: bool,
+    ) -> (SocketAddr, Arc<Mutex<Vec<Vec<String>>>>, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let active = Arc::new(AtomicUsize::new(0));
+        let observed_commands = Arc::clone(&commands);
+        let observed_active = Arc::clone(&active);
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                observed_active.fetch_add(1, Ordering::SeqCst);
+                let commands = Arc::clone(&observed_commands);
+                let active = Arc::clone(&observed_active);
+                let discovered = discovered.clone();
+                tokio::spawn(async move {
+                    struct ActiveGuard(Arc<AtomicUsize>);
+                    impl Drop for ActiveGuard {
+                        fn drop(&mut self) {
+                            self.0.fetch_sub(1, Ordering::SeqCst);
+                        }
+                    }
+                    let _active = ActiveGuard(active);
+                    let mut stream = BufReader::new(stream);
+                    loop {
+                        let mut line = String::new();
+                        if stream.read_line(&mut line).await.unwrap() == 0 {
+                            return;
+                        }
+                        let count: usize = line.trim().strip_prefix('*').unwrap().parse().unwrap();
+                        let mut args = Vec::with_capacity(count);
+                        for _ in 0..count {
+                            line.clear();
+                            stream.read_line(&mut line).await.unwrap();
+                            let length: usize =
+                                line.trim().strip_prefix('$').unwrap().parse().unwrap();
+                            let mut data = vec![0; length + 2];
+                            stream.read_exact(&mut data).await.unwrap();
+                            args.push(String::from_utf8(data[..length].to_vec()).unwrap());
+                        }
+                        commands.lock().unwrap().push(args.clone());
+                        let response = match args.first().map(String::as_str) {
+                            Some("AUTH") => "+OK\r\n".into(),
+                            Some("SENTINEL") => discovered.as_ref().map_or_else(
+                                || "$-1\r\n".into(),
+                                |endpoint| {
+                                    format!(
+                                        "*2\r\n${}\r\n{}\r\n${}\r\n{}\r\n",
+                                        endpoint.host.len(),
+                                        endpoint.host,
+                                        endpoint.port.to_string().len(),
+                                        endpoint.port
+                                    )
+                                },
+                            ),
+                            Some("ROLE") if primary => "*1\r\n$6\r\nmaster\r\n".into(),
+                            Some("PING") => "+PONG\r\n".into(),
+                            Some("INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                            _ => "+OK\r\n".into(),
+                        };
+                        stream
+                            .get_mut()
+                            .write_all(response.as_bytes())
+                            .await
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        (address, commands, active)
+    }
+
+    async fn wait_for_connection_count(active: &AtomicUsize, expected: usize) {
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while active.load(Ordering::SeqCst) != expected {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn sentinel_over_ssh_tls_forwards_each_target_and_uses_original_sni_without_direct_dials()
     {
@@ -3200,6 +3374,135 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
             ["sentinel-two.internal"]
         );
         assert_eq!(primary_sni.lock().unwrap().as_slice(), ["primary.internal"]);
+    }
+
+    #[tokio::test]
+    async fn sentinel_ssh_service_publication_keeps_credentials_and_forward_lifetimes_separate() {
+        let failed_seed_endpoint = ConnectionEndpoint {
+            host: "sentinel-one.internal".into(),
+            port: 26379,
+        };
+        let seed_endpoint = ConnectionEndpoint {
+            host: "sentinel-two.internal".into(),
+            port: 26379,
+        };
+        let primary_endpoint = ConnectionEndpoint {
+            host: "primary.internal".into(),
+            port: 6379,
+        };
+        let (failed_seed_address, failed_seed_commands, failed_seed_active) =
+            spawn_recording_sentinel_fixture(None, false).await;
+        let (seed_address, seed_commands, _) =
+            spawn_recording_sentinel_fixture(Some(primary_endpoint.clone()), false).await;
+        let (primary_address, primary_commands, _) =
+            spawn_recording_sentinel_fixture(None, true).await;
+        let (transport, backend) = crate::redis::ssh::test_forwarding_transport(vec![
+            (failed_seed_endpoint.clone(), failed_seed_address),
+            (seed_endpoint.clone(), seed_address),
+            (primary_endpoint.clone(), primary_address),
+        ]);
+        let mut profile = valid_profile();
+        profile.host = failed_seed_endpoint.host.clone();
+        profile.port = failed_seed_endpoint.port;
+        profile.username = Some("redis-user".into());
+        profile.has_password = true;
+        profile.ssh = Some(
+            serde_json::from_value(serde_json::json!({
+                "host": "jump.internal",
+                "port": 22,
+                "username": "operator"
+            }))
+            .unwrap(),
+        );
+        profile.sentinel = Some(SentinelConfig {
+            master_name: "redix-primary".into(),
+            nodes: vec![failed_seed_endpoint.clone(), seed_endpoint.clone()],
+            username: Some("sentinel-user".into()),
+            has_password: true,
+            tls: false,
+        });
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![profile])));
+        let secrets = Arc::new(MutableSecrets(Mutex::new(Some(ConnectionSecrets {
+            password: Some("redis-pass".into()),
+            sentinel_password: Some("sentinel-pass".into()),
+            ..ConnectionSecrets::default()
+        }))));
+        let service =
+            RedisService::new(profiles, secrets).with_test_ssh_transport(transport.clone());
+
+        service.open_connection("local").await.unwrap();
+        wait_for_connection_count(failed_seed_active.as_ref(), 0).await;
+        let primary_local_endpoint = {
+            let active = service.active.read().await;
+            let handle = active.get("local").unwrap();
+            let crate::redis::RoutedClient::Standalone(crate::redis::StandaloneClient::Tunneled(
+                client,
+            )) = &handle.client
+            else {
+                panic!("sentinel SSH publication must retain the tunneled primary")
+            };
+            client.local_endpoint.clone()
+        };
+        drop(transport);
+        assert_eq!(
+            service
+                .execute_command("local", "PING")
+                .await
+                .unwrap()
+                .value,
+            serde_json::json!("PONG")
+        );
+
+        for commands in [&failed_seed_commands, &seed_commands] {
+            let commands = commands.lock().unwrap();
+            assert!(commands.iter().any(|command| {
+                command
+                    == &[
+                        "AUTH".to_owned(),
+                        "sentinel-user".to_owned(),
+                        "sentinel-pass".to_owned(),
+                    ]
+            }));
+            assert!(!commands.iter().flatten().any(|arg| arg == "redis-pass"));
+        }
+        let primary_commands = primary_commands.lock().unwrap();
+        assert!(primary_commands.iter().any(|command| {
+            command
+                == &[
+                    "AUTH".to_owned(),
+                    "redis-user".to_owned(),
+                    "redis-pass".to_owned(),
+                ]
+        }));
+        assert!(!primary_commands
+            .iter()
+            .flatten()
+            .any(|arg| arg == "sentinel-pass"));
+        drop(primary_commands);
+        let forwarded = backend.forwarded_targets();
+        assert_eq!(forwarded[0], failed_seed_endpoint);
+        assert_eq!(forwarded[1], seed_endpoint);
+        assert!(forwarded[2..]
+            .iter()
+            .all(|target| target == &primary_endpoint));
+
+        service.close_connection("local").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if tokio::net::TcpStream::connect((
+                    primary_local_endpoint.host.as_str(),
+                    primary_local_endpoint.port,
+                ))
+                .await
+                .is_err()
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("closing the handle must release the primary SSH forward listener");
     }
 
     #[tokio::test]
@@ -3934,5 +4237,60 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
         assert_eq!(bump_task.await.unwrap(), 1);
         service.capabilities.write().await.remove("cached");
         assert!(!service.capabilities.read().await.contains_key("cached"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn observability_registration_and_close_are_serialized_by_generation() {
+        let service = Arc::new(RedisService::new(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+        ));
+        let token = service.bump_connection_generation("observed").await;
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        let start_service = Arc::clone(&service);
+        let start_entered = Arc::clone(&entered);
+        let start_resume = Arc::clone(&resume);
+        let start = tokio::spawn(async move {
+            start_service
+                .register_observability_if_current("observed", token, || {
+                    start_entered.wait();
+                    start_resume.wait();
+                    Ok(())
+                })
+                .await
+        });
+        entered.wait();
+
+        let close_service = Arc::clone(&service);
+        let mut close =
+            tokio::spawn(async move { close_service.close_connection("observed").await });
+        assert!(tokio::time::timeout(Duration::from_millis(100), &mut close)
+            .await
+            .is_err());
+        resume.wait();
+
+        start.await.unwrap().unwrap();
+        close.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn stale_observability_prepare_cannot_register_after_replace() {
+        let service = RedisService::new(Arc::new(EmptyProfiles), Arc::new(EmptySecrets));
+        let token = service.bump_connection_generation("observed").await;
+        service.bump_connection_generation("observed").await;
+        let registered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let attempted = Arc::clone(&registered);
+
+        assert_eq!(
+            service
+                .register_observability_if_current("observed", token, || {
+                    attempted.store(true, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                })
+                .await,
+            Err(AppError::OperationCancelled)
+        );
+        assert!(!registered.load(std::sync::atomic::Ordering::SeqCst));
     }
 }

@@ -5,7 +5,7 @@ use crate::{
 };
 use redis::aio::ConnectionLike;
 use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::sync::{watch, Mutex};
+use tokio::sync::{watch, Mutex, MutexGuard};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_SESSIONS: usize = 16;
@@ -19,6 +19,7 @@ struct CliSession {
 
 #[derive(Default)]
 pub struct CliManager {
+    lifecycle: Mutex<()>,
     sessions: Mutex<HashMap<String, Arc<CliSession>>>,
 }
 
@@ -27,8 +28,13 @@ impl CliManager {
         Self::default()
     }
 
+    pub(crate) async fn lifecycle_guard(&self) -> MutexGuard<'_, ()> {
+        self.lifecycle.lock().await
+    }
+
     pub async fn open(&self, redis: &RedisService, input: CliSessionInput) -> Result<(), AppError> {
         input.validate()?;
+        let _lifecycle = self.lifecycle_guard().await;
         let (closed, mut cancelled) = watch::channel(false);
         let session = Arc::new(CliSession {
             connection_id: input.connection_id.clone(),

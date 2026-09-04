@@ -562,6 +562,65 @@ async fn spawn_paused_cluster() -> (
     (port, ping_rx, resume_tx)
 }
 
+async fn spawn_capability_server(
+    json_supported: bool,
+    json_value: &'static str,
+    module_gate: Option<(
+        tokio::sync::oneshot::Sender<()>,
+        tokio::sync::oneshot::Receiver<()>,
+    )>,
+) -> u16 {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let gate = Arc::new(tokio::sync::Mutex::new(module_gate));
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let gate = Arc::clone(&gate);
+            tokio::spawn(async move {
+                let mut pending = Vec::new();
+                let mut read = [0_u8; 4096];
+                loop {
+                    let size = match socket.read(&mut read).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(size) => size,
+                    };
+                    pending.extend_from_slice(&read[..size]);
+                    while let Some((consumed, command)) = parse_resp_command(&pending) {
+                        pending.drain(..consumed);
+                        let response = match command.first().map(Vec::as_slice) {
+                            Some(b"PING") => "+PONG\r\n".into(),
+                            Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                            Some(b"MODULE") => {
+                                if let Some((entered, resume)) = gate.lock().await.take() {
+                                    entered.send(()).unwrap();
+                                    resume.await.unwrap();
+                                }
+                                if json_supported {
+                                    "*1\r\n*4\r\n$4\r\nname\r\n$6\r\nReJSON\r\n$3\r\nver\r\n:20810\r\n"
+                                        .into()
+                                } else {
+                                    "*0\r\n".into()
+                                }
+                            }
+                            Some(b"COMMAND") => "*0\r\n".into(),
+                            Some(b"JSON.GET") => {
+                                format!("${}\r\n{}\r\n", json_value.len(), json_value)
+                            }
+                            Some(b"PTTL") => ":-1\r\n".into(),
+                            _ => "+OK\r\n".into(),
+                        };
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                }
+            });
+        }
+    });
+    port
+}
+
 fn parse_resp_command(buffer: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
     if buffer.first() != Some(&b'*') {
         return None;
@@ -752,4 +811,52 @@ async fn cluster_crossslot_maps_to_fixed_error_without_server_detail() {
     assert_eq!(error, AppError::CrossSlot);
     assert_eq!(error.message(), "Redis 集群键槽不一致");
     assert!(!error.message().contains("private server detail"));
+}
+
+#[tokio::test]
+async fn capability_probe_and_gated_command_stay_on_the_same_replaced_handle() {
+    let (probe_entered_tx, probe_entered_rx) = tokio::sync::oneshot::channel();
+    let (resume_probe_tx, resume_probe_rx) = tokio::sync::oneshot::channel();
+    let old_port =
+        spawn_capability_server(true, "[\"old\"]", Some((probe_entered_tx, resume_probe_rx))).await;
+    let new_port = spawn_capability_server(false, "[\"new\"]", None).await;
+    let profiles = Arc::new(StoredProfiles(Mutex::new(vec![ConnectionProfile {
+        cluster: None,
+        id: "replaced".into(),
+        name: "Old".into(),
+        host: "127.0.0.1".into(),
+        port: old_port,
+        ..cluster_profile(old_port)
+    }])));
+    let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+    service.open_connection("replaced").await.unwrap();
+
+    let probing_service = Arc::clone(&service);
+    let gated_command = tokio::spawn(async move {
+        probing_service
+            .get_json_path(GetJsonPathInput {
+                connection_id: "replaced".into(),
+                key: "document".into(),
+                path: "$".into(),
+            })
+            .await
+    });
+    probe_entered_rx.await.unwrap();
+
+    profiles.0.lock().unwrap()[0].port = new_port;
+    profiles.0.lock().unwrap()[0].name = "New".into();
+    service.open_connection("replaced").await.unwrap();
+    resume_probe_tx.send(()).unwrap();
+
+    assert_eq!(
+        gated_command.await.unwrap().unwrap().value,
+        Some(serde_json::json!("old"))
+    );
+    assert!(
+        !service
+            .get_module_capabilities("replaced")
+            .await
+            .unwrap()
+            .json_supported
+    );
 }

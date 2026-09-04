@@ -1,4 +1,10 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
+};
 
 use redix_lib::domain::{
     parse_command_stats, AnalysisAccumulator, AnalysisKeyMetadata, AnalyzeDatabaseInput,
@@ -6,6 +12,7 @@ use redix_lib::domain::{
 };
 use redix_lib::{
     error::AppError,
+    persistence::ProfileRepository,
     redis::{RedisOperations, RedisService},
 };
 
@@ -102,11 +109,16 @@ async fn spawn_analysis_cluster() -> u16 {
                     pending.extend_from_slice(&buffer[..size]);
                     while let Some((consumed, command)) = parse_resp_command(&pending) {
                         pending.drain(..consumed);
-                        let response = match command.first().map(Vec::as_slice) {
+                        let response: String = match command.first().map(Vec::as_slice) {
                             Some(b"CLUSTER") => format!(
                                 "*1\r\n*3\r\n:0\r\n:16383\r\n*2\r\n$9\r\n127.0.0.1\r\n:{port}\r\n"
                             ),
                             Some(b"PING") => "+PONG\r\n".into(),
+                            Some(b"INFO")
+                                if command.get(1).map(Vec::as_slice) == Some(b"keyspace") =>
+                            {
+                                "-ERR keyspace unavailable\r\n".into()
+                            }
                             Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
                             Some(b"MODULE") => "*0\r\n".into(),
                             Some(b"SCAN") => "*2\r\n$1\r\n0\r\n*1\r\n$5\r\nkey:1\r\n".into(),
@@ -114,6 +126,7 @@ async fn spawn_analysis_cluster() -> u16 {
                             Some(b"MEMORY") => ":64\r\n".into(),
                             Some(b"TTL") => ":-1\r\n".into(),
                             Some(b"STRLEN") => ":3\r\n".into(),
+                            Some(b"DBSIZE") => ":7\r\n".into(),
                             _ => "+OK\r\n".into(),
                         };
                         socket.write_all(response.as_bytes()).await.unwrap();
@@ -123,6 +136,82 @@ async fn spawn_analysis_cluster() -> u16 {
         }
     });
     port
+}
+
+async fn spawn_select_gated_analysis_server() -> (
+    u16,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let select_count = Arc::new(AtomicUsize::new(0));
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    let gate = Arc::new(tokio::sync::Mutex::new(Some((entered_tx, resume_rx))));
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let select_count = Arc::clone(&select_count);
+            let gate = Arc::clone(&gate);
+            tokio::spawn(async move {
+                let mut pending = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let size = match socket.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(size) => size,
+                    };
+                    pending.extend_from_slice(&buffer[..size]);
+                    while let Some((consumed, command)) = parse_resp_command(&pending) {
+                        pending.drain(..consumed);
+                        let response: String = match command.first().map(Vec::as_slice) {
+                            Some(b"SELECT") => {
+                                if select_count.fetch_add(1, Ordering::SeqCst) == 1 {
+                                    if let Some((entered, resume)) = gate.lock().await.take() {
+                                        entered.send(()).unwrap();
+                                        resume.await.unwrap();
+                                    }
+                                }
+                                "+OK\r\n".into()
+                            }
+                            Some(b"PING") => "+PONG\r\n".into(),
+                            Some(b"INFO")
+                                if command.get(1).map(Vec::as_slice) == Some(b"keyspace") =>
+                            {
+                                "-ERR keyspace unavailable\r\n".into()
+                            }
+                            Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                            Some(b"SCAN") => "*2\r\n$1\r\n0\r\n*1\r\n$5\r\nkey:1\r\n".into(),
+                            Some(b"TYPE") => "+string\r\n".into(),
+                            Some(b"MEMORY") => ":64\r\n".into(),
+                            Some(b"TTL") => ":-1\r\n".into(),
+                            Some(b"STRLEN") => ":3\r\n".into(),
+                            Some(b"DBSIZE") => ":7\r\n".into(),
+                            _ => "+OK\r\n".into(),
+                        };
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                }
+            });
+        }
+    });
+    (port, entered_rx, resume_tx)
+}
+
+struct MutableProfiles(Mutex<Vec<ConnectionProfile>>);
+
+impl ProfileRepository for MutableProfiles {
+    fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+
+    fn save(&self, profiles: &[ConnectionProfile]) -> Result<(), AppError> {
+        *self.0.lock().unwrap() = profiles.to_vec();
+        Ok(())
+    }
 }
 
 fn parse_resp_command(buffer: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
@@ -179,6 +268,71 @@ async fn cluster_routes_existing_database_analysis_helpers() {
     assert_eq!(report.database, 0);
     assert_eq!(report.progress.processed, 1);
     assert_eq!(report.total_memory.total, 64);
+}
+
+#[tokio::test]
+async fn database_analysis_keeps_database_annotation_with_its_selected_handle_during_replace() {
+    let (port, analyze_selected, resume_analyze) = spawn_select_gated_analysis_server().await;
+    let mut profile = cluster_profile(port);
+    profile.id = "analysis-race".into();
+    profile.cluster = None;
+    profile.database = 1;
+    let profiles = Arc::new(MutableProfiles(Mutex::new(vec![profile])));
+    let service = Arc::new(RedisService::new(profiles, Arc::new(TestSecrets)));
+    service.open_connection("analysis-race").await.unwrap();
+
+    let analysis_service = Arc::clone(&service);
+    let analysis = tokio::spawn(async move {
+        analysis_service
+            .analyze_database(AnalyzeDatabaseInput {
+                connection_id: "analysis-race".into(),
+                pattern: "*".into(),
+                delimiter: ":".into(),
+                max_keys: 1_000,
+            })
+            .await
+    });
+    analyze_selected.await.unwrap();
+    service
+        .select_database(redix_lib::domain::SelectDatabaseInput {
+            connection_id: "analysis-race".into(),
+            database: 2,
+        })
+        .await
+        .unwrap();
+    resume_analyze.send(()).unwrap();
+
+    assert_eq!(analysis.await.unwrap().unwrap().database, 1);
+}
+
+#[tokio::test]
+async fn database_overview_fallback_keeps_database_with_its_selected_handle_during_replace() {
+    let (port, overview_selected, resume_overview) = spawn_select_gated_analysis_server().await;
+    let mut profile = cluster_profile(port);
+    profile.id = "overview-race".into();
+    profile.cluster = None;
+    profile.database = 1;
+    let profiles = Arc::new(MutableProfiles(Mutex::new(vec![profile])));
+    let service = Arc::new(RedisService::new(profiles, Arc::new(TestSecrets)));
+    service.open_connection("overview-race").await.unwrap();
+
+    let overview_service = Arc::clone(&service);
+    let overview = tokio::spawn(async move {
+        overview_service
+            .get_database_overview("overview-race")
+            .await
+    });
+    overview_selected.await.unwrap();
+    service
+        .select_database(redix_lib::domain::SelectDatabaseInput {
+            connection_id: "overview-race".into(),
+            database: 2,
+        })
+        .await
+        .unwrap();
+    resume_overview.send(()).unwrap();
+
+    assert_eq!(overview.await.unwrap().unwrap()[0].database, 1);
 }
 
 #[tokio::test]

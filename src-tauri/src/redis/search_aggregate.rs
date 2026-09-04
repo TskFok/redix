@@ -7,17 +7,9 @@ impl super::RedisService {
         &self,
         input: SearchAggregateInput,
     ) -> Result<SearchAggregateResult, AppError> {
-        use super::RedisOperations;
         input.validate()?;
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            if !self
-                .get_module_capabilities(&input.connection_id)
-                .await?
-                .search_compatible()
-            {
-                return Err(AppError::UnsupportedFeature);
-            }
-            let mut connection = self.connection(&input.connection_id).await?;
+            let mut connection = self.search_connection(&input.connection_id).await?;
             let value = build_aggregate_command(&input)?
                 .query_async(&mut connection)
                 .await

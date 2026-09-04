@@ -1,12 +1,12 @@
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use futures_util::StreamExt;
 use tauri::Emitter;
-use tokio::task::JoinHandle;
+use tokio::task::AbortHandle;
 
 use crate::{
     domain::{
@@ -65,26 +65,80 @@ pub fn parse_monitor_line(value: &str) -> Result<MonitorEntry, AppError> {
     })
 }
 
-struct PubSubTask {
-    connection_id: String,
+struct RegisteredTask {
     session_id: String,
-    app: tauri::AppHandle,
-    handle: JoinHandle<()>,
+    abort: AbortHandle,
+    emit_stopped: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl RegisteredTask {
+    fn stop(mut self) {
+        self.emit_stopped();
+        self.abort.abort();
+    }
+
+    fn complete(mut self) {
+        self.emit_stopped();
+    }
+
+    fn emit_stopped(&mut self) {
+        if let Some(emit_stopped) = self.emit_stopped.take() {
+            emit_stopped();
+        }
+    }
+}
+
+#[derive(Default)]
+struct TaskRegistry {
+    tasks: Mutex<HashMap<String, RegisteredTask>>,
+}
+
+impl TaskRegistry {
+    fn register_ready(
+        &self,
+        connection_id: String,
+        task: RegisteredTask,
+        ready: impl FnOnce(),
+    ) -> Result<(), AppError> {
+        let mut tasks = self.tasks.lock().map_err(|_| AppError::CommandFailed)?;
+        let replaced = tasks.insert(connection_id, task);
+        if let Some(replaced) = replaced {
+            replaced.stop();
+        }
+        ready();
+        Ok(())
+    }
+
+    fn remove(
+        &self,
+        connection_id: &str,
+        session_id: Option<&str>,
+    ) -> Result<Option<RegisteredTask>, AppError> {
+        let mut tasks = self.tasks.lock().map_err(|_| AppError::CommandFailed)?;
+        Ok(
+            if session_id.is_none_or(|session_id| {
+                tasks
+                    .get(connection_id)
+                    .is_some_and(|task| task.session_id == session_id)
+            }) {
+                tasks.remove(connection_id)
+            } else {
+                None
+            },
+        )
+    }
+
+    fn finish(&self, connection_id: &str, session_id: &str) -> Option<RegisteredTask> {
+        self.remove(connection_id, Some(session_id)).ok().flatten()
+    }
 }
 
 pub struct PubSubManager {
-    tasks: Mutex<HashMap<String, PubSubTask>>,
-}
-
-struct ProfilerTask {
-    connection_id: String,
-    session_id: String,
-    app: tauri::AppHandle,
-    handle: JoinHandle<()>,
+    registry: Arc<TaskRegistry>,
 }
 
 pub struct ProfilerManager {
-    tasks: Mutex<HashMap<String, ProfilerTask>>,
+    registry: Arc<TaskRegistry>,
 }
 
 impl Default for PubSubManager {
@@ -96,41 +150,30 @@ impl Default for PubSubManager {
 impl PubSubManager {
     pub fn new() -> Self {
         Self {
-            tasks: Mutex::new(HashMap::new()),
+            registry: Arc::new(TaskRegistry::default()),
         }
     }
 
-    pub async fn start(
+    pub fn start<R: tauri::Runtime>(
         &self,
-        app: tauri::AppHandle,
-        mut pubsub: ::redis::aio::PubSub,
+        app: tauri::AppHandle<R>,
+        pubsub: ::redis::aio::PubSub,
         input: StartPubSubInput,
     ) -> Result<PubSubSession, AppError> {
         input.validate()?;
         let topics = input.normalized_topics();
-
-        for topic in &topics {
-            if topic.pattern {
-                pubsub
-                    .psubscribe(topic.name.as_str())
-                    .await
-                    .map_err(map_pubsub_error)?;
-            } else {
-                pubsub
-                    .subscribe(topic.name.as_str())
-                    .await
-                    .map_err(map_pubsub_error)?;
-            }
-        }
-
-        self.cancel_connection(&input.connection_id);
 
         let connection_id = input.connection_id.clone();
         let session_id = input.session_id.clone();
         let task_connection_id = connection_id.clone();
         let task_session_id = session_id.clone();
         let task_app = app.clone();
+        let task_registry = Arc::clone(&self.registry);
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(async move {
+            if start_rx.await.is_err() {
+                return;
+            }
             let mut stream = pubsub.into_on_message();
             while let Some(message) = stream.next().await {
                 let pattern = message.get_pattern::<String>().ok();
@@ -148,77 +191,73 @@ impl PubSubManager {
                 let _ = task_app.emit(PUBSUB_MESSAGE_EVENT, event);
             }
 
-            let _ = task_app.emit(
-                PUBSUB_STATUS_EVENT,
-                PubSubStatusEvent {
-                    connection_id: task_connection_id,
-                    session_id: task_session_id,
-                    state: "stopped".into(),
-                    error_code: None,
-                },
-            );
-        });
-
-        let task = PubSubTask {
-            connection_id: connection_id.clone(),
-            session_id: session_id.clone(),
-            app: app.clone(),
-            handle,
-        };
-        let mut tasks = match self.tasks.lock() {
-            Ok(tasks) => tasks,
-            Err(_) => {
-                task.handle.abort();
-                return Err(AppError::CommandFailed);
+            if let Some(task) = task_registry.finish(&task_connection_id, &task_session_id) {
+                task.complete();
             }
+        });
+        let stop_app = app.clone();
+        let stop_connection_id = connection_id.clone();
+        let stop_session_id = session_id.clone();
+        let task = RegisteredTask {
+            session_id: session_id.clone(),
+            abort: handle.abort_handle(),
+            emit_stopped: Some(Box::new(move || {
+                let _ = stop_app.emit(
+                    PUBSUB_STATUS_EVENT,
+                    PubSubStatusEvent {
+                        connection_id: stop_connection_id,
+                        session_id: stop_session_id,
+                        state: "stopped".into(),
+                        error_code: None,
+                    },
+                );
+            })),
         };
-        tasks.insert(connection_id.clone(), task);
-        drop(tasks);
+        let ready_app = app.clone();
+        let ready_connection_id = connection_id.clone();
+        let ready_session_id = session_id.clone();
+        if let Err(error) = self
+            .registry
+            .register_ready(connection_id.clone(), task, || {
+                let _ = ready_app.emit(
+                    PUBSUB_STATUS_EVENT,
+                    PubSubStatusEvent {
+                        connection_id: ready_connection_id,
+                        session_id: ready_session_id,
+                        state: "running".into(),
+                        error_code: None,
+                    },
+                );
+                let _ = start_tx.send(());
+            })
+        {
+            handle.abort();
+            return Err(error);
+        }
 
         let session = PubSubSession {
             connection_id,
             session_id,
             topics,
         };
-        let _ = app.emit(
-            PUBSUB_STATUS_EVENT,
-            PubSubStatusEvent {
-                connection_id: session.connection_id.clone(),
-                session_id: session.session_id.clone(),
-                state: "running".into(),
-                error_code: None,
-            },
-        );
         Ok(session)
     }
 
     pub fn stop(&self, input: StopPubSubInput) -> Result<(), AppError> {
         input.validate()?;
-        let task = {
-            let mut tasks = self.tasks.lock().map_err(|_| AppError::CommandFailed)?;
-            if tasks
-                .get(&input.connection_id)
-                .is_some_and(|task| task.session_id == input.session_id)
-            {
-                tasks.remove(&input.connection_id)
-            } else {
-                None
-            }
-        };
+        let task = self
+            .registry
+            .remove(&input.connection_id, Some(&input.session_id))?;
         if let Some(task) = task {
-            stop_task(task);
+            task.stop();
         }
         Ok(())
     }
 
     pub fn cancel_connection(&self, connection_id: &str) {
-        let task = self
-            .tasks
-            .lock()
-            .ok()
-            .and_then(|mut tasks| tasks.remove(connection_id));
+        let task = self.registry.remove(connection_id, None).ok().flatten();
         if let Some(task) = task {
-            stop_task(task);
+            task.stop();
         }
     }
 }
@@ -232,25 +271,29 @@ impl Default for ProfilerManager {
 impl ProfilerManager {
     pub fn new() -> Self {
         Self {
-            tasks: Mutex::new(HashMap::new()),
+            registry: Arc::new(TaskRegistry::default()),
         }
     }
 
-    pub async fn start(
+    pub fn start<R: tauri::Runtime>(
         &self,
-        app: tauri::AppHandle,
+        app: tauri::AppHandle<R>,
         mut monitor: MonitorLineStream,
         input: StartProfilerInput,
     ) -> Result<ProfilerSession, AppError> {
         input.validate()?;
-        self.cancel_connection(&input.connection_id);
 
         let connection_id = input.connection_id.clone();
         let session_id = input.session_id.clone();
         let task_connection_id = connection_id.clone();
         let task_session_id = session_id.clone();
         let task_app = app.clone();
+        let task_registry = Arc::clone(&self.registry);
+        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         let handle = tokio::spawn(async move {
+            if start_rx.await.is_err() {
+                return;
+            }
             while let Some(Ok(line)) = monitor.next().await {
                 let Ok(entry) = parse_monitor_line(&line) else {
                     continue;
@@ -267,91 +310,74 @@ impl ProfilerManager {
                 let _ = task_app.emit(PROFILER_EVENT, event);
             }
 
-            let _ = task_app.emit(
-                PROFILER_STATUS_EVENT,
-                ProfilerStatusEvent {
-                    connection_id: task_connection_id,
-                    session_id: task_session_id,
-                    state: "stopped".into(),
-                    error_code: None,
-                },
-            );
-        });
-
-        let task = ProfilerTask {
-            connection_id: connection_id.clone(),
-            session_id: session_id.clone(),
-            app: app.clone(),
-            handle,
-        };
-        let mut tasks = match self.tasks.lock() {
-            Ok(tasks) => tasks,
-            Err(_) => {
-                task.handle.abort();
-                return Err(AppError::CommandFailed);
+            if let Some(task) = task_registry.finish(&task_connection_id, &task_session_id) {
+                task.complete();
             }
+        });
+        let stop_app = app.clone();
+        let stop_connection_id = connection_id.clone();
+        let stop_session_id = session_id.clone();
+        let task = RegisteredTask {
+            session_id: session_id.clone(),
+            abort: handle.abort_handle(),
+            emit_stopped: Some(Box::new(move || {
+                let _ = stop_app.emit(
+                    PROFILER_STATUS_EVENT,
+                    ProfilerStatusEvent {
+                        connection_id: stop_connection_id,
+                        session_id: stop_session_id,
+                        state: "stopped".into(),
+                        error_code: None,
+                    },
+                );
+            })),
         };
-        tasks.insert(connection_id.clone(), task);
-        drop(tasks);
+        let ready_app = app.clone();
+        let ready_connection_id = connection_id.clone();
+        let ready_session_id = session_id.clone();
+        if let Err(error) = self
+            .registry
+            .register_ready(connection_id.clone(), task, || {
+                let _ = ready_app.emit(
+                    PROFILER_STATUS_EVENT,
+                    ProfilerStatusEvent {
+                        connection_id: ready_connection_id,
+                        session_id: ready_session_id,
+                        state: "running".into(),
+                        error_code: None,
+                    },
+                );
+                let _ = start_tx.send(());
+            })
+        {
+            handle.abort();
+            return Err(error);
+        }
 
         let session = ProfilerSession {
             connection_id,
             session_id,
         };
-        let _ = app.emit(
-            PROFILER_STATUS_EVENT,
-            ProfilerStatusEvent {
-                connection_id: session.connection_id.clone(),
-                session_id: session.session_id.clone(),
-                state: "running".into(),
-                error_code: None,
-            },
-        );
         Ok(session)
     }
 
     pub fn stop(&self, input: StopProfilerInput) -> Result<(), AppError> {
         input.validate()?;
-        let task = {
-            let mut tasks = self.tasks.lock().map_err(|_| AppError::CommandFailed)?;
-            if tasks
-                .get(&input.connection_id)
-                .is_some_and(|task| task.session_id == input.session_id)
-            {
-                tasks.remove(&input.connection_id)
-            } else {
-                None
-            }
-        };
+        let task = self
+            .registry
+            .remove(&input.connection_id, Some(&input.session_id))?;
         if let Some(task) = task {
-            stop_profiler_task(task);
+            task.stop();
         }
         Ok(())
     }
 
     pub fn cancel_connection(&self, connection_id: &str) {
-        let task = self
-            .tasks
-            .lock()
-            .ok()
-            .and_then(|mut tasks| tasks.remove(connection_id));
+        let task = self.registry.remove(connection_id, None).ok().flatten();
         if let Some(task) = task {
-            stop_profiler_task(task);
+            task.stop();
         }
     }
-}
-
-fn stop_profiler_task(task: ProfilerTask) {
-    let _ = task.app.emit(
-        PROFILER_STATUS_EVENT,
-        ProfilerStatusEvent {
-            connection_id: task.connection_id,
-            session_id: task.session_id,
-            state: "stopped".into(),
-            error_code: None,
-        },
-    );
-    task.handle.abort();
 }
 
 fn current_unix_millis() -> u64 {
@@ -361,20 +387,7 @@ fn current_unix_millis() -> u64 {
         .as_millis() as u64
 }
 
-fn stop_task(task: PubSubTask) {
-    let _ = task.app.emit(
-        PUBSUB_STATUS_EVENT,
-        PubSubStatusEvent {
-            connection_id: task.connection_id,
-            session_id: task.session_id,
-            state: "stopped".into(),
-            error_code: None,
-        },
-    );
-    task.handle.abort();
-}
-
-fn map_pubsub_error(error: ::redis::RedisError) -> AppError {
+pub(crate) fn map_pubsub_error(error: ::redis::RedisError) -> AppError {
     match error.kind() {
         ::redis::ErrorKind::AuthenticationFailed => AppError::AuthenticationFailed,
         ::redis::ErrorKind::Io => AppError::ConnectionFailed,
@@ -491,7 +504,331 @@ fn value_to_u64(value: ::redis::Value) -> Result<u64, AppError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_monitor_line, parse_slow_log_reply};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    use super::{
+        parse_monitor_line, parse_slow_log_reply, ProfilerManager, PubSubManager, RegisteredTask,
+        TaskRegistry,
+    };
+    use crate::domain::{PubSubTopic, StartProfilerInput, StartPubSubInput};
+    use futures_util::Stream;
+    use std::{
+        pin::Pin,
+        task::{Context, Poll},
+    };
+    use tokio::io::AsyncReadExt;
+
+    struct DropSignal(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    async fn assert_replacement_aborts_old_task(registry: &Arc<TaskRegistry>, prefix: &str) {
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        let old = tokio::spawn(async move {
+            let _drop_signal = DropSignal(Some(dropped_tx));
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let old_stopped = Arc::clone(&stopped);
+        registry
+            .register_ready(
+                "shared".into(),
+                RegisteredTask {
+                    session_id: format!("{prefix}-old"),
+                    abort: old.abort_handle(),
+                    emit_stopped: Some(Box::new(move || {
+                        old_stopped.fetch_add(1, Ordering::SeqCst);
+                    })),
+                },
+                || {},
+            )
+            .unwrap();
+
+        let replacement = tokio::spawn(std::future::pending::<()>());
+        registry
+            .register_ready(
+                "shared".into(),
+                RegisteredTask {
+                    session_id: format!("{prefix}-new"),
+                    abort: replacement.abort_handle(),
+                    emit_stopped: None,
+                },
+                || {},
+            )
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+            .await
+            .expect("replaced task must be aborted")
+            .unwrap();
+        assert_eq!(stopped.load(Ordering::SeqCst), 1);
+        replacement.abort();
+    }
+
+    #[tokio::test]
+    async fn pubsub_and_profiler_share_atomic_replacement_that_aborts_the_old_task() {
+        let pubsub = PubSubManager::new();
+        let profiler = ProfilerManager::new();
+
+        assert_replacement_aborts_old_task(&pubsub.registry, "pubsub").await;
+        assert_replacement_aborts_old_task(&profiler.registry, "profiler").await;
+    }
+
+    #[tokio::test]
+    async fn concurrent_ready_registrations_leave_one_live_task_and_abort_the_other() {
+        struct CountDrop(Arc<AtomicUsize>);
+        impl Drop for CountDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let registry = Arc::new(TaskRegistry::default());
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let first_dropped = Arc::clone(&dropped);
+        let first_worker = tokio::spawn(async move {
+            let _drop = CountDrop(first_dropped);
+            std::future::pending::<()>().await;
+        });
+        let second_dropped = Arc::clone(&dropped);
+        let second_worker = tokio::spawn(async move {
+            let _drop = CountDrop(second_dropped);
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let first_registry = Arc::clone(&registry);
+        let first_barrier = Arc::clone(&barrier);
+        let first = tokio::spawn(async move {
+            first_barrier.wait().await;
+            first_registry.register_ready(
+                "local".into(),
+                RegisteredTask {
+                    session_id: "first".into(),
+                    abort: first_worker.abort_handle(),
+                    emit_stopped: None,
+                },
+                || {},
+            )
+        });
+        let second_registry = Arc::clone(&registry);
+        let second_barrier = Arc::clone(&barrier);
+        let second = tokio::spawn(async move {
+            second_barrier.wait().await;
+            second_registry.register_ready(
+                "local".into(),
+                RegisteredTask {
+                    session_id: "second".into(),
+                    abort: second_worker.abort_handle(),
+                    emit_stopped: None,
+                },
+                || {},
+            )
+        });
+        barrier.wait().await;
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while dropped.load(Ordering::SeqCst) != 1 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(registry.tasks.lock().unwrap().len(), 1);
+
+        registry.remove("local", None).unwrap().unwrap().stop();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while dropped.load(Ordering::SeqCst) != 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_registration_finishes_each_running_event_before_replacement() {
+        let registry = Arc::new(TaskRegistry::default());
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let resume = Arc::new(std::sync::Barrier::new(2));
+        let first_registry = Arc::clone(&registry);
+        let first_events = Arc::clone(&events);
+        let first_stopped_events = Arc::clone(&events);
+        let first_entered = Arc::clone(&entered);
+        let first_resume = Arc::clone(&resume);
+        let first = tokio::spawn(async move {
+            let worker = tokio::spawn(std::future::pending::<()>());
+            first_registry.register_ready(
+                "local".into(),
+                RegisteredTask {
+                    session_id: "first".into(),
+                    abort: worker.abort_handle(),
+                    emit_stopped: Some(Box::new(move || {
+                        first_stopped_events.lock().unwrap().push("first-stopped");
+                    })),
+                },
+                move || {
+                    first_events.lock().unwrap().push("first-running");
+                    first_entered.wait();
+                    first_resume.wait();
+                },
+            )
+        });
+        entered.wait();
+
+        let second_registry = Arc::clone(&registry);
+        let second_events = Arc::clone(&events);
+        let mut second = tokio::spawn(async move {
+            let worker = tokio::spawn(std::future::pending::<()>());
+            second_registry.register_ready(
+                "local".into(),
+                RegisteredTask {
+                    session_id: "second".into(),
+                    abort: worker.abort_handle(),
+                    emit_stopped: None,
+                },
+                move || second_events.lock().unwrap().push("second-running"),
+            )
+        });
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut second)
+                .await
+                .is_err()
+        );
+        resume.wait();
+        first.await.unwrap().unwrap();
+        second.await.unwrap().unwrap();
+
+        assert_eq!(
+            events.lock().unwrap().as_slice(),
+            ["first-running", "first-stopped", "second-running"]
+        );
+        registry.remove("local", None).unwrap().unwrap().stop();
+    }
+
+    #[tokio::test]
+    async fn pubsub_start_path_aborts_the_replaced_ready_transport() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let manager = PubSubManager::new();
+        let (first_transport, mut first_peer) = tokio::io::duplex(1024);
+        let redis_info = ::redis::RedisConnectionInfo::default().set_skip_set_lib_name();
+        let first = ::redis::aio::PubSub::new(&redis_info, first_transport)
+            .await
+            .unwrap();
+        manager
+            .start(
+                app.handle().clone(),
+                first,
+                StartPubSubInput {
+                    connection_id: "local".into(),
+                    session_id: "first".into(),
+                    topics: vec![PubSubTopic {
+                        name: "events".into(),
+                        pattern: false,
+                    }],
+                },
+            )
+            .unwrap();
+
+        let (second_transport, _second_peer) = tokio::io::duplex(1024);
+        let second = ::redis::aio::PubSub::new(&redis_info, second_transport)
+            .await
+            .unwrap();
+        manager
+            .start(
+                app.handle().clone(),
+                second,
+                StartPubSubInput {
+                    connection_id: "local".into(),
+                    session_id: "second".into(),
+                    topics: vec![PubSubTopic {
+                        name: "events".into(),
+                        pattern: false,
+                    }],
+                },
+            )
+            .unwrap();
+
+        let mut byte = [0_u8; 1];
+        assert_eq!(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                first_peer.read(&mut byte)
+            )
+            .await
+            .unwrap()
+            .unwrap(),
+            0
+        );
+        manager.cancel_connection("local");
+    }
+
+    struct PendingMonitor(Option<tokio::sync::oneshot::Sender<()>>);
+
+    impl Stream for PendingMonitor {
+        type Item = Result<String, crate::error::AppError>;
+
+        fn poll_next(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+            Poll::Pending
+        }
+    }
+
+    impl Drop for PendingMonitor {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn profiler_start_path_aborts_the_replaced_ready_transport() {
+        let app = tauri::test::mock_builder()
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let manager = ProfilerManager::new();
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
+        manager
+            .start(
+                app.handle().clone(),
+                Box::pin(PendingMonitor(Some(dropped_tx))),
+                StartProfilerInput {
+                    connection_id: "local".into(),
+                    session_id: "first".into(),
+                },
+            )
+            .unwrap();
+        manager
+            .start(
+                app.handle().clone(),
+                Box::pin(PendingMonitor(None)),
+                StartProfilerInput {
+                    connection_id: "local".into(),
+                    session_id: "second".into(),
+                },
+            )
+            .unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
+            .await
+            .expect("replaced profiler transport must be dropped")
+            .unwrap();
+        manager.cancel_connection("local");
+    }
 
     #[test]
     fn parses_slow_log_entries_with_optional_client_name() {
