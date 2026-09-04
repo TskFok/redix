@@ -92,3 +92,26 @@
 
 - 仍只有既有 `redis/array.rs` 5 个 dead-code warning 与 integration fixture 的 `invalid_profile` warning；本轮未新增生产 warning。
 - 真实外部 Redis、Redis Stack、sshd 测试继续 ignored；新增竞态、Sentinel ACL 与 forward 生命周期均由本地确定性 fake transport/socket 覆盖。
+
+## Fix round 2
+
+### 状态
+
+本轮只修复 re-review 指定的 observability 同 session 注册身份竞态，并使 Sentinel service publication 所有权测试释放所有 service/external 注入 clone；未改变 IPC、Task 6/7 或 SQL 路径。
+
+### RED → GREEN
+
+1. observability 内部 registration identity
+   - RED：同一 connection id 与同一客户端 session id 注册两次；旧 worker 已进入完成清理并阻塞于 registry mutex，测试在锁内放入 replacement 后再恢复旧 worker。旧实现只比较 session id，错误领取 replacement、发送其 stopped，实际 `new_stopped` 从预期 0 变为 1，并使新 worker 无法再由 stop/replace abort。
+   - GREEN：每条 PubSub/Profiler 注册创建独立的 `RegistrationIdentity(Arc<()>)`。registry entry 与 worker 各持同一 identity；自然完成必须同时匹配 connection id、对外 session id 和 `Arc::ptr_eq` 的内部 registration identity 才能领取 entry 与发送 stopped。外部 stop 仍只使用原 connection/session 语义。确定性回归验证旧 worker 被替换时只发送一次旧 stopped，新 entry 保留，且新 worker随后仍可被 stop 并实际 drop。
+   - PubSub 与 Profiler 均走同一个 `TaskRegistry` 实现；既有 Tauri mock AppHandle 两条真实 manager `start` 回归继续覆盖该共享清理路径。
+2. Sentinel publication 所有权测试
+   - service `open_connection` 完成 publication 后，测试显式 `take` 并 drop `RedisService.test_ssh_transport` 的注入 clone，再 drop 外部 transport clone；此后 active handle 是唯一剩余所有权集合，仍必须可 PING 且 primary forward listener 存活，close handle 后 listener 必须关闭。失败 seed forward 回收和 Sentinel/Redis ACL 隔离断言保持不变。
+   - 根据修订 ruling，`ConnectionHandle._ssh` 不是唯一合法 owner：Task 3 明确定义的 `RoutedClient::Standalone(TunneledClient) → Arc<SshForward> → Arc<SessionOwner>` 也在 published handle 内合法拥有 session。mutation 将 `_ssh` 置空后该测试仍通过，证明的是这条既有 client/forward 所有权链，不代表测试仍依赖 service 注入 clone；实际代码保留 `_ssh`，未破坏 Task 3。
+
+### 验证
+
+- RED：`cargo test --manifest-path src-tauri/Cargo.toml --lib displaced_same_session_cleanup_cannot_remove_the_replacement_registration -- --nocapture` 在旧实现失败：`new_stopped` 实际 1、预期 0。
+- GREEN focused：observability 11/11；Sentinel service publication ownership 1/1。
+- `npm run test:rust`：exit 0；lib 178 passed、1 ignored，全部常规 integration targets 通过；外部 Redis、Redis Stack、sshd 用例保持既有 ignored 标记。
+- `cargo fmt --manifest-path src-tauri/Cargo.toml --check`、`git diff --check` 与 concrete connection 扫描均通过。

@@ -3427,7 +3427,7 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
             sentinel_password: Some("sentinel-pass".into()),
             ..ConnectionSecrets::default()
         }))));
-        let service =
+        let mut service =
             RedisService::new(profiles, secrets).with_test_ssh_transport(transport.clone());
 
         service.open_connection("local").await.unwrap();
@@ -3443,6 +3443,7 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
             };
             client.local_endpoint.clone()
         };
+        drop(service.test_ssh_transport.take());
         drop(transport);
         assert_eq!(
             service

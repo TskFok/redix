@@ -65,8 +65,22 @@ pub fn parse_monitor_line(value: &str) -> Result<MonitorEntry, AppError> {
     })
 }
 
+#[derive(Clone)]
+struct RegistrationIdentity(Arc<()>);
+
+impl RegistrationIdentity {
+    fn new() -> Self {
+        Self(Arc::new(()))
+    }
+
+    fn matches(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
 struct RegisteredTask {
     session_id: String,
+    registration: RegistrationIdentity,
     abort: AbortHandle,
     emit_stopped: Option<Box<dyn FnOnce() + Send>>,
 }
@@ -128,8 +142,20 @@ impl TaskRegistry {
         )
     }
 
-    fn finish(&self, connection_id: &str, session_id: &str) -> Option<RegisteredTask> {
-        self.remove(connection_id, Some(session_id)).ok().flatten()
+    fn finish(
+        &self,
+        connection_id: &str,
+        session_id: &str,
+        registration: &RegistrationIdentity,
+    ) -> Option<RegisteredTask> {
+        let mut tasks = self.tasks.lock().ok()?;
+        if tasks.get(connection_id).is_some_and(|task| {
+            task.session_id == session_id && task.registration.matches(registration)
+        }) {
+            tasks.remove(connection_id)
+        } else {
+            None
+        }
     }
 }
 
@@ -167,6 +193,8 @@ impl PubSubManager {
         let session_id = input.session_id.clone();
         let task_connection_id = connection_id.clone();
         let task_session_id = session_id.clone();
+        let registration = RegistrationIdentity::new();
+        let worker_registration = registration.clone();
         let task_app = app.clone();
         let task_registry = Arc::clone(&self.registry);
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
@@ -191,7 +219,9 @@ impl PubSubManager {
                 let _ = task_app.emit(PUBSUB_MESSAGE_EVENT, event);
             }
 
-            if let Some(task) = task_registry.finish(&task_connection_id, &task_session_id) {
+            if let Some(task) =
+                task_registry.finish(&task_connection_id, &task_session_id, &worker_registration)
+            {
                 task.complete();
             }
         });
@@ -200,6 +230,7 @@ impl PubSubManager {
         let stop_session_id = session_id.clone();
         let task = RegisteredTask {
             session_id: session_id.clone(),
+            registration,
             abort: handle.abort_handle(),
             emit_stopped: Some(Box::new(move || {
                 let _ = stop_app.emit(
@@ -287,6 +318,8 @@ impl ProfilerManager {
         let session_id = input.session_id.clone();
         let task_connection_id = connection_id.clone();
         let task_session_id = session_id.clone();
+        let registration = RegistrationIdentity::new();
+        let worker_registration = registration.clone();
         let task_app = app.clone();
         let task_registry = Arc::clone(&self.registry);
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
@@ -310,7 +343,9 @@ impl ProfilerManager {
                 let _ = task_app.emit(PROFILER_EVENT, event);
             }
 
-            if let Some(task) = task_registry.finish(&task_connection_id, &task_session_id) {
+            if let Some(task) =
+                task_registry.finish(&task_connection_id, &task_session_id, &worker_registration)
+            {
                 task.complete();
             }
         });
@@ -319,6 +354,7 @@ impl ProfilerManager {
         let stop_session_id = session_id.clone();
         let task = RegisteredTask {
             session_id: session_id.clone(),
+            registration,
             abort: handle.abort_handle(),
             emit_stopped: Some(Box::new(move || {
                 let _ = stop_app.emit(
@@ -511,7 +547,7 @@ mod tests {
 
     use super::{
         parse_monitor_line, parse_slow_log_reply, ProfilerManager, PubSubManager, RegisteredTask,
-        TaskRegistry,
+        RegistrationIdentity, TaskRegistry,
     };
     use crate::domain::{PubSubTopic, StartProfilerInput, StartPubSubInput};
     use futures_util::Stream;
@@ -545,6 +581,7 @@ mod tests {
                 "shared".into(),
                 RegisteredTask {
                     session_id: format!("{prefix}-old"),
+                    registration: RegistrationIdentity::new(),
                     abort: old.abort_handle(),
                     emit_stopped: Some(Box::new(move || {
                         old_stopped.fetch_add(1, Ordering::SeqCst);
@@ -560,6 +597,7 @@ mod tests {
                 "shared".into(),
                 RegisteredTask {
                     session_id: format!("{prefix}-new"),
+                    registration: RegistrationIdentity::new(),
                     abort: replacement.abort_handle(),
                     emit_stopped: None,
                 },
@@ -615,6 +653,7 @@ mod tests {
                 "local".into(),
                 RegisteredTask {
                     session_id: "first".into(),
+                    registration: RegistrationIdentity::new(),
                     abort: first_worker.abort_handle(),
                     emit_stopped: None,
                 },
@@ -629,6 +668,7 @@ mod tests {
                 "local".into(),
                 RegisteredTask {
                     session_id: "second".into(),
+                    registration: RegistrationIdentity::new(),
                     abort: second_worker.abort_handle(),
                     emit_stopped: None,
                 },
@@ -674,6 +714,7 @@ mod tests {
                 "local".into(),
                 RegisteredTask {
                     session_id: "first".into(),
+                    registration: RegistrationIdentity::new(),
                     abort: worker.abort_handle(),
                     emit_stopped: Some(Box::new(move || {
                         first_stopped_events.lock().unwrap().push("first-stopped");
@@ -696,6 +737,7 @@ mod tests {
                 "local".into(),
                 RegisteredTask {
                     session_id: "second".into(),
+                    registration: RegistrationIdentity::new(),
                     abort: worker.abort_handle(),
                     emit_stopped: None,
                 },
@@ -716,6 +758,84 @@ mod tests {
             ["first-running", "first-stopped", "second-running"]
         );
         registry.remove("local", None).unwrap().unwrap().stop();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn displaced_same_session_cleanup_cannot_remove_the_replacement_registration() {
+        let registry = Arc::new(TaskRegistry::default());
+        let old_stopped = Arc::new(AtomicUsize::new(0));
+        let old_stopped_event = Arc::clone(&old_stopped);
+        let old_registration = RegistrationIdentity::new();
+        let cleanup_registry = Arc::clone(&registry);
+        let cleanup_registration = old_registration.clone();
+        let (start_cleanup_tx, start_cleanup_rx) = tokio::sync::oneshot::channel();
+        let (cleanup_entered_tx, cleanup_entered_rx) = tokio::sync::oneshot::channel();
+        let (cleanup_done_tx, cleanup_done_rx) = tokio::sync::oneshot::channel();
+        let old_worker = tokio::spawn(async move {
+            start_cleanup_rx.await.unwrap();
+            cleanup_entered_tx.send(()).unwrap();
+            if let Some(task) =
+                cleanup_registry.finish("local", "same-session", &cleanup_registration)
+            {
+                task.complete();
+            }
+            let _ = cleanup_done_tx.send(());
+        });
+        registry
+            .register_ready(
+                "local".into(),
+                RegisteredTask {
+                    session_id: "same-session".into(),
+                    registration: old_registration.clone(),
+                    abort: old_worker.abort_handle(),
+                    emit_stopped: Some(Box::new(move || {
+                        old_stopped_event.fetch_add(1, Ordering::SeqCst);
+                    })),
+                },
+                || {},
+            )
+            .unwrap();
+
+        let mut tasks = registry.tasks.lock().unwrap();
+        start_cleanup_tx.send(()).unwrap();
+        cleanup_entered_rx.await.unwrap();
+
+        let new_stopped = Arc::new(AtomicUsize::new(0));
+        let new_stopped_event = Arc::clone(&new_stopped);
+        let (new_dropped_tx, new_dropped_rx) = tokio::sync::oneshot::channel();
+        let new_worker = tokio::spawn(async move {
+            let _drop = DropSignal(Some(new_dropped_tx));
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+        let displaced = tasks.insert(
+            "local".into(),
+            RegisteredTask {
+                session_id: "same-session".into(),
+                registration: RegistrationIdentity::new(),
+                abort: new_worker.abort_handle(),
+                emit_stopped: Some(Box::new(move || {
+                    new_stopped_event.fetch_add(1, Ordering::SeqCst);
+                })),
+            },
+        );
+        displaced.unwrap().stop();
+        drop(tasks);
+        cleanup_done_rx.await.unwrap();
+
+        assert_eq!(old_stopped.load(Ordering::SeqCst), 1);
+        assert_eq!(new_stopped.load(Ordering::SeqCst), 0);
+        assert_eq!(registry.tasks.lock().unwrap().len(), 1);
+        registry
+            .remove("local", Some("same-session"))
+            .unwrap()
+            .unwrap()
+            .stop();
+        tokio::time::timeout(std::time::Duration::from_secs(1), new_dropped_rx)
+            .await
+            .expect("the replacement must remain registered and stoppable")
+            .unwrap();
+        assert_eq!(new_stopped.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
