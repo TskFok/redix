@@ -1,4 +1,8 @@
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
 use crate::{domain::ConnectionEndpoint, error::AppError};
 
@@ -9,6 +13,7 @@ pub struct ClusterNodeConnectionFactory {
     username: Option<String>,
     password: Option<String>,
     tls: Option<TlsClientMaterial>,
+    successful_endpoints: Arc<RwLock<HashMap<String, ConnectionEndpoint>>>,
 }
 
 impl ClusterNodeConnectionFactory {
@@ -29,6 +34,7 @@ impl ClusterNodeConnectionFactory {
             username,
             password,
             tls,
+            successful_endpoints: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -57,12 +63,29 @@ impl ClusterNodeConnectionFactory {
             .map_err(|_| AppError::ClusterNodeUnavailable)
     }
 
+    pub async fn connection_for_node_id(
+        &self,
+        node_id: &str,
+        endpoint: &ConnectionEndpoint,
+    ) -> Result<redis::aio::MultiplexedConnection, AppError> {
+        let connection = self.connection(endpoint).await?;
+        self.successful_endpoints
+            .write()
+            .map_err(|_| AppError::ClusterNodeUnavailable)?
+            .insert(node_id.to_owned(), endpoint.clone());
+        Ok(connection)
+    }
+
+    pub fn connection_endpoint(&self, node_id: &str) -> Option<ConnectionEndpoint> {
+        self.successful_endpoints.read().ok()?.get(node_id).cloned()
+    }
+
     pub async fn connection_for_node(
         &self,
         node: &mut crate::domain::ClusterNode,
     ) -> Result<redis::aio::MultiplexedConnection, AppError> {
         let endpoint = node.endpoint.clone();
-        let connection = self.connection(&endpoint).await?;
+        let connection = self.connection_for_node_id(&node.id, &endpoint).await?;
         node.connection_endpoint = Some(endpoint);
         Ok(connection)
     }

@@ -149,18 +149,22 @@ pub async fn scan_cluster<B: ClusterScanBackend>(
         .iter()
         .map(|node| (node.node_id.as_str(), node.cursor))
         .collect::<HashMap<_, _>>();
-    let ordered_pending = round_robin_pending(&wire, nodes);
+    let ordered_pending = round_robin_pending(&wire);
     let selected = ordered_pending
         .into_iter()
         .take(MAX_CONCURRENCY)
         .collect::<Vec<_>>();
+    let next_node = selected
+        .last()
+        .map(|(index, _)| (index + 1) % wire.nodes.len())
+        .ok_or(AppError::InvalidInput)?;
     let per_node_count = count
         .checked_add(wire.pending_nodes.len() - 1)
         .ok_or(AppError::InvalidInput)?
         / wire.pending_nodes.len();
 
     let mut results = stream::iter(selected.clone().into_iter().enumerate().map(
-        |(position, node_id)| {
+        |(position, (_, node_id))| {
             let node = node_by_id[node_id.as_str()].clone();
             let node_cursor = cursor_by_id[node_id.as_str()];
             async move {
@@ -225,11 +229,7 @@ pub async fn scan_cluster<B: ClusterScanBackend>(
         .filter(|node| pending.contains(&node.node_id))
         .map(|node| node.node_id.clone())
         .collect();
-    wire.next_node = if nodes.is_empty() {
-        0
-    } else {
-        (wire.next_node + selected.len()) % nodes.len()
-    };
+    wire.next_node = next_node;
     let has_more = !wire.pending_nodes.is_empty();
     Ok(ClusterScanPage {
         cursor: encode_wire(&wire)?,
@@ -239,12 +239,14 @@ pub async fn scan_cluster<B: ClusterScanBackend>(
     })
 }
 
-fn round_robin_pending(wire: &VersionedClusterScanState, nodes: &[ClusterScanNode]) -> Vec<String> {
+fn round_robin_pending(wire: &VersionedClusterScanState) -> Vec<(usize, String)> {
     let pending = wire.pending_nodes.iter().collect::<HashSet<_>>();
-    (0..nodes.len())
-        .map(|offset| &nodes[(wire.next_node + offset) % nodes.len()].node_id)
-        .filter(|node_id| pending.contains(node_id))
-        .cloned()
+    (0..wire.nodes.len())
+        .map(|offset| (wire.next_node + offset) % wire.nodes.len())
+        .filter_map(|index| {
+            let node_id = &wire.nodes[index].node_id;
+            pending.contains(node_id).then(|| (index, node_id.clone()))
+        })
         .collect()
 }
 

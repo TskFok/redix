@@ -317,8 +317,11 @@ impl ClusterScanBackend for RedisClusterScanBackend {
         count: usize,
     ) -> futures_util::future::BoxFuture<'a, Result<(u64, Vec<Vec<u8>>), AppError>> {
         Box::pin(async move {
-            let mut connection = self.factory.connection(&node.endpoint).await?;
-            ::redis::cmd("SCAN")
+            let mut connection = self
+                .factory
+                .connection_for_node_id(&node.node_id, &node.endpoint)
+                .await?;
+            let (next_cursor, keys) = ::redis::cmd("SCAN")
                 .arg(cursor)
                 .arg("MATCH")
                 .arg(pattern)
@@ -326,7 +329,11 @@ impl ClusterScanBackend for RedisClusterScanBackend {
                 .arg(count)
                 .query_async::<(u64, Vec<Vec<u8>>)>(&mut connection)
                 .await
-                .map_err(|_| AppError::ClusterNodeUnavailable)
+                .map_err(|_| AppError::ClusterNodeUnavailable)?;
+            if keys.iter().any(|key| std::str::from_utf8(key).is_err()) {
+                return Err(AppError::ClusterNodeUnavailable);
+            }
+            Ok((next_cursor, keys))
         })
     }
 }
@@ -3200,7 +3207,8 @@ mod tests {
 
     use super::{
         build_client, build_standalone_client, command_result, connection_url,
-        discover_sentinel_client, validate_ttl, RedisOperations, RedisService,
+        discover_sentinel_client, validate_ttl, RedisClusterScanBackend, RedisOperations,
+        RedisService,
     };
 
     struct EmptyProfiles;
@@ -3254,6 +3262,155 @@ mod tests {
             has_ca_certificate: false,
             has_client_certificate: false,
         }
+    }
+
+    async fn spawn_cluster_scan_node(cursor: u64, keys: Vec<Vec<u8>>) -> ConnectionEndpoint {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut stream = BufReader::new(stream);
+            loop {
+                let mut line = String::new();
+                if stream.read_line(&mut line).await.unwrap() == 0 {
+                    return;
+                }
+                let count: usize = line.trim().strip_prefix('*').unwrap().parse().unwrap();
+                let mut args = Vec::with_capacity(count);
+                for _ in 0..count {
+                    line.clear();
+                    stream.read_line(&mut line).await.unwrap();
+                    let length: usize = line.trim().strip_prefix('$').unwrap().parse().unwrap();
+                    let mut data = vec![0_u8; length + 2];
+                    stream.read_exact(&mut data).await.unwrap();
+                    args.push(data[..length].to_vec());
+                }
+                if args.first().map(Vec::as_slice) == Some(b"SCAN") {
+                    let mut reply = format!(
+                        "*2\r\n${}\r\n{}\r\n*{}\r\n",
+                        cursor.to_string().len(),
+                        cursor,
+                        keys.len()
+                    )
+                    .into_bytes();
+                    for key in &keys {
+                        reply.extend_from_slice(format!("${}\r\n", key.len()).as_bytes());
+                        reply.extend_from_slice(key);
+                        reply.extend_from_slice(b"\r\n");
+                    }
+                    stream.get_mut().write_all(&reply).await.unwrap();
+                } else {
+                    stream.get_mut().write_all(b"+OK\r\n").await.unwrap();
+                }
+            }
+        });
+        ConnectionEndpoint {
+            host: "127.0.0.1".into(),
+            port,
+        }
+    }
+
+    #[tokio::test]
+    async fn production_cluster_backend_keeps_cursor_when_a_node_returns_binary_keys() {
+        let visible_endpoint = spawn_cluster_scan_node(17, vec![b"visible".to_vec()]).await;
+        let binary_endpoint = spawn_cluster_scan_node(23, vec![vec![0xff, 0, b'k']]).await;
+        let nodes = vec![
+            crate::redis::ClusterScanNode {
+                node_id: "visible-node".into(),
+                endpoint: visible_endpoint,
+            },
+            crate::redis::ClusterScanNode {
+                node_id: "binary-node".into(),
+                endpoint: binary_endpoint,
+            },
+        ];
+        let initial = crate::redis::ClusterScanState::new(
+            5,
+            vec![
+                crate::redis::NodeScanCursor {
+                    node_id: "visible-node".into(),
+                    cursor: 0,
+                },
+                crate::redis::NodeScanCursor {
+                    node_id: "binary-node".into(),
+                    cursor: 41,
+                },
+            ],
+        )
+        .encode()
+        .unwrap();
+        let backend = RedisClusterScanBackend {
+            factory: crate::redis::ClusterNodeConnectionFactory::new(None, None, None).unwrap(),
+        };
+
+        let page = crate::redis::scan_cluster(&backend, 5, &nodes, Some(&initial), "*", 100)
+            .await
+            .unwrap();
+        assert_eq!(page.keys, vec![b"visible".to_vec()]);
+        assert_eq!(page.node_failures.len(), 1);
+        assert_eq!(page.node_failures[0].node_id, "binary-node");
+        assert_eq!(
+            page.node_failures[0].code,
+            AppError::ClusterNodeUnavailable.code()
+        );
+        let known =
+            std::collections::HashSet::from(["visible-node".to_owned(), "binary-node".to_owned()]);
+        let state = crate::redis::ClusterScanState::decode(&page.cursor, 5, &known).unwrap();
+        assert_eq!(state.cursor_for("visible-node"), Some(17));
+        assert_eq!(state.cursor_for("binary-node"), Some(41));
+    }
+
+    #[tokio::test]
+    async fn production_cluster_backend_records_only_successful_endpoints_in_shared_factory() {
+        let successful_endpoint = spawn_cluster_scan_node(0, vec![b"visible".to_vec()]).await;
+        let factory = crate::redis::ClusterNodeConnectionFactory::new(None, None, None).unwrap();
+        let backend = RedisClusterScanBackend {
+            factory: factory.clone(),
+        };
+        let successful_node = crate::redis::ClusterScanNode {
+            node_id: "recorded-node".into(),
+            endpoint: successful_endpoint.clone(),
+        };
+
+        let page = crate::redis::scan_cluster(
+            &backend,
+            6,
+            std::slice::from_ref(&successful_node),
+            None,
+            "*",
+            100,
+        )
+        .await
+        .unwrap();
+        assert!(page.node_failures.is_empty());
+        assert_eq!(
+            factory.connection_endpoint("recorded-node"),
+            Some(successful_endpoint.clone())
+        );
+
+        let failed_node = crate::redis::ClusterScanNode {
+            node_id: "recorded-node".into(),
+            endpoint: ConnectionEndpoint {
+                host: "?".into(),
+                port: successful_endpoint.port,
+            },
+        };
+        let failed_page = crate::redis::scan_cluster(
+            &backend,
+            7,
+            std::slice::from_ref(&failed_node),
+            None,
+            "*",
+            100,
+        )
+        .await
+        .unwrap();
+        assert_eq!(failed_page.node_failures.len(), 1);
+        assert_eq!(
+            factory.connection_endpoint("recorded-node"),
+            Some(successful_endpoint)
+        );
+        assert_eq!(factory.connection_endpoint("unknown-node"), None);
     }
 
     const TEST_TLS_CERT: &str = r#"-----BEGIN CERTIFICATE-----

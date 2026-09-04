@@ -159,6 +159,7 @@ fn cluster_cursor_rejects_duplicate_or_unknown_pending_nodes_and_bad_rotation_in
 struct FakeBackend {
     replies: Arc<Mutex<HashMap<String, Result<(u64, Vec<Vec<u8>>), AppError>>>>,
     calls: Arc<Mutex<Vec<(String, u64, usize)>>>,
+    endpoints: Arc<Mutex<Vec<(String, ConnectionEndpoint)>>>,
     active: Arc<AtomicUsize>,
     max_active: Arc<AtomicUsize>,
     delay: Duration,
@@ -180,6 +181,10 @@ impl ClusterScanBackend for FakeBackend {
         count: usize,
     ) -> BoxFuture<'a, Result<(u64, Vec<Vec<u8>>), AppError>> {
         Box::pin(async move {
+            self.endpoints
+                .lock()
+                .unwrap()
+                .push((node.node_id.clone(), node.endpoint.clone()));
             self.calls
                 .lock()
                 .unwrap()
@@ -257,10 +262,20 @@ async fn scan_is_bounded_to_eight_concurrent_nodes_and_rotates_fairly() {
     assert!(calls.iter().all(|(_, _, count)| *count == 1));
 
     backend.calls.lock().unwrap().clear();
-    scan_cluster(&backend, 3, &cluster_nodes, Some(&first.cursor), "*", 3)
+    backend.endpoints.lock().unwrap().clear();
+    let mut reordered = cluster_nodes[1..].to_vec();
+    reordered.push(cluster_nodes[0].clone());
+    reordered
+        .iter_mut()
+        .find(|node| node.node_id == "n8")
+        .unwrap()
+        .endpoint
+        .port = 9_999;
+    scan_cluster(&backend, 3, &reordered, Some(&first.cursor), "*", 3)
         .await
         .unwrap();
     assert_eq!(backend.calls.lock().unwrap()[0].0, "n8");
+    assert_eq!(backend.endpoints.lock().unwrap()[0].1.port, 9_999);
 }
 
 #[tokio::test]
