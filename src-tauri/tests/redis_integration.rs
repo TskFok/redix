@@ -1038,13 +1038,13 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         .await
         .map_err(|error| error.code().to_owned())?;
 
-    let mut cursor = 0;
+    let mut cursor = redix_lib::domain::ScanCursor::Standalone(0);
     let mut summaries = BTreeMap::new();
     loop {
         let page = service
             .scan_keys(ScanKeysInput {
                 connection_id: "integration".into(),
-                cursor,
+                cursor: cursor.clone(),
                 pattern: format!("{}:*", keys.prefix),
                 count: 1,
                 key_type: None,
@@ -1057,7 +1057,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
                 .map(|summary| (summary.key.clone(), summary)),
         );
         cursor = page.cursor;
-        if cursor == 0 {
+        if cursor == redix_lib::domain::ScanCursor::Standalone(0) {
             break;
         }
     }
@@ -1073,7 +1073,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     let filtered = service
         .scan_keys(ScanKeysInput {
             connection_id: "integration".into(),
-            cursor: 0,
+            cursor: 0.into(),
             pattern: format!("{}:*", keys.prefix),
             count: 100,
             key_type: Some("hash".into()),

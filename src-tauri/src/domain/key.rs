@@ -1,10 +1,29 @@
 use crate::error::AppError;
 use std::collections::HashSet;
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ScanCursor {
+    Standalone(u64),
+    Cluster(String),
+}
+
+impl Default for ScanCursor {
+    fn default() -> Self {
+        Self::Standalone(0)
+    }
+}
+
+impl From<u64> for ScanCursor {
+    fn from(cursor: u64) -> Self {
+        Self::Standalone(cursor)
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ScanKeysInput {
     pub connection_id: String,
-    pub cursor: u64,
+    pub cursor: ScanCursor,
     pub pattern: String,
     pub count: usize,
     pub key_type: Option<String>,
@@ -55,9 +74,11 @@ pub struct KeySummary {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ScanPage {
-    pub cursor: u64,
+    pub cursor: ScanCursor,
     pub keys: Vec<KeySummary>,
     pub has_more: bool,
+    #[serde(default)]
+    pub node_failures: Vec<crate::domain::NodeFailure>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

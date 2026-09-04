@@ -1,6 +1,8 @@
 mod array;
 mod capabilities;
 mod cli;
+mod cluster_node_connection;
+mod cluster_scan;
 mod cluster_topology;
 mod connection_manager;
 mod database_analysis;
@@ -17,6 +19,11 @@ mod vector_set;
 mod workbench;
 
 pub use cli::CliManager;
+pub use cluster_node_connection::ClusterNodeConnectionFactory;
+pub use cluster_scan::{
+    scan_cluster, ClusterScanBackend, ClusterScanNode, ClusterScanPage, ClusterScanState,
+    NodeScanCursor,
+};
 pub use cluster_topology::{
     merge_node_metrics, parse_cluster_info, parse_cluster_nodes, parse_cluster_shards,
     parse_cluster_shards_for_tls,

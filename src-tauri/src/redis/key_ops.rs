@@ -1,7 +1,83 @@
 use crate::{
-    domain::{HashEntry, RedisValue, SortedSetEntry, StreamEntry, StreamField},
+    domain::{
+        normalize_key_type, HashEntry, KeySummary, RedisValue, SortedSetEntry, StreamEntry,
+        StreamField,
+    },
     error::AppError,
 };
+
+use super::{
+    connection_manager::{key_size, map_command_error},
+    RoutedConnection,
+};
+
+const MAX_CLUSTER_SCAN_PAGE_BYTES: usize = 4 * 1024 * 1024;
+
+pub(crate) fn ensure_cluster_scan_page_size(
+    page: &crate::domain::ScanPage,
+) -> Result<(), AppError> {
+    let bytes = serde_json::to_vec(page).map_err(|_| AppError::InvalidInput)?;
+    if bytes.len() > MAX_CLUSTER_SCAN_PAGE_BYTES {
+        return Err(AppError::InvalidInput);
+    }
+    Ok(())
+}
+
+pub(crate) async fn load_key_summaries(
+    connection: &mut RoutedConnection,
+    keys: Vec<Vec<u8>>,
+    requested_type: Option<&str>,
+) -> Result<Vec<KeySummary>, AppError> {
+    let mut summaries = Vec::with_capacity(keys.len());
+    for raw_key in keys {
+        let key = String::from_utf8(raw_key.clone()).map_err(|_| AppError::InvalidInput)?;
+        let key_type: String = ::redis::cmd("TYPE")
+            .arg(&raw_key)
+            .query_async(connection)
+            .await
+            .map_err(map_command_error)?;
+        if requested_type.is_some() && normalize_key_type(&key_type) != requested_type {
+            continue;
+        }
+        let ttl_ms: i64 = ::redis::cmd("PTTL")
+            .arg(&raw_key)
+            .query_async(connection)
+            .await
+            .map_err(map_command_error)?;
+        let size = key_size(connection, &key, &key_type).await.ok().flatten();
+        let memory_bytes = ::redis::cmd("MEMORY")
+            .arg("USAGE")
+            .arg(&raw_key)
+            .query_async::<Option<u64>>(connection)
+            .await
+            .ok()
+            .flatten();
+        let encoding = ::redis::cmd("OBJECT")
+            .arg("ENCODING")
+            .arg(&raw_key)
+            .query_async::<Option<String>>(connection)
+            .await
+            .ok()
+            .flatten();
+        let idle_seconds = ::redis::cmd("OBJECT")
+            .arg("IDLETIME")
+            .arg(&raw_key)
+            .query_async::<Option<u64>>(connection)
+            .await
+            .ok()
+            .flatten();
+        summaries.push(KeySummary {
+            key,
+            key_type,
+            ttl_ms,
+            size,
+            memory_bytes,
+            encoding,
+            idle_seconds,
+        });
+    }
+    Ok(summaries)
+}
 
 pub fn decode_stream_entry(id: &str, entries: Vec<String>) -> Result<StreamEntry, AppError> {
     if id.trim().is_empty() || entries.is_empty() || entries.len() % 2 != 0 {
@@ -97,8 +173,38 @@ pub fn decode_key_value(key_type: &str, entries: Vec<String>) -> Result<RedisVal
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_json_value, decode_key_value, decode_stream_entry, encode_json_value};
-    use crate::domain::{HashEntry, RedisValue, SortedSetEntry, StreamEntry, StreamField};
+    use super::{
+        decode_json_value, decode_key_value, decode_stream_entry, encode_json_value,
+        ensure_cluster_scan_page_size,
+    };
+    use crate::domain::{
+        HashEntry, KeySummary, RedisValue, ScanCursor, ScanPage, SortedSetEntry, StreamEntry,
+        StreamField,
+    };
+    use crate::error::AppError;
+
+    #[test]
+    fn cluster_scan_page_rejects_serialized_output_over_four_mibibytes() {
+        let page = ScanPage {
+            cursor: ScanCursor::Cluster("cluster:cursor".into()),
+            keys: vec![KeySummary {
+                key: "x".repeat(4 * 1024 * 1024),
+                key_type: "string".into(),
+                ttl_ms: -1,
+                size: Some(1),
+                memory_bytes: None,
+                encoding: None,
+                idle_seconds: None,
+            }],
+            has_more: true,
+            node_failures: Vec::new(),
+        };
+
+        assert_eq!(
+            ensure_cluster_scan_page_size(&page).unwrap_err(),
+            AppError::InvalidInput
+        );
+    }
 
     #[test]
     fn maps_unknown_redis_type_to_unsupported_data_type() {

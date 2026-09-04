@@ -318,7 +318,7 @@ fn rejects_scan_counts_outside_one_through_five_hundred() {
     for count in [0, 501] {
         let input = ScanKeysInput {
             connection_id: "local".into(),
-            cursor: 0,
+            cursor: 0.into(),
             pattern: "*".into(),
             count,
             key_type: None,
@@ -333,7 +333,7 @@ fn rejects_scan_counts_outside_one_through_five_hundred() {
 fn scan_filter_rejects_unknown_key_type_and_accepts_supported_type() {
     let mut input = ScanKeysInput {
         connection_id: "local".into(),
-        cursor: 0,
+        cursor: 0.into(),
         pattern: "*".into(),
         count: 100,
         key_type: Some("hash".into()),

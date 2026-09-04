@@ -8,25 +8,26 @@ use crate::{
         normalize_key_type, parse_info_sections, parse_keyspace_line, validate_certificate_pem,
         validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AddVectorSetElementsInput,
         AggregateArrayInput, AnalyzeDatabaseInput, AppendArrayInput, AppendJsonArrayInput,
-        ArrayKeyInput, ArrayMultiGetInput, ArrayRangeInput, ArrayScanInput, CommandDefinition,
-        CommandExecutionItem, CommandResult, ConnectionEndpoint, ConnectionInfo, ConnectionProfile,
-        ConnectionTarget, CreateArrayInput, CreateKeyInput, CreateSearchIndexInput,
-        CreateStreamConsumerGroupInput, CreateVectorSetInput, DatabaseAnalysisReport,
-        DatabaseOverview, DeleteArrayElementsInput, DeleteArrayRangeInput, DeleteJsonPathInput,
-        DeleteKeysInput, DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput,
-        DeleteVectorSetElementsInput, ExecuteCommandsInput, ExportKeysInput, ExportedKey,
-        GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
-        GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
-        InstanceDetails, InstanceOverview, JsonMutationResult, JsonPathValue, KeyInfo,
-        KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue, ListSearchIndexesResult,
-        ModuleCapabilities, ProfilerSession, PubSubSession, PublishPubSubInput, RedisValue,
-        RenameKeyInput, ScanKeysInput, ScanPage, SearchIndexInfo, SearchIndexInput,
-        SearchQueryInput, SearchQueryResult, SelectDatabaseInput, SetArrayElementInput,
-        SetJsonPathInput, SetKeyInput, SetKeyTtlInput, SetVectorSetAttributesInput, SlowLogConfig,
-        SlowLogEntry, SortedSetEntry, StartProfilerInput, StartPubSubInput, StopProfilerInput,
-        StopPubSubInput, StreamConsumer, StreamConsumerGroup, StreamEntry, StreamPendingEntry,
-        UpdateSlowLogConfigInput, VectorSetElement, VectorSetElementInput, VectorSetKeyInput,
-        VectorSetPage, VectorSetSummary, VectorSimilarityMatch, VectorSimilarityQueryInput,
+        ArrayKeyInput, ArrayMultiGetInput, ArrayRangeInput, ArrayScanInput, ClusterNodeRole,
+        CommandDefinition, CommandExecutionItem, CommandResult, ConnectionEndpoint, ConnectionInfo,
+        ConnectionProfile, ConnectionTarget, CreateArrayInput, CreateKeyInput,
+        CreateSearchIndexInput, CreateStreamConsumerGroupInput, CreateVectorSetInput,
+        DatabaseAnalysisReport, DatabaseOverview, DeleteArrayElementsInput, DeleteArrayRangeInput,
+        DeleteJsonPathInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
+        DeleteStreamConsumerInput, DeleteVectorSetElementsInput, ExecuteCommandsInput,
+        ExportKeysInput, ExportedKey, GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput,
+        GetStreamConsumerGroupsInput, GetStreamConsumersInput, GetStreamPendingEntriesInput,
+        HashEntry, ImportKeysInput, InstanceDetails, InstanceOverview, JsonMutationResult,
+        JsonPathValue, KeyInfo, KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue,
+        ListSearchIndexesResult, ModuleCapabilities, ProfilerSession, PubSubSession,
+        PublishPubSubInput, RedisValue, RenameKeyInput, ScanCursor, ScanKeysInput, ScanPage,
+        SearchIndexInfo, SearchIndexInput, SearchQueryInput, SearchQueryResult,
+        SelectDatabaseInput, SetArrayElementInput, SetJsonPathInput, SetKeyInput, SetKeyTtlInput,
+        SetVectorSetAttributesInput, SlowLogConfig, SlowLogEntry, SortedSetEntry,
+        StartProfilerInput, StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamConsumer,
+        StreamConsumerGroup, StreamEntry, StreamPendingEntry, UpdateSlowLogConfigInput,
+        VectorSetElement, VectorSetElementInput, VectorSetKeyInput, VectorSetPage,
+        VectorSetSummary, VectorSimilarityMatch, VectorSimilarityQueryInput,
         VectorSimilarityResult,
     },
     error::AppError,
@@ -50,12 +51,17 @@ use super::{
         append_json_array_path, delete_json_path_value, json_path_uses_legacy_syntax,
         parse_module_capabilities, read_json_path, write_json_path,
     },
-    key_ops::{decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry},
+    key_ops::{
+        decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry,
+        ensure_cluster_scan_page_size, load_key_summaries,
+    },
     observability::{
         map_pubsub_error, parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager,
         PubSubManager,
     },
+    parse_cluster_nodes, parse_cluster_shards_for_tls,
     routed_connection::{RoutedClient, RoutedConnection},
+    scan_cluster,
     search::{
         build_create_search_index_command, parse_max_search_results, parse_search_index_info,
         parse_search_index_list, parse_search_query,
@@ -71,6 +77,7 @@ use super::{
         parse_vector_set_attributes, parse_vector_set_element, parse_vector_set_info,
         parse_vector_set_page, parse_vsim_reply,
     },
+    ClusterNodeConnectionFactory, ClusterScanBackend, ClusterScanNode,
 };
 
 #[allow(async_fn_in_trait)]
@@ -278,6 +285,7 @@ struct ConnectionHandle {
     client: RoutedClient,
     profile: ConnectionProfile,
     target: ConnectionTarget,
+    cluster_node_factory: Option<ClusterNodeConnectionFactory>,
     _ssh: Option<super::ssh::SshTransport>,
 }
 
@@ -287,11 +295,40 @@ struct ActiveConnectionSnapshot {
     client: RoutedClient,
     profile: ConnectionProfile,
     target: ConnectionTarget,
+    cluster_node_factory: Option<ClusterNodeConnectionFactory>,
 }
 
 struct CapabilityConnection {
     capabilities: ModuleCapabilities,
     connection: RoutedConnection,
+}
+
+#[derive(Clone)]
+struct RedisClusterScanBackend {
+    factory: ClusterNodeConnectionFactory,
+}
+
+impl ClusterScanBackend for RedisClusterScanBackend {
+    fn scan_node<'a>(
+        &'a self,
+        node: &'a ClusterScanNode,
+        cursor: u64,
+        pattern: &'a str,
+        count: usize,
+    ) -> futures_util::future::BoxFuture<'a, Result<(u64, Vec<Vec<u8>>), AppError>> {
+        Box::pin(async move {
+            let mut connection = self.factory.connection(&node.endpoint).await?;
+            ::redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(pattern)
+                .arg("COUNT")
+                .arg(count)
+                .query_async::<(u64, Vec<Vec<u8>>)>(&mut connection)
+                .await
+                .map_err(|_| AppError::ClusterNodeUnavailable)
+        })
+    }
 }
 
 impl RedisService {
@@ -488,6 +525,7 @@ impl RedisService {
             client: handle.client.clone(),
             profile: handle.profile.clone(),
             target: handle.target.clone(),
+            cluster_node_factory: handle.cluster_node_factory.clone(),
         };
         Ok((snapshot, capabilities.get(connection_id).cloned()))
     }
@@ -770,6 +808,50 @@ async fn probe_module_capabilities(
     Ok(capabilities)
 }
 
+async fn load_cluster_scan_nodes(
+    connection: &mut RoutedConnection,
+    tls: bool,
+) -> Result<Vec<ClusterScanNode>, AppError> {
+    let shards = ::redis::cmd("CLUSTER")
+        .arg("SHARDS")
+        .query_async::<Value>(&mut *connection)
+        .await;
+    let topology = match shards {
+        Ok(reply) => match parse_cluster_shards_for_tls(reply, tls) {
+            Ok(nodes) => nodes,
+            Err(AppError::UnsupportedFeature) => load_cluster_nodes_fallback(connection).await?,
+            Err(_) => return Err(AppError::ClusterTopologyFailed),
+        },
+        Err(error) if is_unknown_command_error(&error) => {
+            load_cluster_nodes_fallback(connection).await?
+        }
+        Err(_) => return Err(AppError::ClusterTopologyFailed),
+    };
+    let primaries = topology
+        .into_iter()
+        .filter(|node| node.role == ClusterNodeRole::Primary)
+        .map(|node| ClusterScanNode {
+            node_id: node.id,
+            endpoint: node.endpoint,
+        })
+        .collect::<Vec<_>>();
+    if primaries.is_empty() || primaries.len() > 128 {
+        return Err(AppError::ClusterTopologyFailed);
+    }
+    Ok(primaries)
+}
+
+async fn load_cluster_nodes_fallback(
+    connection: &mut RoutedConnection,
+) -> Result<Vec<crate::domain::ClusterNode>, AppError> {
+    let reply = ::redis::cmd("CLUSTER")
+        .arg("NODES")
+        .query_async::<String>(connection)
+        .await
+        .map_err(|_| AppError::ClusterTopologyFailed)?;
+    parse_cluster_nodes(&reply).map_err(|_| AppError::ClusterTopologyFailed)
+}
+
 impl RedisOperations for RedisService {
     async fn test_connection(
         &self,
@@ -883,9 +965,46 @@ impl RedisOperations for RedisService {
     async fn scan_keys(&self, input: ScanKeysInput) -> Result<ScanPage, AppError> {
         input.validate()?;
         let requested_type = input.key_type.as_deref().and_then(normalize_key_type);
-        let mut connection = self.connection(&input.connection_id).await?;
+        let (snapshot, _) = self.active_snapshot(&input.connection_id).await?;
+        if matches!(snapshot.target, ConnectionTarget::Cluster(_)) {
+            let mut routed = snapshot.client.connection().await?;
+            let primary_nodes = load_cluster_scan_nodes(&mut routed, snapshot.profile.tls).await?;
+            let cluster_cursor = match &input.cursor {
+                ScanCursor::Standalone(0) => None,
+                ScanCursor::Cluster(cursor) => Some(cursor.as_str()),
+                ScanCursor::Standalone(_) => return Err(AppError::InvalidInput),
+            };
+            let backend = RedisClusterScanBackend {
+                factory: snapshot
+                    .cluster_node_factory
+                    .ok_or(AppError::ClusterNodeUnavailable)?,
+            };
+            let page = scan_cluster(
+                &backend,
+                snapshot.token,
+                &primary_nodes,
+                cluster_cursor,
+                &input.pattern,
+                input.count,
+            )
+            .await?;
+            let keys = load_key_summaries(&mut routed, page.keys, requested_type).await?;
+            let page = ScanPage {
+                cursor: ScanCursor::Cluster(page.cursor),
+                keys,
+                has_more: page.has_more,
+                node_failures: page.node_failures,
+            };
+            ensure_cluster_scan_page_size(&page)?;
+            return Ok(page);
+        }
+        let standalone_cursor = match input.cursor {
+            ScanCursor::Standalone(cursor) => cursor,
+            ScanCursor::Cluster(_) => return Err(AppError::InvalidInput),
+        };
+        let mut connection = snapshot.client.connection().await?;
         let (cursor, keys): (u64, Vec<String>) = ::redis::cmd("SCAN")
-            .arg(input.cursor)
+            .arg(standalone_cursor)
             .arg("MATCH")
             .arg(&input.pattern)
             .arg("COUNT")
@@ -946,9 +1065,10 @@ impl RedisOperations for RedisService {
         }
 
         Ok(ScanPage {
-            cursor,
+            cursor: ScanCursor::Standalone(cursor),
             keys: summaries,
             has_more: cursor != 0,
+            node_failures: Vec::new(),
         })
     }
 
@@ -2070,7 +2190,7 @@ fn search_index_covers_key(info: &SearchIndexInfo, key: &str, redis_key_type: &s
         && (info.prefixes.is_empty() || info.prefixes.iter().any(|prefix| key.starts_with(prefix)))
 }
 
-async fn key_size(
+pub(crate) async fn key_size(
     connection: &mut RoutedConnection,
     key: &str,
     key_type: &str,
@@ -2688,6 +2808,20 @@ async fn connect_handle_with_transport(
 ) -> Result<(ConnectionHandle, Option<ConnectionEndpoint>), AppError> {
     profile.validate()?;
     let target = ConnectionTarget::try_from(profile)?;
+    let cluster_tls = if matches!(target, ConnectionTarget::Cluster(_)) && profile.tls {
+        Some(tls_client_material(profile, secrets)?)
+    } else {
+        None
+    };
+    let cluster_node_factory = if matches!(target, ConnectionTarget::Cluster(_)) {
+        Some(ClusterNodeConnectionFactory::new(
+            profile.username.clone(),
+            secrets.password.clone(),
+            cluster_tls.clone(),
+        )?)
+    } else {
+        None
+    };
     let ssh = if injected_ssh.is_some() {
         injected_ssh
     } else if let Some(config) = profile.ssh.as_ref() {
@@ -2695,12 +2829,14 @@ async fn connect_handle_with_transport(
     } else {
         None
     };
-    let (client, endpoint) = discover_client(profile, secrets, &target, ssh.as_ref()).await?;
+    let (client, endpoint) =
+        discover_client(profile, secrets, &target, ssh.as_ref(), cluster_tls).await?;
     Ok((
         ConnectionHandle {
             client,
             profile: profile.clone(),
             target,
+            cluster_node_factory,
             _ssh: ssh,
         },
         endpoint,
@@ -2712,28 +2848,23 @@ async fn discover_client(
     secrets: &ConnectionSecrets,
     target: &ConnectionTarget,
     ssh: Option<&super::ssh::SshTransport>,
+    cluster_tls: Option<TlsClientMaterial>,
 ) -> Result<(RoutedClient, Option<ConnectionEndpoint>), AppError> {
     match target {
         ConnectionTarget::Standalone => Ok((
             RoutedClient::Standalone(build_standalone_client(profile, secrets, ssh).await?),
             None,
         )),
-        ConnectionTarget::Cluster(cluster) => {
-            let tls = profile
-                .tls
-                .then(|| tls_client_material(profile, secrets))
-                .transpose()?;
-            Ok((
-                RoutedClient::cluster(
-                    cluster,
-                    profile.username.as_deref(),
-                    secrets.password.as_deref(),
-                    tls,
-                )
-                .await?,
-                None,
-            ))
-        }
+        ConnectionTarget::Cluster(cluster) => Ok((
+            RoutedClient::cluster(
+                cluster,
+                profile.username.as_deref(),
+                secrets.password.as_deref(),
+                cluster_tls,
+            )
+            .await?,
+            None,
+        )),
         ConnectionTarget::Sentinel(sentinel) => {
             discover_sentinel_client(profile, secrets, sentinel, ssh).await
         }
