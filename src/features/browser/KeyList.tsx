@@ -1,7 +1,7 @@
-import Select from "../../components/Select";
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import type { KeySummary } from "../../lib/types";
 import { KeyRow, KeyTree } from "./KeyTree";
+import ScanFilterDialog from "./ScanFilterDialog";
 
 interface KeyListProps {
   pattern: string;
@@ -40,6 +40,10 @@ export function KeyList({
 }: KeyListProps) {
   const [view, setView] = useState<"flat" | "tree">("tree");
   const [separator, setSeparator] = useState(":");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const filterTrigger = useRef<HTMLButtonElement>(null);
+  const closeFilters = useCallback(() => setFiltersOpen(false), []);
+  const hasFilters = (pattern.trim() || "*") !== "*" || keyType !== "";
   return (
     <section className="browser-list-panel" aria-labelledby="key-list-title">
       <div className="browser-panel-heading">
@@ -52,48 +56,28 @@ export function KeyList({
         </span>
       </div>
 
-      <label className="browser-filter field">
-        <span>键过滤</span>
-        <input
-          value={pattern}
-          onChange={(event) => onPatternChange(event.target.value)}
-          onKeyDown={onPatternKeyDown}
-          aria-describedby="key-filter-hint"
-          disabled={loading}
-          spellCheck={false}
-        />
-      </label>
-      <p id="key-filter-hint" className="browser-helper">
-        支持 Redis glob 模式，输入后自动刷新，也可按 Enter 立即扫描。
-      </p>
-
-      <label className="browser-filter browser-filter-type field">
-        <span>类型过滤</span>
-        <Select
-          aria-label="类型过滤"
-          value={keyType}
-          onChange={(event) => onKeyTypeChange(event.target.value)}
-          disabled={loading}
-        >
-          <option value="">全部类型</option>
-          <option value="string">String</option>
-          <option value="hash">Hash</option>
-          <option value="list">List</option>
-          <option value="set">Set</option>
-          <option value="zset">Sorted Set</option>
-          <option value="stream">Stream</option>
-          <option value="json">JSON</option>
-          {arraySupported ? <option value="array">Array</option> : null}
-          {vectorSetSupported ? <option value="vectorset">Vector Set</option> : null}
-        </Select>
-      </label>
-
-      <div className="key-view-switch" role="group" aria-label="键显示方式">
-        <button type="button" className="button button-secondary" aria-pressed={view === "flat"} onClick={() => setView("flat")}>平铺</button>
-        <button type="button" className="button button-secondary" aria-pressed={view === "tree"} onClick={() => setView("tree")}>树形</button>
+      <div className="browser-list-toolbar">
+        <div className="key-view-switch" role="group" aria-label="键显示方式">
+          <button type="button" className="button button-secondary" aria-pressed={view === "flat"} onClick={() => setView("flat")}>平铺</button>
+          <button type="button" className="button button-secondary" aria-pressed={view === "tree"} onClick={() => setView("tree")}>树形</button>
+        </div>
+        <button ref={filterTrigger} type="button" className="button button-secondary browser-filter-trigger"
+          aria-label="筛选" aria-haspopup="dialog" aria-expanded={filtersOpen} data-active={hasFilters}
+          onClick={() => {
+            filterTrigger.current?.focus({ preventScroll: true });
+            setFiltersOpen(true);
+          }}>
+          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 3h12L9 8.5V13l-2-1V8.5Z" /></svg>
+          {hasFilters ? "筛选 · 已启用" : "筛选"}
+        </button>
       </div>
 
-      {view === "tree" ? <label className="field browser-filter"><span>键树分隔符</span><input value={separator} maxLength={16} onChange={(event) => setSeparator(event.target.value)} placeholder="留空显示完整键名" /></label> : null}
+      {filtersOpen ? (
+        <ScanFilterDialog pattern={pattern} keyType={keyType} separator={separator} showSeparator={view === "tree"}
+          arraySupported={arraySupported} vectorSetSupported={vectorSetSupported} loading={loading}
+          onPatternChange={onPatternChange} onPatternKeyDown={onPatternKeyDown} onKeyTypeChange={onKeyTypeChange}
+          onSeparatorChange={setSeparator} onClose={closeFilters} />
+      ) : null}
 
       {loading ? (
         <p className="loading-state browser-loading" role="status" aria-live="polite">

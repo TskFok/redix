@@ -10,7 +10,7 @@
   background: var(--color-surface-selected);
 }
 
-.key-tree-panel { min-height: 0; overflow: auto; }
+.key-tree-panel { min-height: 0; }
 .key-tree { display: block; margin-top: 8px; }
 .key-tree li { margin-block: 4px; }
 .key-tree-children { list-style: none; padding-inline-start: 14px; border-inline-start: 1px solid var(--color-border); }

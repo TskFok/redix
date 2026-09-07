@@ -99,10 +99,10 @@ const navigationShortcuts: Partial<Record<AppSection, ShortcutAction["shortcut"]
   settings: { key: ",", label: "Ctrl/Cmd+," },
 };
 
-// These selectors identify existing primary inputs without synthesizing clicks
-// or submissions. Focus is checked again when the action runs.
+// Browser opens its filter dialog; other workspaces focus their primary input.
+// Availability is checked again when the action runs.
 const workspaceInputSelectors: Partial<Record<AppSection, string>> = {
-  browser: 'input[aria-describedby="key-filter-hint"]',
+  browser: "button.browser-filter-trigger",
   workbench: "#redis-command-input",
   "search-query": 'input[aria-label="查询语句"]',
   cli: ".cli-page input",
@@ -258,6 +258,7 @@ export default function App() {
   const activeNavigation = navigationItems.find((item) => item.id === activeSection);
   const currentSection = activeNavigation ?? navigationItems[0];
   const canAccessWorkspace = connectionWorkspaceOpen && activeProfile !== null;
+  const isBrowserWorkspace = canAccessWorkspace && activeSection === "browser";
   const canAccessLocalResources = (section: AppSection) =>
     section === "connections" || section === "query-library" || section === "settings";
   const showConnectionPage =
@@ -277,7 +278,7 @@ export default function App() {
   };
   const primaryInput = () => {
     const selector = workspaceInputSelectors[activeSection];
-    const element = selector ? workspace.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector) : null;
+    const element = selector ? workspace.current?.querySelector<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>(selector) : null;
     return element && !element.disabled ? element : null;
   };
   const shortcutActions: ShortcutAction[] = [
@@ -297,12 +298,19 @@ export default function App() {
       id: "focus-input", label: "聚焦当前输入", description: "键过滤、查询或命令编辑器",
       shortcut: { key: "f", shift: true, label: "Ctrl/Cmd+Shift+F" },
       unavailable: () => primaryInput() ? undefined : "当前工作区没有可用的查询或命令输入",
-      run: () => { primaryInput()?.focus(); },
+      run: () => {
+        const input = primaryInput();
+        if (input instanceof HTMLButtonElement) {
+          input.click();
+        } else {
+          input?.focus();
+        }
+      },
     },
   ];
 
   return (
-    <main className={`app-shell${canAccessWorkspace ? "" : " app-shell-home"}`}>
+    <main className={`app-shell${canAccessWorkspace ? "" : " app-shell-home"}${isBrowserWorkspace ? " app-shell-browser" : ""}`}>
       {canAccessWorkspace ? (
       <aside className="app-sidebar" aria-label="产品侧边栏">
         <AppBrand />
@@ -384,7 +392,7 @@ export default function App() {
       )}
 
       <section className="app-main">
-        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
+        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}${isBrowserWorkspace ? " workspace-browser" : ""}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
           {showConnectionPage ? (
             <ConnectionPage
               activeConnectionId={activeProfile?.id ?? null}

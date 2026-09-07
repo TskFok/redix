@@ -383,16 +383,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
 
   return (
     <section className="browser-page" aria-labelledby="browser-page-title" aria-busy={listBusy}>
-      <div className="page-heading browser-page-heading">
-        <div>
-          <p className="eyebrow">BROWSER</p>
-          <h2 id="browser-page-title">数据浏览</h2>
-          <p className="page-description">
-            使用游标扫描浏览键，按需读取和编辑 Redis 数据。
-          </p>
-        </div>
-        <span className="browser-connection-id">连接 ID：{connectionId}</span>
-      </div>
+      <h2 id="browser-page-title" className="sr-only">数据浏览</h2>
 
       {state.error ? (
         <p className="feedback feedback-error" role="alert">

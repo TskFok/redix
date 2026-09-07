@@ -304,7 +304,44 @@ describe("Redis Browser", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("筛选关闭后继续防抖扫描，重开保留模式、类型和分隔符", async () => {
+    render(<BrowserPage connectionId="local" />);
+    await waitFor(() => expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument());
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    fireEvent.change(screen.getByLabelText("键过滤"), { target: { value: "user:*" } });
+    fireEvent.change(screen.getByLabelText("键过滤"), { target: { value: "user::*" } });
+    fireEvent.change(screen.getByLabelText("键树分隔符"), { target: { value: "::" } });
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", cursor: 0, pattern: "user::*", count: 100, key_type: null,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    expect(screen.getByLabelText("键过滤")).toHaveValue("user::*");
+    expect(screen.getByLabelText("键树分隔符")).toHaveValue("::");
+    fireEvent.click(screen.getByRole("combobox", { name: "类型过滤" }));
+    fireEvent.click(within(screen.getByRole("listbox", { name: "类型过滤" })).getByRole("option", { name: "Hash" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(scanKeysMock).toHaveBeenCalledTimes(3);
+    expect(scanKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", cursor: 0, pattern: "user::*", count: 100, key_type: "hash",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    expect(screen.getByLabelText("键过滤")).toHaveValue("user::*");
+    expect(screen.getByLabelText("类型过滤")).toHaveValue("hash");
+    expect(screen.getByLabelText("键树分隔符")).toHaveValue("::");
+    expect(scanKeysMock).toHaveBeenCalledTimes(3);
   });
 
   it("按模式加载键并在点击键后读取详情", async () => {
@@ -549,9 +586,11 @@ describe("Redis Browser", () => {
     expect(await screen.findByDisplayValue("Alice")).toBeInTheDocument();
     expect(getKeyMock).toHaveBeenCalledExactlyOnceWith({ connection_id: "local", key: "user:2" });
 
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     const pattern = screen.getByLabelText("键过滤");
     fireEvent.change(pattern, { target: { value: "user:*" } });
     fireEvent.keyDown(pattern, { key: "Enter", code: "Enter" });
+    expect(scanKeysMock).toHaveBeenCalledTimes(3);
 
     await waitFor(() => {
       expect(scanKeysMock).toHaveBeenLastCalledWith({
@@ -562,6 +601,7 @@ describe("Redis Browser", () => {
         key_type: null,
       });
     });
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     expect(screen.getByRole("button", { name: "user:3" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "展开前缀 admin:" })).not.toBeInTheDocument();
@@ -582,6 +622,7 @@ describe("Redis Browser", () => {
     render(<BrowserPage connectionId="local" />);
     expect(await screen.findByRole("button", { name: "展开前缀 user:" })).toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("类型过滤"), {
       target: { value: "hash" },
     });
@@ -595,6 +636,7 @@ describe("Redis Browser", () => {
       });
     });
 
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
     fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
     await waitFor(() => {
       expect(scanKeysMock).toHaveBeenLastCalledWith({
@@ -953,6 +995,7 @@ describe("Redis Browser", () => {
     );
 
     render(<BrowserPage connectionId="local" />);
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     const pattern = screen.getByLabelText("键过滤");
     expect(pattern).toBeDisabled();
     fireEvent.keyDown(pattern, { key: "Enter", code: "Enter" });

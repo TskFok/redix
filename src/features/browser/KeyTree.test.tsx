@@ -28,6 +28,62 @@ function Harness({ keys = ["user", "user:1", "user:2", "cache:one"], pattern = "
 }
 
 describe("键树浏览", () => {
+  it("筛选默认收起，打开后聚焦键过滤且显示方式仍在主面板", () => {
+    render(<Harness />);
+
+    expect(screen.queryByRole("dialog", { name: "SCAN 筛选" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("键过滤")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("类型过滤")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("键树分隔符")).not.toBeInTheDocument();
+    const viewSwitch = screen.getByRole("group", { name: "键显示方式" });
+
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+
+    const dialog = screen.getByRole("dialog", { name: "SCAN 筛选" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(within(dialog).getByLabelText("键过滤")).toHaveFocus();
+    expect(within(dialog).getByLabelText("类型过滤")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("键树分隔符")).toHaveValue(":");
+    expect(within(dialog).getAllByRole("button", { name: "关闭筛选" })).toHaveLength(1);
+    expect(dialog).not.toContainElement(viewSwitch);
+  });
+
+  it.each(["关闭按钮", "Escape", "遮罩"])("通过%s关闭筛选后恢复入口焦点", (method) => {
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "筛选" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "SCAN 筛选" });
+
+    if (method === "关闭按钮") fireEvent.click(within(dialog).getByRole("button", { name: "关闭筛选" }));
+    else if (method === "Escape") fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    else fireEvent.click(dialog.parentElement!);
+
+    expect(screen.queryByRole("dialog", { name: "SCAN 筛选" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("键过滤")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("类型下拉打开时 Escape 先收起选项，再关闭筛选弹窗", () => {
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "筛选" });
+    fireEvent.click(trigger);
+    const select = screen.getByRole("combobox", { name: "类型过滤" });
+    select.focus();
+    fireEvent.keyDown(select, { key: "ArrowDown" });
+    expect(screen.getByRole("listbox", { name: "类型过滤" })).toBeInTheDocument();
+
+    fireEvent.keyDown(select, { key: "Escape" });
+
+    expect(screen.queryByRole("listbox", { name: "类型过滤" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "SCAN 筛选" })).toBeInTheDocument();
+    expect(select).toHaveFocus();
+    expect(select).toHaveValue("");
+    fireEvent.keyDown(select, { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "SCAN 筛选" })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
   it("首次展示自动按前缀分类，同层目录优先并按名称排序", () => {
     render(<Harness keys={["zebra", "user:2", "cache:z", "alpha", "user:1", "cache:a", "user:profile:name"]} />);
 
@@ -90,8 +146,10 @@ describe("键树浏览", () => {
     expect(screen.getAllByRole("button", { name: /(?:展开|折叠)前缀/ }).map((button) => button.getAttribute("aria-label"))).toEqual([
       "展开前缀 account:", "展开前缀 cache:", "折叠前缀 user:",
     ]);
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("键过滤"), { target: { value: "cache:*" } });
     expect(patterns).toEqual(["cache:*"]);
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
     rerender(<Harness {...props} pattern="cache:*" keys={["cache:one"]} />);
     expect(screen.queryByRole("button", { name: "折叠前缀 user:" })).not.toBeInTheDocument();
   });
@@ -109,10 +167,15 @@ describe("键树浏览", () => {
 it("可以用多字符分隔符分组，清空分隔符时按完整键名展示", () => {
   render(<Harness keys={["user::one", "user::two"]} />);
   fireEvent.click(screen.getByRole("button", { name: "树形" }));
+  fireEvent.click(screen.getByRole("button", { name: "筛选" }));
   fireEvent.change(screen.getByLabelText("键树分隔符"), { target: { value: "::" } });
+  fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
   fireEvent.click(screen.getByRole("button", { name: "展开前缀 user::" }));
   expect(screen.getByRole("button", { name: "user::one" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+  expect(screen.getByLabelText("键树分隔符")).toHaveValue("::");
   fireEvent.change(screen.getByLabelText("键树分隔符"), { target: { value: "" } });
+  fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
   expect(screen.queryByRole("button", { name: /展开前缀/ })).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "user::two" })).toBeInTheDocument();
 });

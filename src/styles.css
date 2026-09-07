@@ -568,6 +568,22 @@ input[type="number"] {
   overflow-y: auto;
 }
 
+.app-shell.app-shell-browser {
+  height: 100dvh;
+  min-height: 0;
+}
+
+.workspace.workspace-browser {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 24px;
+  overflow: hidden;
+}
+
+.workspace-browser > .workspace-context {
+  flex-shrink: 0;
+}
+
 .workspace-context {
   margin: 0 0 18px;
   color: var(--color-muted);
@@ -1396,6 +1412,20 @@ input[type="checkbox"]:hover:not(:disabled) {
   border-top: 0;
 }
 
+.browser-page {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.browser-page > :not(.browser-layout):not(.browser-add-key) {
+  flex-shrink: 0;
+}
+
 .browser-page-heading,
 .workbench-page-heading {
   margin-bottom: 20px;
@@ -1420,13 +1450,18 @@ input[type="checkbox"]:hover:not(:disabled) {
 .browser-layout {
   display: grid;
   grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.68fr);
+  grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
   gap: 12px;
-  min-height: 580px;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
 }
 
 .browser-list-panel,
 .browser-detail-panel {
+  /* Keep absolutely positioned accessible labels inside this scroll container. */
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -1435,16 +1470,21 @@ input[type="checkbox"]:hover:not(:disabled) {
   border-radius: var(--radius-md);
   background: var(--color-surface);
   box-shadow: var(--shadow-panel);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.browser-list-panel > *,
+.browser-detail-panel > * {
+  flex-shrink: 0;
 }
 
 .browser-list-panel {
   padding: 16px;
-  overflow: hidden;
 }
 
 .browser-detail-panel {
   padding: 20px;
-  overflow: auto;
 }
 
 .browser-panel-heading h2,
@@ -1506,6 +1546,9 @@ input[type="checkbox"]:hover:not(:disabled) {
 
 .browser-add-key {
   display: grid;
+  min-height: 0;
+  max-height: 50%;
+  flex: 1 1 0;
   gap: 14px;
   margin-bottom: 12px;
   padding: 16px;
@@ -1513,6 +1556,8 @@ input[type="checkbox"]:hover:not(:disabled) {
   border-radius: var(--radius-md);
   background: var(--color-surface);
   box-shadow: var(--shadow-panel);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .browser-add-key-heading,
@@ -1586,11 +1631,11 @@ input[type="checkbox"]:hover:not(:disabled) {
 .key-list {
   display: grid;
   gap: 4px;
-  min-height: 160px;
-  flex: 1 1 auto;
+  min-height: 0;
+  flex: 0 0 auto;
   margin: 16px -4px 0;
   padding: 0 4px;
-  overflow-y: auto;
+  overflow: visible;
   list-style: none;
 }
 
@@ -1660,7 +1705,6 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 .browser-empty-details {
-  min-height: 580px;
   justify-content: flex-start;
 }
 
@@ -3646,6 +3690,17 @@ input[type="checkbox"]:hover:not(:disabled) {
     overflow: visible;
   }
 
+  .app-shell-browser .app-main {
+    min-height: 0;
+    flex: 1 1 0;
+    overflow: hidden;
+  }
+
+  .app-shell-browser .app-navigation {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
   .app-sidebar-actions {
     width: 44px;
     flex: 0 0 44px;
@@ -3765,12 +3820,14 @@ input[type="checkbox"]:hover:not(:disabled) {
     min-height: 0;
   }
 
-  .key-list {
-    max-height: 360px;
-    flex: 0 1 auto;
+  .browser-layout {
+    grid-template-rows: repeat(2, minmax(0, 1fr));
   }
 
-  .browser-empty-details,
+  .browser-panel-heading {
+    flex-direction: row;
+  }
+
   .workbench-result-panel {
     min-height: 260px;
   }

@@ -1,0 +1,71 @@
+.browser-list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.browser-list-toolbar .key-view-switch {
+  margin-top: 0;
+}
+
+.browser-filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.browser-filter-trigger svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
+}
+
+.browser-filter-trigger[data-active="true"] {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+  background: var(--color-surface-selected);
+}
+
+.scan-filter-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--color-background) 65%, transparent);
+}
+
+.scan-filter-dialog {
+  width: min(100%, 440px);
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 24px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-text);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-panel);
+}
+
+.scan-filter-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.scan-filter-heading h2 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 18px;
+  font-weight: 500;
+}
