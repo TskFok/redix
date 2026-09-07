@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 import { aggregateSearch, type AggregateFunction, type AggregateReducer, type SearchAggregateInput, type SearchAggregateResult } from "./aggregateApi";
 import "./aggregatePanel.css";
@@ -80,7 +81,7 @@ function AggregateEditor({ connectionId, index, enabled = true }: Props) {
     </div>
     <div className="aggregate-reducers">
       {draft.reducers.map((reducer, position) => <div className="aggregate-reducer" key={position}>
-        <label className="field"><span>聚合函数 {position + 1}</span><select value={reducer.function} disabled={disabled} onChange={(event) => changeReducer(position, { function: event.target.value as AggregateFunction, field: event.target.value === "count" ? null : reducer.field ?? "" })}>{["count", "sum", "min", "max", "avg"].map((value) => <option key={value} value={value}>{value.toUpperCase()}</option>)}</select></label>
+        <label className="field"><span>聚合函数 {position + 1}</span><Select value={reducer.function} disabled={disabled} onChange={(event) => changeReducer(position, { function: event.target.value as AggregateFunction, field: event.target.value === "count" ? null : reducer.field ?? "" })}>{["count", "sum", "min", "max", "avg"].map((value) => <option key={value} value={value}>{value.toUpperCase()}</option>)}</Select></label>
         <label className="field"><span>聚合字段 {position + 1}</span><input value={reducer.field ?? ""} disabled={disabled || reducer.function === "count"} maxLength={256} placeholder={reducer.function === "count" ? "COUNT 无需字段" : "数值字段"} onChange={(event) => changeReducer(position, { field: event.target.value })} /></label>
         <label className="field"><span>聚合别名 {position + 1}</span><input value={reducer.alias} disabled={disabled} maxLength={256} onChange={(event) => changeReducer(position, { alias: event.target.value })} /></label>
         <button type="button" className="button button-secondary" aria-label={`删除聚合 ${position + 1}`} disabled={disabled} onClick={() => change({ reducers: draft.reducers.filter((_value, index) => index !== position) })}>删除</button>
@@ -89,7 +90,7 @@ function AggregateEditor({ connectionId, index, enabled = true }: Props) {
     </div>
     <div className="aggregate-fields">
       <label className="field"><span>排序字段</span><input value={draft.sort} disabled={disabled} maxLength={256} placeholder="输出分组字段或聚合别名（可选）" onChange={(event) => change({ sort: event.target.value })} /></label>
-      <label className="field"><span>排序方向</span><select value={draft.direction} disabled={disabled || !draft.sort.trim()} onChange={(event) => change({ direction: event.target.value as "asc" | "desc" })}><option value="asc">升序</option><option value="desc">降序</option></select></label>
+      <label className="field"><span>排序方向</span><Select value={draft.direction} disabled={disabled || !draft.sort.trim()} onChange={(event) => change({ direction: event.target.value as "asc" | "desc" })}><option value="asc">升序</option><option value="desc">降序</option></Select></label>
     </div>
     <p className="browser-helper">最多 16 个加载字段、8 个分组、8 个聚合函数；响应最多 2 MiB、32 列、64 KiB/单元格。LIMIT 分页不是快照，数据变化或排序值相同时可能重复或遗漏；偏移上限 10,000。请求最多等待 5 秒，服务器仍可能继续执行。</p>
     <div className="aggregate-actions"><button type="button" className="button button-primary" disabled={disabled || busy} onClick={() => void run(0)}>{busy ? "聚合查询中…" : "运行聚合"}</button>{retryOffset !== null ? <button type="button" className="button button-secondary" disabled={disabled || busy} onClick={() => void run(retryOffset)}>重试聚合</button> : null}</div>

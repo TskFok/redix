@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 import type { SearchIndexAttribute, SearchVectorQueryResult } from "../../lib/types";
 import { searchVectorIndex } from "./searchVectorApi";
@@ -59,7 +60,7 @@ function VectorSearchForm({ connectionId, index, attributes, enabled }: Props) {
     {!fields.length ? <p className="browser-helper">当前索引缺少可用的 FLOAT32 / FLOAT64 向量元数据或安全字段别名，请刷新索引或检查配置。</p> : null}
     {!enabled ? <p className="browser-helper">等待索引详情和 RedisSearch 2.4 或更高版本连接就绪。</p> : null}
     <div className="form-grid">
-      <label className="field"><span>向量字段</span><select aria-label="向量字段" value={fieldName} disabled={!enabled || !fields.length} onChange={(event) => change(() => setFieldName(event.target.value))}>{fields.map((field) => <option key={nameOf(field)} value={nameOf(field)}>{nameOf(field)} · {field.vector!.data_type} · {field.vector!.dimension} 维 · {field.vector!.distance_metric}</option>)}</select></label>
+      <label className="field"><span>向量字段</span><Select aria-label="向量字段" value={fieldName} disabled={!enabled || !fields.length} onChange={(event) => change(() => setFieldName(event.target.value))}>{fields.map((field) => <option key={nameOf(field)} value={nameOf(field)}>{nameOf(field)} · {field.vector!.data_type} · {field.vector!.dimension} 维 · {field.vector!.distance_metric}</option>)}</Select></label>
       <label className="field"><span>Top K</span><input aria-label="Top K" type="number" min="1" max="200" step="1" value={count} onChange={(event) => change(() => setCount(event.target.value))} /></label>
     </div>
     <label className="field"><span>查询向量（JSON 数组）</span><textarea aria-label="查询向量（JSON 数组）" rows={4} maxLength={1_048_576} value={source} placeholder="[0.12, -0.34, ...]" onChange={(event) => change(() => setSource(event.target.value))} spellCheck={false} /></label>

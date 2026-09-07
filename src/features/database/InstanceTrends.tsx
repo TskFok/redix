@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useState } from "react";
 
 export interface InstanceSample { at: number; memory: number | null; ops: number | null; clients: number | null }
@@ -25,7 +26,7 @@ export default function InstanceTrends({ samples }: { samples: InstanceSample[] 
   return <section className="database-panel" aria-label="实例指标趋势">
     <h3>实例指标趋势</h3>
     <p>保留当前页面最近 120 次采样。开启自动刷新后持续采集，隐藏窗口时暂停；切换连接或离开页面后清空。读取失败显示为间隙。</p>
-    <label className="field"><span>趋势指标</span><select value={metric} onChange={(event) => setMetric(event.target.value as Metric)}>{Object.entries(metrics).map(([key, value]) => <option key={key} value={key}>{value.label}（{value.unit}）</option>)}</select></label>
+    <label className="field"><span>趋势指标</span><Select value={metric} onChange={(event) => setMetric(event.target.value as Metric)}>{Object.entries(metrics).map(([key, value]) => <option key={key} value={key}>{value.label}（{value.unit}）</option>)}</Select></label>
     {samples.length > 0 ? <>
       <svg viewBox="0 0 700 195" role="img" aria-label={`${info.label}趋势`} style={{ width: "100%", maxWidth: 900, display: "block" }}>
         <title>{info.label}，单位{info.unit}，{samples.length} 次采样</title>

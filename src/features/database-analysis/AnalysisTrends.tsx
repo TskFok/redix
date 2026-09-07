@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useState } from "react";
 import type { DatabaseAnalysisReport } from "../../lib/types";
 import type { SavedAnalysis } from "./analysisHistoryApi";
@@ -45,10 +46,10 @@ export default function AnalysisTrends({ items, current }: { items: SavedAnalysi
   return <section aria-label="本机历史趋势">
     <h4>本机历史趋势</h4>
     <p>横轴为保存时间。仅连接扫描参数及节点范围相同的报告；扫描不是快照，截断和内存读取覆盖变化会影响趋势，不能据此推断全库增长。</p>
-    {groups.length > 0 ? <label className="field"><span>趋势扫描范围</span><select aria-label="趋势扫描范围" value={selected} onChange={(event) => setSelected(Number(event.target.value))}>{groups.map((item, index) => {
+    {groups.length > 0 ? <label className="field"><span>趋势扫描范围</span><Select aria-label="趋势扫描范围" value={selected} onChange={(event) => setSelected(Number(event.target.value))}>{groups.map((item, index) => {
       const report = item.reports[0].report;
       return <option key={item.scope} value={index}>DB {report.database} · {report.pattern} · 分隔符 {report.delimiter} · 上限 {report.progress.max_keys.toLocaleString("zh-CN")} · 成功节点 {(report.node_results ?? []).map((node) => node.node_id).join(", ") || "当前实例"} · 失败节点 {(report.failed_nodes ?? []).map((node) => node.node_id).join(", ") || "无"} · {item.reports.length} 份</option>;
-    })}</select></label> : null}
+    })}</Select></label> : null}
     {reports.length >= 2 ? <><TrendLine title="历史已观察键数趋势" points={reports} /><TrendLine title="历史采样内存趋势" points={reports} memory /></> : <p>至少需要两份相同扫描范围的已保存报告才能绘制趋势。</p>}
     {reports.length > 0 ? <div className="database-table-wrap"><table className="database-table" aria-label="趋势数据"><thead><tr><th>保存时间</th><th>已观察键数</th><th>采样内存（字节）</th><th>读取内存的键数</th><th>范围</th></tr></thead><tbody>{reports.map((item) => <tr key={item.id}><td>{new Date(item.saved_at).toLocaleString("zh-CN")}</td><td>{item.report.total_keys.observed.toLocaleString("zh-CN")}</td><td>{item.report.total_memory.total.toLocaleString("zh-CN")}</td><td>{item.report.total_memory.observed.toLocaleString("zh-CN")}</td><td>{item.report.progress.truncated ? "已截断" : "未达到扫描上限"}{item.report.failed_nodes?.length ? "，部分节点失败" : ""}</td></tr>)}</tbody></table></div> : null}
   </section>;

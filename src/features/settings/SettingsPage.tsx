@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useState } from "react";
 
 import { saveAppSettings } from "../../lib/tauri";
@@ -67,7 +68,7 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
           </div>
           <label className="field">
             <span>主题</span>
-            <select
+            <Select
               aria-label="主题"
               value={draft.theme}
               onChange={(event) =>
@@ -80,11 +81,11 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
               <option value="system">跟随系统</option>
               <option value="light">浅色</option>
               <option value="dark">深色</option>
-            </select>
+            </Select>
           </label>
           <label className="field">
             <span>结果格式</span>
-            <select
+            <Select
               aria-label="结果格式"
               value={draft.result_format}
               onChange={(event) =>
@@ -97,7 +98,7 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
               <option value="raw">Raw</option>
               <option value="text">Text</option>
               <option value="json">JSON</option>
-            </select>
+            </Select>
           </label>
         </section>
 

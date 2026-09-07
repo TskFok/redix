@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useMemo, useState } from "react";
 import { parseVisualization, type PlotPoint, type PlotSeries } from "./visualizationData";
 
@@ -56,7 +57,7 @@ export default function BuiltinVisualization({ command, value }: { command: stri
     <summary>本地可视化</summary>
     {opened ? "error" in data ? <p role="status">{data.error}</p> : <>
       <p>{geo ? "经纬度散点图，使用完整地理坐标范围，无地图底图。" : "按时间排序的样本图，单位由原始数据定义。"}显示 {rows.length} 个数据点。名称最多展示 256 字符，完整名称见原始结果。</p>
-      {series.length > 1 ? <label className="field"><span>显示序列</span><select value={selected} onChange={(event) => { setSelected(event.target.value); setPage(0); }}><option value="all">全部序列</option>{series.map((item, index) => <option key={index} value={index}>{item.name}</option>)}</select></label> : null}
+      {series.length > 1 ? <label className="field"><span>显示序列</span><Select value={selected} onChange={(event) => { setSelected(event.target.value); setPage(0); }}><option value="all">全部序列</option>{series.map((item, index) => <option key={index} value={index}>{item.name}</option>)}</Select></label> : null}
       <Plot series={visible} geo={geo} />
       {!geo ? <ul className="builtin-legend">{visible.map((item, index) => <li key={index}><span style={{ background: colors[index % colors.length] }} />{item.name}</li>)}</ul> : null}
       {data.kind === "geo" && data.missing.length ? <p>缺少坐标的成员：{data.missing.join("、")}</p> : null}

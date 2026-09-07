@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useState } from "react";
 
 import {
@@ -326,11 +327,11 @@ export function ConnectionForm({
         <div className="form-grid">
           <label className="field">
             <span>连接拓扑</span>
-            <select value={values.topology} onChange={(event) => updateValue("topology", event.target.value)} disabled={busy}>
+            <Select value={values.topology} onChange={(event) => updateValue("topology", event.target.value)} disabled={busy}>
               <option value="standalone">Standalone</option>
               <option value="sentinel">Sentinel</option>
               <option value="cluster">Cluster</option>
-            </select>
+            </Select>
           </label>
           <label className="field">
             <span>连接名称</span>
@@ -417,7 +418,7 @@ export function ConnectionForm({
               <label className="field"><span>SSH 主机</span><input value={values.ssh_host} onChange={(event) => updateValue("ssh_host", event.target.value)} disabled={busy} /></label>
               <label className="field"><span>SSH 端口</span><input type="number" min={1} max={65535} value={values.ssh_port} onChange={(event) => updateValue("ssh_port", event.target.value)} disabled={busy} /></label>
               <label className="field"><span>SSH 用户名</span><input autoComplete="username" value={values.ssh_username} onChange={(event) => updateValue("ssh_username", event.target.value)} disabled={busy} /></label>
-              <label className="field"><span>SSH 认证方式</span><select value={values.ssh_auth_method} onChange={(event) => updateValue("ssh_auth_method", event.target.value)} disabled={busy}><option value="agent">Agent</option><option value="password">Password</option><option value="private_key">Private Key</option></select></label>
+              <label className="field"><span>SSH 认证方式</span><Select value={values.ssh_auth_method} onChange={(event) => updateValue("ssh_auth_method", event.target.value)} disabled={busy}><option value="agent">Agent</option><option value="password">Password</option><option value="private_key">Private Key</option></Select></label>
               {values.ssh_auth_method === "password" && <label className="field"><span>SSH 密码</span><input type="password" autoComplete="new-password" value={values.ssh_password} onChange={(event) => updateValue("ssh_password", event.target.value)} disabled={busy} placeholder="已保存时留空保留" /></label>}
               {values.ssh_auth_method === "private_key" && <>
                 <label className="field"><span>SSH 私钥文件路径</span><input value={values.ssh_identity_file} onChange={(event) => updateValue("ssh_identity_file", event.target.value)} placeholder="绝对路径，与私钥内容二选一" disabled={busy} /></label>

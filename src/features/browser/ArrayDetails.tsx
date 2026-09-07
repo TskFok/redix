@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -492,7 +493,7 @@ export function ArrayDetails({
         <div className="module-tab-content">
           <form className="module-query-form" onSubmit={(event) => void handleSearch(event)}>
             <div className="module-form-grid module-form-grid-wide">
-              <label className="field"><span>匹配方式</span><select value={searchCriteria} onChange={(event) => setSearchCriteria(event.target.value as SearchCriteria)} disabled={busy || disabled}><option value="EXACT">精确</option><option value="GLOB">Glob</option><option value="PREFIX">前缀</option><option value="SUFFIX">后缀</option></select></label>
+              <label className="field"><span>匹配方式</span><Select value={searchCriteria} onChange={(event) => setSearchCriteria(event.target.value as SearchCriteria)} disabled={busy || disabled}><option value="EXACT">精确</option><option value="GLOB">Glob</option><option value="PREFIX">前缀</option><option value="SUFFIX">后缀</option></Select></label>
               <label className="field"><span>匹配值</span><input value={searchValue} onChange={(event) => setSearchValue(event.target.value)} disabled={busy || disabled} /></label>
               <label className="field"><span>返回数量</span><input type="number" min="1" max={ARRAY_PAGE_SIZE} value={searchLimit} onChange={(event) => setSearchLimit(event.target.value)} disabled={busy || disabled} /></label>
             </div>
@@ -518,7 +519,7 @@ export function ArrayDetails({
         <div className="module-tab-content">
           <form className="module-query-form" onSubmit={(event) => void handleAggregate(event)}>
             <div className="module-form-grid module-form-grid-wide">
-              <label className="field"><span>聚合操作</span><select value={aggregateOperation} onChange={(event) => setAggregateOperation(event.target.value as ArrayAggregateOperation)} disabled={busy || disabled}><option value="SUM">SUM</option><option value="MIN">MIN</option><option value="MAX">MAX</option><option value="AND">AND</option><option value="OR">OR</option><option value="XOR">XOR</option><option value="MATCH">MATCH</option><option value="USED">USED</option></select></label>
+              <label className="field"><span>聚合操作</span><Select value={aggregateOperation} onChange={(event) => setAggregateOperation(event.target.value as ArrayAggregateOperation)} disabled={busy || disabled}><option value="SUM">SUM</option><option value="MIN">MIN</option><option value="MAX">MAX</option><option value="AND">AND</option><option value="OR">OR</option><option value="XOR">XOR</option><option value="MATCH">MATCH</option><option value="USED">USED</option></Select></label>
               <label className="field"><span>上限</span><input type="number" min="1" max={ARRAY_PAGE_SIZE} value={aggregateLimit} onChange={(event) => setAggregateLimit(event.target.value)} disabled={busy || disabled} /></label>
               {aggregateOperation === "MATCH" ? <label className="field"><span>匹配值</span><input value={aggregateMatch} onChange={(event) => setAggregateMatch(event.target.value)} disabled={busy || disabled} /></label> : null}
             </div>

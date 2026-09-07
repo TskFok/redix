@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useState } from "react";
 
 import type {
@@ -86,7 +87,7 @@ export function CommandResult({
           {result || hasBatchResults ? (
             <label className="command-result-format field">
               <span>结果格式</span>
-              <select
+              <Select
                 aria-label="结果格式"
                 value={format}
                 onChange={(event) =>
@@ -98,7 +99,7 @@ export function CommandResult({
                 <option value="json">JSON</option>
                 <option value="tree">树形</option>
                 <option value="table">表格</option>
-              </select>
+              </Select>
             </label>
           ) : null}
           {result || hasBatchResults ? (

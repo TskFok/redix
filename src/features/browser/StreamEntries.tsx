@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 import { addStreamEntry, deleteStreamEntries, getStreamEntries } from "./streamEntriesApi";
 import type { StreamEntriesPage, StreamEntryField } from "./streamEntriesApi";
@@ -111,8 +112,8 @@ function StreamEntriesScope({ connectionId, streamKey, disabled = false, onChang
       <label className="field"><span>起点 ID</span><input aria-label="消息范围起点" value={start} disabled={unavailable} onChange={(event) => setStart(event.target.value)} /></label>
       <label className="field"><span>终点 ID</span><input aria-label="消息范围终点" value={end} disabled={unavailable} onChange={(event) => setEnd(event.target.value)} /></label>
       <button type="button" className="button button-secondary" disabled={unavailable} onClick={applyRange}>应用消息范围</button>
-      <label className="field"><span>排序</span><select aria-label="消息排序" value={query.reverse ? "desc" : "asc"} disabled={unavailable} onChange={(event) => setQuery({ ...query, reverse: event.target.value === "desc", cursors: [null] })}><option value="asc">ID 升序</option><option value="desc">ID 降序</option></select></label>
-      <label className="field"><span>每页条数</span><select aria-label="每页消息数" value={query.count} disabled={unavailable} onChange={(event) => setQuery({ ...query, count: Number(event.target.value), cursors: [null] })}>{[50, 100, 250, 500].map((count) => <option key={count} value={count}>{count}</option>)}</select></label>
+      <label className="field"><span>排序</span><Select aria-label="消息排序" value={query.reverse ? "desc" : "asc"} disabled={unavailable} onChange={(event) => setQuery({ ...query, reverse: event.target.value === "desc", cursors: [null] })}><option value="asc">ID 升序</option><option value="desc">ID 降序</option></Select></label>
+      <label className="field"><span>每页条数</span><Select aria-label="每页消息数" value={query.count} disabled={unavailable} onChange={(event) => setQuery({ ...query, count: Number(event.target.value), cursors: [null] })}>{[50, 100, 250, 500].map((count) => <option key={count} value={count}>{count}</option>)}</Select></label>
     </div>
     {error ? <p className="error-message" role="alert">{error}</p> : null}
     {notice ? <p role="status">{notice}</p> : null}

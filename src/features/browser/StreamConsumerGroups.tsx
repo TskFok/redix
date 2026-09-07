@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -374,7 +375,7 @@ export function StreamConsumerGroups({
       <div className="stream-group-selector">
         <label className="field">
           <span>选择 Consumer Group</span>
-          <select
+          <Select
             aria-label="选择 Consumer Group"
             value={selectedGroupName}
             onChange={(event) => setSelectedGroupName(event.target.value)}
@@ -386,7 +387,7 @@ export function StreamConsumerGroups({
                 {group.name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <button
           type="button"

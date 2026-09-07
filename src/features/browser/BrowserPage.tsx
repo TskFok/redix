@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { BULK_TASK_FINISHED, type BulkTask } from "../tasks/bulkTaskApi";
 import { useAutoRefresh } from "./useAutoRefresh";
 import StartBulkDeleteButton from "../tasks/StartBulkDeleteButton";
@@ -418,7 +419,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
           刷新键列表
         </button>
         {bulkChanged && <p role="status">后台删除已结束，选择已清除；列表可能已变化，请刷新查看最新结果。</p>}
-        <label className="field"><span>键列表自动刷新</span><select value={refreshSeconds} onChange={(event) => setRefreshSeconds(Number(event.target.value))}><option value={0}>关闭</option><option value={2}>每 2 秒</option><option value={5}>每 5 秒</option><option value={10}>每 10 秒</option><option value={30}>每 30 秒</option></select></label>
+        <label className="field"><span>键列表自动刷新</span><Select value={refreshSeconds} onChange={(event) => setRefreshSeconds(Number(event.target.value))}><option value={0}>关闭</option><option value={2}>每 2 秒</option><option value={5}>每 5 秒</option><option value={10}>每 10 秒</option><option value={30}>每 30 秒</option></Select></label>
         {refreshSeconds > 0 && <small>选择键、查看详情或编辑期间暂停自动刷新。</small>}
         <StartBulkDeleteButton connectionId={connectionId} keys={state.selectedKeys} disabled={listBusy} />
         <BulkKeyActions

@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 import { decodeStringValue, encodeStringValue, getStringValue, setStringValue } from "./valueCodecApi";
 import { isStructuredFormat } from "./codecFormats";
@@ -111,12 +112,12 @@ function StringValueEditorScope({ connectionId, keyName, disabled = false, onBus
 
   return <section className="string-value-editor" aria-label="String 解码器" aria-busy={busy}>
     <div className="detail-info-actions">
-      <label className="field"><span>值格式</span><select aria-label="值格式" value={format} disabled={disabled || busy || dirty || !raw} onChange={(event) => void changeView(event.target.value as ValueFormat, compression)}>
+      <label className="field"><span>值格式</span><Select aria-label="值格式" value={format} disabled={disabled || busy || dirty || !raw} onChange={(event) => void changeView(event.target.value as ValueFormat, compression)}>
         {FORMATS.map(([value, label]) => <option key={value} value={value} disabled={!!raw?.truncated && (isStructuredFormat(value) || value === "json")}>{label}</option>)}
-      </select></label>
-      <label className="field"><span>压缩格式</span><select aria-label="压缩格式" value={compression} disabled={disabled || busy || dirty || !raw || raw.truncated} onChange={(event) => void changeView(format, event.target.value as ValueCompression)}>
+      </Select></label>
+      <label className="field"><span>压缩格式</span><Select aria-label="压缩格式" value={compression} disabled={disabled || busy || dirty || !raw || raw.truncated} onChange={(event) => void changeView(format, event.target.value as ValueCompression)}>
         {COMPRESSIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-      </select></label>
+      </Select></label>
       <button type="button" className="button button-secondary" onClick={() => void load()} disabled={disabled || busy || dirty}>重新读取</button>
     </div>
     {raw && <p className="feedback">原始值 {raw.total_bytes.toLocaleString()} 字节{raw.truncated ? "；仅预览前 4 MiB，已禁用保存，避免覆盖完整值。" : "；解码与解压在本机执行。"}</p>}

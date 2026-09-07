@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 
 import { createArray, createKey, createVectorSet } from "../../lib/tauri";
@@ -341,7 +342,7 @@ export function AddKey({
         </label>
         <label className="field">
           <span>数据类型</span>
-          <select value={kind} onChange={(event) => setKind(event.target.value as CreateValueKind)} disabled={isBusy}>
+          <Select value={kind} onChange={(event) => setKind(event.target.value as CreateValueKind)} disabled={isBusy}>
             <option value="string">String</option>
             <option value="hash">Hash</option>
             <option value="list">List</option>
@@ -351,7 +352,7 @@ export function AddKey({
             <option value="stream">Stream</option>
             {arraySupported ? <option value="array">Array</option> : null}
             {vectorSetSupported ? <option value="vectorset">Vector Set</option> : null}
-          </select>
+          </Select>
         </label>
       </div>
 
@@ -377,10 +378,10 @@ export function AddKey({
         <>
           <label className="field">
             <span>Array 创建模式</span>
-            <select value={arrayMode} onChange={(event) => setArrayMode(event.target.value as "contiguous" | "sparse")} disabled={isBusy}>
+            <Select value={arrayMode} onChange={(event) => setArrayMode(event.target.value as "contiguous" | "sparse")} disabled={isBusy}>
               <option value="contiguous">连续索引</option>
               <option value="sparse">稀疏索引</option>
-            </select>
+            </Select>
           </label>
           {arrayMode === "contiguous" ? (
             <label className="field">

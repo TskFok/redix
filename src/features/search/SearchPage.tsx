@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -559,10 +560,10 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                 </label>
                 <label className="field">
                   <span>键类型</span>
-                  <select aria-label="键类型" value={createDraft.key_type} onChange={(event) => setCreateDraft((current) => ({ ...current, key_type: event.target.value as SearchKeyType }))} disabled={mutationBusy}>
+                  <Select aria-label="键类型" value={createDraft.key_type} onChange={(event) => setCreateDraft((current) => ({ ...current, key_type: event.target.value as SearchKeyType }))} disabled={mutationBusy}>
                     <option value="hash">HASH</option>
                     <option value="json">JSON</option>
-                  </select>
+                  </Select>
                 </label>
                 <label className="field field-wide">
                   <span>键前缀</span>
@@ -581,9 +582,9 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                       </label>
                       <label className="field">
                         <span>字段类型</span>
-                        <select aria-label={`字段 ${fieldIndex + 1} 类型`} value={field.field_type} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { name: item.name, ...(item.alias ? { alias: item.alias } : {}), field_type: event.target.value as SearchFieldType, ...(event.target.value === "vector" ? { vector: defaultSearchVectorConfig() } : {}) } : item) }))} disabled={mutationBusy}>
+                        <Select aria-label={`字段 ${fieldIndex + 1} 类型`} value={field.field_type} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { name: item.name, ...(item.alias ? { alias: item.alias } : {}), field_type: event.target.value as SearchFieldType, ...(event.target.value === "vector" ? { vector: defaultSearchVectorConfig() } : {}) } : item) }))} disabled={mutationBusy}>
                           {fieldTypeOptions.map((option) => <option key={option.value} value={option.value} disabled={option.value === "vector" && !vectorSupported}>{option.label}</option>)}
-                        </select>
+                        </Select>
                       </label>
                       <label className="field">
                         <span>查询别名（可选）</span>
@@ -623,9 +624,9 @@ export function SearchPage({ connectionId }: SearchPageProps) {
               {state.indexes.length > 0 ? (
                 <label className="field">
                   <span>当前索引</span>
-                  <select aria-label="当前索引" value={state.selectedIndex ?? ""} onChange={(event) => changeQuery({ selectedIndex: event.target.value || null })} disabled={indexLoading || mutationBusy}>
+                  <Select aria-label="当前索引" value={state.selectedIndex ?? ""} onChange={(event) => changeQuery({ selectedIndex: event.target.value || null })} disabled={indexLoading || mutationBusy}>
                     {state.indexes.map((index) => <option key={index.name} value={index.name}>{index.name}</option>)}
-                  </select>
+                  </Select>
                 </label>
               ) : (
                 <p className="empty-state-compact">还没有索引，请先新建一个索引。</p>

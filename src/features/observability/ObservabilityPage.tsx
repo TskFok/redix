@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 
@@ -576,7 +577,7 @@ function SlowLogPanel({
             <ExportButton label="导出 Slow Log JSON" disabled={loading || filteredLogs.length === 0} output={() => buildSlowLogExport(logs, "json", query)} />
             <label className="observability-inline-field">
               <span>读取数量</span>
-              <select
+              <Select
                 aria-label="读取数量"
                 value={count}
                 onChange={(event) => onCountChange(event.target.value)}
@@ -586,7 +587,7 @@ function SlowLogPanel({
                 <option value="50">50 条</option>
                 <option value="100">100 条</option>
                 <option value="-1">全部</option>
-              </select>
+              </Select>
             </label>
             <button type="button" className="button button-secondary button-compact" onClick={onRefresh} disabled={busy}>
               {loading || busy ? "刷新中…" : "刷新"}

@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 import {
   claimStreamPendingAdvanced,
@@ -162,7 +163,7 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
       <div className="form-grid">
         <label className="field"><span>高级转移目标消费者</span><input value={consumer} disabled={locked} onChange={event => setConsumer(event.target.value)} /></label>
         <label className="field"><span>最小空闲时间（毫秒）</span><input inputMode="numeric" value={minIdle} disabled={locked} onChange={event => setMinIdle(event.target.value)} /></label>
-        <label className="field"><span>投递时间设置</span><select value={timeMode} disabled={locked} onChange={event => setTimeMode(event.target.value)}><option value="default">使用当前时间</option><option value="idle">IDLE 相对空闲时间</option><option value="time">TIME Unix 时间</option></select></label>
+        <label className="field"><span>投递时间设置</span><Select value={timeMode} disabled={locked} onChange={event => setTimeMode(event.target.value)}><option value="default">使用当前时间</option><option value="idle">IDLE 相对空闲时间</option><option value="time">TIME Unix 时间</option></Select></label>
         {timeMode !== "default" && <label className="field"><span>{timeMode === "idle" ? "IDLE 空闲毫秒" : "TIME Unix 毫秒"}</span><input value={deliveryTime} disabled={locked} onChange={event => setDeliveryTime(event.target.value)} /></label>}
         <label className="field"><span>RETRYCOUNT 投递次数</span><input value={retryCount} disabled={locked} placeholder="留空保留当前次数" onChange={event => setRetryCount(event.target.value)} /></label>
       </div>

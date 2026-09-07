@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -471,7 +472,7 @@ export function VectorSetDetails({
         <div className="module-tab-content">
           <form className="module-query-form" onSubmit={(event) => void handleSearch(event)}>
             <div className="module-form-grid module-form-grid-wide">
-              <label className="field"><span>查询方式</span><select value={queryMode} onChange={(event) => setQueryMode(event.target.value as QueryMode)} disabled={busy || disabled}><option value="element">按元素</option><option value="vector">按向量</option></select></label>
+              <label className="field"><span>查询方式</span><Select value={queryMode} onChange={(event) => setQueryMode(event.target.value as QueryMode)} disabled={busy || disabled}><option value="element">按元素</option><option value="vector">按向量</option></Select></label>
               {queryMode === "element" ? <label className="field"><span>元素名称</span><input value={queryElement} onChange={(event) => setQueryElement(event.target.value)} disabled={busy || disabled} /></label> : <label className="field"><span>向量 JSON</span><input value={queryVectorText} onChange={(event) => setQueryVectorText(event.target.value)} disabled={busy || disabled} /></label>}
               <label className="field"><span>返回数量</span><input type="number" min="1" max="200" value={queryCount} onChange={(event) => setQueryCount(event.target.value)} disabled={busy || disabled} /></label>
             </div>

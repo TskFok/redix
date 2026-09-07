@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -158,7 +159,7 @@ export function DatabasePage({
             {isCluster ? "DB 0 键数和过期键由全部主节点聚合；节点或字段不可用时显示不可用。" : "查看当前 Redis 实例的只读指标和数据库键空间，不执行全库扫描。"}
           </p>
         </div>
-        <label className="field"><span>概览自动刷新</span><select aria-label="概览自动刷新" value={refreshSeconds} onChange={(event) => setRefreshSeconds(Number(event.target.value))}><option value={0}>关闭</option>{[2, 5, 10, 30].map((seconds) => <option key={seconds} value={seconds}>{seconds} 秒</option>)}</select></label>
+        <label className="field"><span>概览自动刷新</span><Select aria-label="概览自动刷新" value={refreshSeconds} onChange={(event) => setRefreshSeconds(Number(event.target.value))}><option value={0}>关闭</option>{[2, 5, 10, 30].map((seconds) => <option key={seconds} value={seconds}>{seconds} 秒</option>)}</Select></label>
         <button
           type="button"
           className="button button-secondary"

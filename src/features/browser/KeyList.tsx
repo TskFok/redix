@@ -1,3 +1,4 @@
+import Select from "../../components/Select";
 import { useState } from "react";
 import type { KeySummary } from "../../lib/types";
 import { KeyRow, KeyTree } from "./KeyTree";
@@ -68,7 +69,7 @@ export function KeyList({
 
       <label className="browser-filter browser-filter-type field">
         <span>类型过滤</span>
-        <select
+        <Select
           aria-label="类型过滤"
           value={keyType}
           onChange={(event) => onKeyTypeChange(event.target.value)}
@@ -84,7 +85,7 @@ export function KeyList({
           <option value="json">JSON</option>
           {arraySupported ? <option value="array">Array</option> : null}
           {vectorSetSupported ? <option value="vectorset">Vector Set</option> : null}
-        </select>
+        </Select>
       </label>
 
       <div className="key-view-switch" role="group" aria-label="键显示方式">
