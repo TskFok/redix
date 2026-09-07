@@ -210,6 +210,54 @@ describe("Redis 连接管理页面", () => {
     expect(JSON.stringify(saveConnectionMock.mock.calls[0][0].profile)).not.toContain("secret-key");
   });
 
+  it.each([
+    { storedPem: true, label: "SSH 私钥文件路径", value: "/private/new-key", field: "ssh_identity_file", otherField: "ssh_private_key" },
+    { storedPem: false, label: "SSH 私钥内容", value: "-----BEGIN OPENSSH PRIVATE KEY-----\nreplacement\n-----END OPENSSH PRIVATE KEY-----", field: "ssh_private_key", otherField: "ssh_identity_file" },
+  ])("切换已保存私钥来源到 $label 前要求显式清除，保存和测试一致", async ({ storedPem, label, value, field, otherField }) => {
+    listConnectionsMock.mockResolvedValue([{ ...localProfile, ssh: { host: "jump", port: 22, username: "user", auth_method: "private_key", has_password: false, has_private_key: storedPem, has_identity_file: !storedPem, has_passphrase: true, has_known_hosts_file: true } }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 本地 Redis" }));
+    fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("切换私钥来源前，请勾选清除已保存的 SSH 凭据和路径");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(testConnectionMock).not.toHaveBeenCalled(); expect(saveConnectionMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("known_hosts");
+    fireEvent.click(screen.getByLabelText("清除已保存的 SSH 凭据和路径"));
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await screen.findByText(/连接成功/);
+    expect(testConnectionMock.mock.calls[0][0]).toMatchObject({ clear_ssh_secrets: true, [field]: value, [otherField]: null, profile: { ssh: { has_passphrase: false, has_known_hosts_file: false } } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(saveConnectionMock).toHaveBeenCalledOnce());
+    expect(saveConnectionMock.mock.calls[0][0]).toEqual(testConnectionMock.mock.calls[0][0]);
+  });
+
+  it("新 PEM 与新私钥路径不能同时提交，即使已选择清除", async () => {
+    listConnectionsMock.mockResolvedValue([{ ...localProfile, ssh: { host: "jump", port: 22, username: "user", auth_method: "private_key", has_password: false, has_private_key: true, has_identity_file: false, has_passphrase: false, has_known_hosts_file: false } }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 本地 Redis" }));
+    fireEvent.click(screen.getByLabelText("清除已保存的 SSH 凭据和路径"));
+    fireEvent.change(screen.getByLabelText("SSH 私钥内容"), { target: { value: "pem" } });
+    fireEvent.change(screen.getByLabelText("SSH 私钥文件路径"), { target: { value: "/private/key" } });
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("SSH 私钥内容和私钥文件路径只能填写一项");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(testConnectionMock).not.toHaveBeenCalled(); expect(saveConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("同来源私钥可留空保留或直接替换（PEM=%s）", async (storedPem) => {
+    listConnectionsMock.mockResolvedValue([{ ...localProfile, ssh: { host: "jump", port: 22, username: "user", auth_method: "private_key", has_password: false, has_private_key: storedPem, has_identity_file: !storedPem, has_passphrase: true, has_known_hosts_file: true } }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 本地 Redis" }));
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await screen.findByText(/连接成功/);
+    expect(testConnectionMock.mock.calls[0][0]).toMatchObject({ clear_ssh_secrets: false, ssh_private_key: null, ssh_identity_file: null, profile: { ssh: { has_private_key: storedPem, has_identity_file: !storedPem } } });
+    fireEvent.change(screen.getByLabelText(storedPem ? "SSH 私钥内容" : "SSH 私钥文件路径"), { target: { value: storedPem ? "replacement-pem" : "/private/replacement" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(saveConnectionMock).toHaveBeenCalledOnce());
+    expect(saveConnectionMock.mock.calls[0][0]).toMatchObject({ clear_ssh_secrets: false, [storedPem ? "ssh_private_key" : "ssh_identity_file"]: storedPem ? "replacement-pem" : "/private/replacement", profile: { ssh: { has_passphrase: true, has_known_hosts_file: true } } });
+  });
+
   it("清除 SSH 保存材料后旧标记不满足密码，允许输入替换并清理模式材料", async () => {
     listConnectionsMock.mockResolvedValue([{ ...localProfile, ssh: { host: "jump", port: 22, username: "user", auth_method: "password", has_password: true, has_private_key: false, has_identity_file: false, has_passphrase: false, has_known_hosts_file: true } }]);
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);

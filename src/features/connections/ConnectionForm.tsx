@@ -51,6 +51,16 @@ function buildConnectionInput(
     const sshPort = Number(values.ssh_port);
     if (!values.ssh_host.trim() || !values.ssh_username.trim() || !Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) return { error: "请输入有效的 SSH 主机、端口和用户名。" };
     const saved = !values.clear_ssh_secrets && initial?.ssh?.auth_method === values.ssh_auth_method ? initial.ssh : null;
+    if (values.ssh_auth_method === "private_key") {
+      const newKey = Boolean(values.ssh_private_key.trim());
+      const newIdentity = Boolean(values.ssh_identity_file.trim());
+      if (newKey && newIdentity) {
+        return { error: "SSH 私钥内容和私钥文件路径只能填写一项。" };
+      }
+      if ((newKey && saved?.has_identity_file) || (newIdentity && saved?.has_private_key)) {
+        return { error: "切换私钥来源前，请勾选清除已保存的 SSH 凭据和路径。此操作也会清除 known_hosts 路径和私钥口令，请按需重新填写。" };
+      }
+    }
     const hasPassword = values.ssh_auth_method === "password" && (Boolean(values.ssh_password) || Boolean(saved?.has_password));
     const hasKey = values.ssh_auth_method === "private_key" && (Boolean(values.ssh_private_key.trim()) || Boolean(saved?.has_private_key));
     const hasIdentity = values.ssh_auth_method === "private_key" && (Boolean(values.ssh_identity_file.trim()) || Boolean(saved?.has_identity_file));
@@ -411,7 +421,7 @@ export function ConnectionForm({
               <label className="field"><span>SSH 已知主机文件路径</span><input value={values.ssh_known_hosts_file} onChange={(event) => updateValue("ssh_known_hosts_file", event.target.value)} placeholder="可选，默认 ~/.ssh/known_hosts" disabled={busy} /></label>
             </div>
             {initial?.ssh && <>
-              <p className="field-hint">{values.clear_ssh_secrets ? "已选择清除旧材料，可填写替换材料。" : "已保存材料仅显示状态，留空保留当前认证方式的材料。"}</p>
+              <p className="field-hint">{values.clear_ssh_secrets ? "已选择清除旧材料，可填写替换材料。known_hosts 路径和私钥口令也会清除，请按需重新填写。" : "已保存材料仅显示状态，留空保留当前认证方式的材料。切换私钥内容与文件路径来源前，请先勾选清除。"}</p>
               {!values.clear_ssh_secrets && <p className="field-hint">{initial.ssh.auth_method === values.ssh_auth_method && [initial.ssh.has_password && "密码已保存", initial.ssh.has_private_key && "私钥已保存", initial.ssh.has_identity_file && "私钥路径已保存", initial.ssh.has_passphrase && "私钥口令已保存"].filter(Boolean).join(" · ")}{initial.ssh.has_known_hosts_file ? " · 已知主机路径已保存" : ""}</p>}
               <label className="checkbox-field"><input type="checkbox" checked={values.clear_ssh_secrets} onChange={(event) => updateBoolean("clear_ssh_secrets", event.target.checked)} disabled={busy} /><span>清除已保存的 SSH 凭据和路径</span></label>
             </>}
