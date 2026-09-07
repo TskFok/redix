@@ -4,8 +4,9 @@ use ::redis::Value;
 
 use crate::{
     domain::{
-        parse_info_sections, AnalysisAccumulator, AnalysisKeyMetadata, AnalyzeDatabaseInput,
-        DatabaseAnalysisReport, InstanceDetails, ModuleSummary,
+        parse_info_sections, AnalysisAccumulator, AnalysisKeyMetadata, AnalysisProgress,
+        AnalyzeDatabaseInput, DatabaseAnalysisReport, InstanceDetails, ModuleSummary,
+        NodeAnalysisResult, NodeFailure,
     },
     error::AppError,
 };
@@ -13,6 +14,72 @@ use crate::{
 use super::{connection_manager::map_command_error, RoutedConnection};
 
 const METADATA_BATCH_SIZE: usize = 500;
+
+pub fn allocate_primary_key_limits(
+    max_keys: u64,
+    primary_count: usize,
+) -> Result<Vec<u64>, AppError> {
+    if primary_count == 0 || primary_count > 128 {
+        return Err(AppError::ClusterTopologyFailed);
+    }
+    let count = u64::try_from(primary_count).map_err(|_| AppError::ClusterTopologyFailed)?;
+    let base = max_keys / count;
+    let remainder =
+        usize::try_from(max_keys % count).map_err(|_| AppError::ClusterTopologyFailed)?;
+    Ok((0..primary_count)
+        .map(|index| base + u64::from(index < remainder))
+        .collect())
+}
+
+/// Internal, untruncated node observations. Only finished reports cross IPC.
+#[derive(Debug)]
+pub struct NodeAnalysisState {
+    pub node_id: String,
+    pub endpoint: crate::domain::ConnectionEndpoint,
+    pub accumulator: AnalysisAccumulator,
+    pub progress: crate::domain::AnalysisProgress,
+}
+
+pub fn merge_node_reports(
+    mut nodes: Vec<NodeAnalysisState>,
+    mut failed_nodes: Vec<NodeFailure>,
+) -> DatabaseAnalysisReport {
+    nodes.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    failed_nodes.sort_by(|left, right| {
+        left.node_id
+            .cmp(&right.node_id)
+            .then_with(|| left.code.cmp(&right.code))
+    });
+    let mut aggregate = AnalysisAccumulator::new(0, "*".to_owned(), ":".to_owned(), 0);
+    let mut scanned = 0_u64;
+    let mut processed = 0_u64;
+    let mut truncated = !failed_nodes.is_empty();
+    let mut node_results = Vec::with_capacity(nodes.len());
+    for node in nodes {
+        scanned = scanned.saturating_add(node.progress.scanned);
+        processed = processed.saturating_add(node.progress.processed);
+        truncated |= node.progress.truncated;
+        aggregate.merge(&node.accumulator);
+        node_results.push(NodeAnalysisResult {
+            node_id: node.node_id,
+            endpoint: node.endpoint,
+            report: Box::new(node.accumulator.finish(
+                node.progress.scanned,
+                node.progress.processed,
+                node.progress.truncated,
+            )),
+        });
+    }
+    let mut report = aggregate.finish(scanned, processed, truncated);
+    if let Some(first) = node_results.first() {
+        report.database = first.report.database;
+        report.pattern = first.report.pattern.clone();
+        report.delimiter = first.report.delimiter.clone();
+    }
+    report.node_results = node_results;
+    report.failed_nodes = failed_nodes;
+    report
+}
 
 pub(crate) async fn load_instance_details(
     connection: &mut RoutedConnection,
@@ -59,11 +126,28 @@ fn merge_command_stats_sections(
         .extend(command_stats);
 }
 
-pub(crate) async fn analyze_connection(
-    connection: &mut RoutedConnection,
+pub(crate) async fn analyze_connection<C>(
+    connection: &mut C,
     database: u8,
     input: &AnalyzeDatabaseInput,
-) -> Result<DatabaseAnalysisReport, AppError> {
+) -> Result<DatabaseAnalysisReport, AppError>
+where
+    C: ::redis::aio::ConnectionLike + Send + Unpin,
+{
+    let (accumulator, progress) =
+        analyze_connection_accumulator(connection, database, input, false).await?;
+    Ok(accumulator.finish(progress.scanned, progress.processed, progress.truncated))
+}
+
+pub(crate) async fn analyze_connection_accumulator<C>(
+    connection: &mut C,
+    database: u8,
+    input: &AnalyzeDatabaseInput,
+    strict_key_limit: bool,
+) -> Result<(AnalysisAccumulator, AnalysisProgress), AppError>
+where
+    C: ::redis::aio::ConnectionLike + Send + Unpin,
+{
     let mut cursor = 0_u64;
     let mut scanned = 0_u64;
     let mut processed = 0_u64;
@@ -84,18 +168,35 @@ pub(crate) async fn analyze_connection(
             .query_async(connection)
             .await
             .map_err(map_command_error)?;
-        let page_plan = scan_page_plan(scanned, keys.len(), next_cursor, input.max_keys);
+        let page_plan = if strict_key_limit {
+            let remaining = input.max_keys.saturating_sub(scanned);
+            let process_count = keys
+                .len()
+                .min(usize::try_from(remaining).unwrap_or(usize::MAX));
+            ScanPagePlan {
+                process_count,
+                truncated: process_count < keys.len()
+                    || (next_cursor != 0 && process_count as u64 >= remaining),
+            }
+        } else {
+            scan_page_plan(scanned, keys.len(), next_cursor, input.max_keys)
+        };
         scanned = scanned.saturating_add(u64::try_from(keys.len()).unwrap_or(u64::MAX));
         let batch = &keys[..page_plan.process_count];
         for metadata_keys in metadata_key_batches(batch) {
             let metadata = load_key_metadata(connection, metadata_keys).await?;
             processed = processed.saturating_add(accumulate_metadata(&mut accumulator, metadata));
         }
-        if page_plan.truncated {
-            return Ok(accumulator.finish(scanned, processed, true));
-        }
-        if next_cursor == 0 {
-            return Ok(accumulator.finish(scanned, processed, false));
+        if page_plan.truncated || next_cursor == 0 {
+            return Ok((
+                accumulator,
+                AnalysisProgress {
+                    scanned,
+                    processed,
+                    max_keys: input.max_keys,
+                    truncated: page_plan.truncated,
+                },
+            ));
         }
         cursor = next_cursor;
     }
@@ -147,10 +248,13 @@ fn metadata_key_batches(keys: &[String]) -> impl Iterator<Item = &[String]> {
     keys.chunks(METADATA_BATCH_SIZE)
 }
 
-async fn load_key_metadata(
-    connection: &mut RoutedConnection,
+async fn load_key_metadata<C>(
+    connection: &mut C,
     keys: &[String],
-) -> Result<Vec<AnalysisKeyMetadata>, AppError> {
+) -> Result<Vec<AnalysisKeyMetadata>, AppError>
+where
+    C: ::redis::aio::ConnectionLike + Send + Unpin,
+{
     if keys.is_empty() {
         return Ok(Vec::new());
     }

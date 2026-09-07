@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 
-use crate::error::AppError;
+use crate::{
+    domain::{ConnectionEndpoint, NodeFailure},
+    error::AppError,
+};
 
 pub const ANALYSIS_MIN_KEYS: u64 = 1_000;
 pub const ANALYSIS_MAX_KEYS: u64 = 1_000_000;
@@ -95,6 +98,17 @@ pub struct DatabaseAnalysisReport {
     pub top_namespaces_by_keys: Vec<NamespaceSummary>,
     pub top_namespaces_by_memory: Vec<NamespaceSummary>,
     pub expiration_groups: Vec<ExpirationGroup>,
+    #[serde(default)]
+    pub node_results: Vec<NodeAnalysisResult>,
+    #[serde(default)]
+    pub failed_nodes: Vec<NodeFailure>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct NodeAnalysisResult {
+    pub node_id: String,
+    pub endpoint: ConnectionEndpoint,
+    pub report: Box<DatabaseAnalysisReport>,
 }
 
 #[derive(Debug, Default)]
@@ -155,23 +169,22 @@ impl AnalysisAccumulator {
     }
 
     pub fn process(&mut self, metadata: AnalysisKeyMetadata) {
-        self.total_keys += 1;
-        *self.key_types.entry(metadata.key_type.clone()).or_default() += 1;
+        self.total_keys = self.total_keys.saturating_add(1);
+        add_counter(&mut self.key_types, &metadata.key_type, 1);
 
         if let Some(memory_bytes) = metadata.memory_bytes {
-            self.total_memory += memory_bytes;
-            self.memory_observed += 1;
-            *self
-                .memory_types
-                .entry(metadata.key_type.clone())
-                .or_default() += memory_bytes;
+            self.total_memory = self.total_memory.saturating_add(memory_bytes);
+            self.memory_observed = self.memory_observed.saturating_add(1);
+            add_counter(&mut self.memory_types, &metadata.key_type, memory_bytes);
         }
 
         if let Some(namespace) = namespace_for(&metadata.key, &self.delimiter) {
             let entry = self.namespaces.entry(namespace.to_string()).or_default();
-            entry.keys += 1;
-            entry.memory_bytes += metadata.memory_bytes.unwrap_or_default();
-            *entry.types.entry(metadata.key_type.clone()).or_default() += 1;
+            entry.keys = entry.keys.saturating_add(1);
+            entry.memory_bytes = entry
+                .memory_bytes
+                .saturating_add(metadata.memory_bytes.unwrap_or_default());
+            add_counter(&mut entry.types, &metadata.key_type, 1);
         }
 
         let key = AnalysisKey {
@@ -197,8 +210,50 @@ impl AnalysisAccumulator {
                 .expiration_groups
                 .get_mut(group)
                 .expect("fixed expiration label must be initialized");
-            entry.keys += 1;
-            entry.memory_bytes += key.memory_bytes.unwrap_or_default();
+            entry.keys = entry.keys.saturating_add(1);
+            entry.memory_bytes = entry
+                .memory_bytes
+                .saturating_add(key.memory_bytes.unwrap_or_default());
+        }
+    }
+
+    /// Merge full observations before `finish` limits the namespace rankings.
+    pub fn merge(&mut self, other: &Self) {
+        self.max_keys = self.max_keys.saturating_add(other.max_keys);
+        self.total_keys = self.total_keys.saturating_add(other.total_keys);
+        self.total_memory = self.total_memory.saturating_add(other.total_memory);
+        self.memory_observed = self.memory_observed.saturating_add(other.memory_observed);
+        for (kind, total) in &other.key_types {
+            add_counter(&mut self.key_types, kind, *total);
+        }
+        for (kind, total) in &other.memory_types {
+            add_counter(&mut self.memory_types, kind, *total);
+        }
+        for (namespace, source) in &other.namespaces {
+            let target = self.namespaces.entry(namespace.clone()).or_default();
+            target.keys = target.keys.saturating_add(source.keys);
+            target.memory_bytes = target.memory_bytes.saturating_add(source.memory_bytes);
+            for (kind, total) in &source.types {
+                add_counter(&mut target.types, kind, *total);
+            }
+        }
+        for key in &other.top_keys_by_length {
+            insert_top_key(&mut self.top_keys_by_length, key.clone(), |item| {
+                item.length
+            });
+        }
+        for key in &other.top_keys_by_memory {
+            insert_top_key(&mut self.top_keys_by_memory, key.clone(), |item| {
+                item.memory_bytes
+            });
+        }
+        for (label, source) in &other.expiration_groups {
+            let target = self
+                .expiration_groups
+                .get_mut(label)
+                .expect("fixed expiration label");
+            target.keys = target.keys.saturating_add(source.keys);
+            target.memory_bytes = target.memory_bytes.saturating_add(source.memory_bytes);
         }
     }
 
@@ -261,8 +316,15 @@ impl AnalysisAccumulator {
                 .take(TOP_ITEMS_LIMIT)
                 .collect(),
             expiration_groups,
+            node_results: Vec::new(),
+            failed_nodes: Vec::new(),
         }
     }
+}
+
+fn add_counter(values: &mut HashMap<String, u64>, key: &str, amount: u64) {
+    let value = values.entry(key.to_owned()).or_default();
+    *value = value.saturating_add(amount);
 }
 
 fn summaries(values: HashMap<String, u64>) -> Vec<TypeSummary> {

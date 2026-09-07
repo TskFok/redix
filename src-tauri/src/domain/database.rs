@@ -195,6 +195,50 @@ pub fn parse_keyspace_line(database: &str, line: &str) -> Result<DatabaseOvervie
 }
 
 impl InstanceOverview {
+    pub fn from_cluster_topology(topology: &crate::domain::ClusterTopology) -> Self {
+        let complete = topology.failures.is_empty() && !topology.nodes.is_empty();
+        Self {
+            server_version: None,
+            redis_mode: Some("cluster".into()),
+            uptime_seconds: None,
+            connected_clients: complete
+                .then(|| {
+                    complete_sum(
+                        topology
+                            .nodes
+                            .iter()
+                            .map(|node| node.metrics.connected_clients),
+                    )
+                })
+                .flatten(),
+            used_memory_bytes: complete
+                .then(|| {
+                    complete_sum(
+                        topology
+                            .nodes
+                            .iter()
+                            .map(|node| node.metrics.used_memory_bytes),
+                    )
+                })
+                .flatten(),
+            max_memory_bytes: None,
+            total_commands_processed: complete
+                .then(|| {
+                    complete_sum(
+                        topology
+                            .nodes
+                            .iter()
+                            .map(|node| node.metrics.commands_processed),
+                    )
+                })
+                .flatten(),
+            keyspace_hits: None,
+            keyspace_misses: None,
+            role: None,
+            modules: Vec::new(),
+        }
+    }
+
     pub fn from_info_and_modules(
         sections: &HashMap<String, HashMap<String, String>>,
         modules: Vec<ModuleSummary>,
@@ -219,6 +263,37 @@ impl InstanceOverview {
             modules,
         })
     }
+}
+
+impl DatabaseOverview {
+    pub fn from_cluster_primaries(nodes: &[Option<Self>]) -> Self {
+        Self {
+            database: 0,
+            key_count: (!nodes.is_empty())
+                .then(|| {
+                    complete_sum(
+                        nodes
+                            .iter()
+                            .map(|node| node.as_ref().and_then(|node| node.key_count)),
+                    )
+                })
+                .flatten(),
+            expires: (!nodes.is_empty())
+                .then(|| {
+                    complete_sum(
+                        nodes
+                            .iter()
+                            .map(|node| node.as_ref().and_then(|node| node.expires)),
+                    )
+                })
+                .flatten(),
+            avg_ttl_ms: None,
+        }
+    }
+}
+
+fn complete_sum(mut values: impl Iterator<Item = Option<u64>>) -> Option<u64> {
+    values.try_fold(0_u64, |total, value| total.checked_add(value?))
 }
 
 impl InstanceDetails {

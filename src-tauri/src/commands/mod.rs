@@ -9,6 +9,7 @@ pub mod observability;
 pub mod query_library;
 pub mod search;
 pub mod settings;
+pub mod topology;
 pub mod vector_set;
 pub mod workbench;
 
@@ -39,6 +40,7 @@ pub use search::{
     list_search_indexes, search_keys,
 };
 pub use settings::{get_app_settings, save_app_settings};
+pub use topology::{get_cluster_topology, refresh_cluster_topology};
 pub use vector_set::{
     add_vector_set_elements, create_vector_set, delete_vector_set_attributes,
     delete_vector_set_elements, download_vector_embedding, get_vector_set_element,

@@ -9,20 +9,21 @@ use crate::{
         validate_private_key_pem, AcknowledgeStreamPendingEntriesInput, AddVectorSetElementsInput,
         AggregateArrayInput, AnalyzeDatabaseInput, AppendArrayInput, AppendJsonArrayInput,
         ArrayKeyInput, ArrayMultiGetInput, ArrayRangeInput, ArrayScanInput, ClusterNodeRole,
-        CommandDefinition, CommandExecutionItem, CommandResult, ConnectionEndpoint, ConnectionInfo,
-        ConnectionProfile, ConnectionTarget, CreateArrayInput, CreateKeyInput,
-        CreateSearchIndexInput, CreateStreamConsumerGroupInput, CreateVectorSetInput,
-        DatabaseAnalysisReport, DatabaseOverview, DeleteArrayElementsInput, DeleteArrayRangeInput,
-        DeleteJsonPathInput, DeleteKeysInput, DeleteStreamConsumerGroupInput,
-        DeleteStreamConsumerInput, DeleteVectorSetElementsInput, ExecuteCommandsInput,
-        ExportKeysInput, ExportedKey, GetJsonPathInput, GetKeySearchIndexesInput, GetSlowLogsInput,
-        GetStreamConsumerGroupsInput, GetStreamConsumersInput, GetStreamPendingEntriesInput,
-        HashEntry, ImportKeysInput, InstanceDetails, InstanceOverview, JsonMutationResult,
-        JsonPathValue, KeyInfo, KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue,
-        ListSearchIndexesResult, ModuleCapabilities, ProfilerSession, PubSubSession,
-        PublishPubSubInput, RedisValue, RenameKeyInput, ScanCursor, ScanKeysInput, ScanPage,
-        SearchIndexInfo, SearchIndexInput, SearchQueryInput, SearchQueryResult,
-        SelectDatabaseInput, SetArrayElementInput, SetJsonPathInput, SetKeyInput, SetKeyTtlInput,
+        ClusterTopology, CommandDefinition, CommandExecutionItem, CommandResult,
+        ConnectionEndpoint, ConnectionInfo, ConnectionProfile, ConnectionTarget, CreateArrayInput,
+        CreateKeyInput, CreateSearchIndexInput, CreateStreamConsumerGroupInput,
+        CreateVectorSetInput, DatabaseAnalysisReport, DatabaseOverview, DeleteArrayElementsInput,
+        DeleteArrayRangeInput, DeleteJsonPathInput, DeleteKeysInput,
+        DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput, DeleteVectorSetElementsInput,
+        ExecuteCommandsInput, ExportKeysInput, ExportedKey, GetJsonPathInput,
+        GetKeySearchIndexesInput, GetSlowLogsInput, GetStreamConsumerGroupsInput,
+        GetStreamConsumersInput, GetStreamPendingEntriesInput, HashEntry, ImportKeysInput,
+        InstanceDetails, InstanceOverview, JsonMutationResult, JsonPathValue, KeyInfo,
+        KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue, ListSearchIndexesResult,
+        ModuleCapabilities, NodeFailure, ProfilerSession, PubSubSession, PublishPubSubInput,
+        RedisValue, RenameKeyInput, ScanCursor, ScanKeysInput, ScanPage, SearchIndexInfo,
+        SearchIndexInput, SearchQueryInput, SearchQueryResult, SelectDatabaseInput,
+        SetArrayElementInput, SetJsonPathInput, SetKeyInput, SetKeyTtlInput,
         SetVectorSetAttributesInput, SlowLogConfig, SlowLogEntry, SortedSetEntry,
         StartProfilerInput, StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamConsumer,
         StreamConsumerGroup, StreamEntry, StreamPendingEntry, UpdateSlowLogConfigInput,
@@ -35,6 +36,7 @@ use crate::{
 };
 
 use super::{
+    apply_node_info_results,
     array::{
         build_array_aggregate_command, build_array_append_command, build_array_delete_command,
         build_array_delete_range_command, build_array_multi_get_command, build_array_range_command,
@@ -46,7 +48,12 @@ use super::{
         build_command_info_command, is_array_command_set_supported,
         is_vector_set_command_set_supported, parse_command_info, parse_vector_set_info_summary,
     },
-    database_analysis::{analyze_connection, load_instance_details, parse_module_list},
+    cluster_node_info_command,
+    database_analysis::{
+        allocate_primary_key_limits, analyze_connection, analyze_connection_accumulator,
+        load_instance_details, merge_node_reports, parse_module_list, NodeAnalysisState,
+    },
+    fan_out_cluster_nodes,
     json_ops::{
         append_json_array_path, delete_json_path_value, json_path_uses_legacy_syntax,
         parse_module_capabilities, read_json_path, write_json_path,
@@ -59,7 +66,8 @@ use super::{
         map_pubsub_error, parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager,
         PubSubManager,
     },
-    parse_cluster_nodes, parse_cluster_shards_for_tls,
+    parse_cluster_info, parse_cluster_node_info_reply, parse_cluster_nodes,
+    parse_cluster_shards_for_tls,
     routed_connection::{RoutedClient, RoutedConnection},
     scan_cluster,
     search::{
@@ -77,8 +85,10 @@ use super::{
         parse_vector_set_attributes, parse_vector_set_element, parse_vector_set_info,
         parse_vector_set_page, parse_vsim_reply,
     },
-    ClusterNodeConnectionFactory, ClusterScanBackend, ClusterScanNode,
+    ClusterNodeConnectionFactory, ClusterNodeInfoResult, ClusterScanBackend, ClusterScanNode,
 };
+
+const CLUSTER_NODE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 #[allow(async_fn_in_trait)]
 pub trait RedisOperations: Send + Sync {
@@ -243,6 +253,11 @@ pub trait RedisOperations: Send + Sync {
         connection_id: &str,
     ) -> Result<InstanceOverview, AppError>;
     async fn get_instance_details(&self, connection_id: &str) -> Result<InstanceDetails, AppError>;
+    async fn get_cluster_topology(&self, connection_id: &str) -> Result<ClusterTopology, AppError>;
+    async fn refresh_cluster_topology(
+        &self,
+        connection_id: &str,
+    ) -> Result<ClusterTopology, AppError>;
     async fn analyze_database(
         &self,
         input: AnalyzeDatabaseInput,
@@ -611,6 +626,240 @@ impl RedisService {
         register()
     }
 
+    async fn ensure_generation_current(
+        &self,
+        connection_id: &str,
+        token: u64,
+    ) -> Result<(), AppError> {
+        let generations = self.generations.read().await;
+        if generations.get(connection_id).copied().unwrap_or(0) == token {
+            Ok(())
+        } else {
+            Err(AppError::OperationCancelled)
+        }
+    }
+
+    async fn load_live_cluster_topology(
+        &self,
+        connection_id: &str,
+    ) -> Result<ClusterTopology, AppError> {
+        validate_connection_id(connection_id)?;
+        let (snapshot, _) = self.active_snapshot(connection_id).await?;
+        self.load_live_cluster_topology_snapshot(connection_id, snapshot)
+            .await
+    }
+
+    async fn load_live_cluster_topology_snapshot(
+        &self,
+        connection_id: &str,
+        snapshot: ActiveConnectionSnapshot,
+    ) -> Result<ClusterTopology, AppError> {
+        if !matches!(snapshot.target, ConnectionTarget::Cluster(_)) {
+            return Err(AppError::UnsupportedFeature);
+        }
+        let factory = snapshot
+            .cluster_node_factory
+            .clone()
+            .ok_or(AppError::ClusterNodeUnavailable)?;
+        let mut routed = snapshot.client.connection().await?;
+        let mut nodes = load_cluster_nodes(&mut routed, snapshot.profile.tls).await?;
+        let cluster_info = ::redis::cmd("CLUSTER")
+            .arg("INFO")
+            .query_async::<String>(&mut routed)
+            .await
+            .map_err(|_| AppError::ClusterTopologyFailed)?;
+        let summary = parse_cluster_info(&cluster_info)?;
+
+        let results = fan_out_cluster_nodes(nodes.clone(), |node| {
+            let factory = factory.clone();
+            async move {
+                let node_id = node.id.clone();
+                let operation = async {
+                    let mut connection = factory
+                        .connection_for_node_id(&node.id, &node.endpoint)
+                        .await?;
+                    let reply = match cluster_node_info_command()
+                        .query_async::<Value>(&mut connection)
+                        .await
+                    {
+                        Err(error) if is_multi_section_info_unsupported(&error) => {
+                            // Redis 6 accepts at most one section. Keep this fallback on
+                            // the same connection and inside the node's overall deadline.
+                            ::redis::cmd("INFO")
+                                .query_async::<Value>(&mut connection)
+                                .await
+                        }
+                        result => result,
+                    }
+                    .map_err(|_| AppError::ClusterNodeUnavailable)?;
+                    let info = parse_cluster_node_info_reply(reply)?;
+                    Ok::<_, AppError>(ClusterNodeInfoResult::success(
+                        &node.id,
+                        node.endpoint,
+                        info,
+                    ))
+                };
+                match tokio::time::timeout(CLUSTER_NODE_TIMEOUT, operation).await {
+                    Ok(Ok(result)) => result,
+                    Ok(Err(_)) | Err(_) => ClusterNodeInfoResult::failure(node_id),
+                }
+            }
+        })
+        .await;
+        let failures = apply_node_info_results(&mut nodes, results);
+        for node in &mut nodes {
+            if let Some(endpoint) = factory.connection_endpoint(&node.id) {
+                node.connection_endpoint = Some(endpoint);
+            }
+        }
+        self.ensure_generation_current(connection_id, snapshot.token)
+            .await?;
+        Ok(ClusterTopology {
+            summary,
+            nodes,
+            failures,
+        })
+    }
+
+    async fn cluster_database_overview(
+        &self,
+        connection_id: &str,
+        snapshot: ActiveConnectionSnapshot,
+    ) -> Result<Vec<DatabaseOverview>, AppError> {
+        let factory = snapshot
+            .cluster_node_factory
+            .clone()
+            .ok_or(AppError::ClusterNodeUnavailable)?;
+        let mut routed = snapshot.client.connection().await?;
+        let primaries = load_cluster_nodes(&mut routed, snapshot.profile.tls)
+            .await?
+            .into_iter()
+            .filter(|node| node.role == ClusterNodeRole::Primary)
+            .collect::<Vec<_>>();
+        if primaries.is_empty() {
+            return Err(AppError::ClusterTopologyFailed);
+        }
+        let nodes = fan_out_cluster_nodes(primaries, |node| {
+            let factory = factory.clone();
+            async move {
+                let operation = async {
+                    let mut connection = factory
+                        .connection_for_node_id(&node.id, &node.endpoint)
+                        .await?;
+                    let reply = ::redis::cmd("INFO")
+                        .arg("keyspace")
+                        .query_async::<Value>(&mut connection)
+                        .await;
+                    if let Ok(reply) = reply {
+                        let info = parse_cluster_node_info_reply(reply)?;
+                        let sections = parse_info_sections(&info);
+                        if let Some(keyspace) = sections.get("Keyspace") {
+                            return match keyspace.get("db0") {
+                                Some(line) => parse_keyspace_line("db0", line),
+                                None => Ok(DatabaseOverview {
+                                    database: 0,
+                                    key_count: Some(0),
+                                    expires: Some(0),
+                                    avg_ttl_ms: None,
+                                }),
+                            };
+                        }
+                    }
+                    let key_count = ::redis::cmd("DBSIZE")
+                        .query_async::<u64>(&mut connection)
+                        .await
+                        .map_err(|_| AppError::ClusterNodeUnavailable)?;
+                    Ok(DatabaseOverview {
+                        database: 0,
+                        key_count: Some(key_count),
+                        expires: None,
+                        avg_ttl_ms: None,
+                    })
+                };
+                tokio::time::timeout(CLUSTER_NODE_TIMEOUT, operation)
+                    .await
+                    .ok()
+                    .and_then(Result::ok)
+            }
+        })
+        .await;
+        let result = DatabaseOverview::from_cluster_primaries(&nodes);
+        self.ensure_generation_current(connection_id, snapshot.token)
+            .await?;
+        Ok(vec![result])
+    }
+
+    async fn analyze_cluster_database(
+        &self,
+        connection_id: &str,
+        snapshot: ActiveConnectionSnapshot,
+        input: &AnalyzeDatabaseInput,
+    ) -> Result<DatabaseAnalysisReport, AppError> {
+        let factory = snapshot
+            .cluster_node_factory
+            .clone()
+            .ok_or(AppError::ClusterNodeUnavailable)?;
+        let mut routed = snapshot.client.connection().await?;
+        let primaries = load_cluster_nodes(&mut routed, snapshot.profile.tls)
+            .await?
+            .into_iter()
+            .filter(|node| node.role == ClusterNodeRole::Primary)
+            .collect::<Vec<_>>();
+        if primaries.is_empty() || primaries.len() > 128 {
+            return Err(AppError::ClusterTopologyFailed);
+        }
+        let quotas = allocate_primary_key_limits(input.max_keys, primaries.len())?;
+        let results = fan_out_cluster_nodes(
+            primaries.into_iter().zip(quotas).collect(),
+            |(node, quota)| {
+                let factory = factory.clone();
+                let mut node_input = input.clone();
+                node_input.max_keys = quota;
+                async move {
+                    let result = async {
+                        let mut connection = factory
+                            .connection_for_node_id(&node.id, &node.endpoint)
+                            .await?;
+                        let (accumulator, progress) =
+                            analyze_connection_accumulator(&mut connection, 0, &node_input, true)
+                                .await?;
+                        Ok::<_, AppError>(NodeAnalysisState {
+                            node_id: node.id.clone(),
+                            endpoint: node.endpoint.clone(),
+                            accumulator,
+                            progress,
+                        })
+                    }
+                    .await;
+                    match result {
+                        Ok(result) => Ok(result),
+                        Err(_) => Err(NodeFailure {
+                            node_id: node.id,
+                            code: AppError::ClusterNodeUnavailable.code().to_owned(),
+                        }),
+                    }
+                }
+            },
+        )
+        .await;
+        let mut node_results = Vec::new();
+        let mut failed_nodes = Vec::new();
+        for result in results {
+            match result {
+                Ok(result) => node_results.push(result),
+                Err(failure) => failed_nodes.push(failure),
+            }
+        }
+        let mut report = merge_node_reports(node_results, failed_nodes);
+        report.database = snapshot.profile.database;
+        report.pattern = input.pattern.clone();
+        report.delimiter = input.delimiter.clone();
+        report.progress.max_keys = input.max_keys;
+        self.ensure_generation_current(connection_id, snapshot.token)
+            .await?;
+        Ok(report)
+    }
+
     pub(super) async fn search_connection(
         &self,
         connection_id: &str,
@@ -819,6 +1068,25 @@ async fn load_cluster_scan_nodes(
     connection: &mut RoutedConnection,
     tls: bool,
 ) -> Result<Vec<ClusterScanNode>, AppError> {
+    let topology = load_cluster_nodes(connection, tls).await?;
+    let primaries = topology
+        .into_iter()
+        .filter(|node| node.role == ClusterNodeRole::Primary)
+        .map(|node| ClusterScanNode {
+            node_id: node.id,
+            endpoint: node.endpoint,
+        })
+        .collect::<Vec<_>>();
+    if primaries.is_empty() || primaries.len() > 128 {
+        return Err(AppError::ClusterTopologyFailed);
+    }
+    Ok(primaries)
+}
+
+async fn load_cluster_nodes(
+    connection: &mut RoutedConnection,
+    tls: bool,
+) -> Result<Vec<crate::domain::ClusterNode>, AppError> {
     let shards = ::redis::cmd("CLUSTER")
         .arg("SHARDS")
         .query_async::<Value>(&mut *connection)
@@ -834,18 +1102,10 @@ async fn load_cluster_scan_nodes(
         }
         Err(_) => return Err(AppError::ClusterTopologyFailed),
     };
-    let primaries = topology
-        .into_iter()
-        .filter(|node| node.role == ClusterNodeRole::Primary)
-        .map(|node| ClusterScanNode {
-            node_id: node.id,
-            endpoint: node.endpoint,
-        })
-        .collect::<Vec<_>>();
-    if primaries.is_empty() || primaries.len() > 128 {
+    if topology.is_empty() || topology.len() > 128 {
         return Err(AppError::ClusterTopologyFailed);
     }
-    Ok(primaries)
+    Ok(topology)
 }
 
 async fn load_cluster_nodes_fallback(
@@ -2012,7 +2272,17 @@ impl RedisOperations for RedisService {
         &self,
         connection_id: &str,
     ) -> Result<InstanceOverview, AppError> {
-        let mut connection = self.connection(connection_id).await?;
+        let (snapshot, _) = self.active_snapshot(connection_id).await?;
+        if matches!(snapshot.target, ConnectionTarget::Cluster(_)) {
+            let token = snapshot.token;
+            let topology = self
+                .load_live_cluster_topology_snapshot(connection_id, snapshot)
+                .await?;
+            let overview = InstanceOverview::from_cluster_topology(&topology);
+            self.ensure_generation_current(connection_id, token).await?;
+            return Ok(overview);
+        }
+        let mut connection = snapshot.client.connection().await?;
         let info = ::redis::cmd("INFO")
             .query_async::<String>(&mut connection)
             .await
@@ -2030,8 +2300,23 @@ impl RedisOperations for RedisService {
     }
 
     async fn get_instance_details(&self, connection_id: &str) -> Result<InstanceDetails, AppError> {
-        let mut connection = self.connection(connection_id).await?;
+        let (snapshot, _) = self.active_snapshot(connection_id).await?;
+        if matches!(snapshot.target, ConnectionTarget::Cluster(_)) {
+            return Err(AppError::UnsupportedFeature);
+        }
+        let mut connection = snapshot.client.connection().await?;
         load_instance_details(&mut connection).await
+    }
+
+    async fn get_cluster_topology(&self, connection_id: &str) -> Result<ClusterTopology, AppError> {
+        self.load_live_cluster_topology(connection_id).await
+    }
+
+    async fn refresh_cluster_topology(
+        &self,
+        connection_id: &str,
+    ) -> Result<ClusterTopology, AppError> {
+        self.load_live_cluster_topology(connection_id).await
     }
 
     async fn analyze_database(
@@ -2040,6 +2325,12 @@ impl RedisOperations for RedisService {
     ) -> Result<DatabaseAnalysisReport, AppError> {
         input.validate()?;
         let (snapshot, _) = self.active_snapshot(&input.connection_id).await?;
+        if matches!(snapshot.target, ConnectionTarget::Cluster(_)) {
+            let connection_id = input.connection_id.clone();
+            return self
+                .analyze_cluster_database(&connection_id, snapshot, &input)
+                .await;
+        }
         let mut connection = snapshot.client.connection().await?;
         analyze_connection(&mut connection, snapshot.profile.database, &input).await
     }
@@ -2050,6 +2341,11 @@ impl RedisOperations for RedisService {
     ) -> Result<Vec<DatabaseOverview>, AppError> {
         let (snapshot, _) = self.active_snapshot(connection_id).await?;
         snapshot.profile.validate()?;
+        if matches!(snapshot.target, ConnectionTarget::Cluster(_)) {
+            return self
+                .cluster_database_overview(connection_id, snapshot)
+                .await;
+        }
         let mut connection = snapshot.client.connection().await?;
         let info = ::redis::cmd("INFO")
             .arg("keyspace")
@@ -3150,6 +3446,14 @@ fn is_unknown_command_error(error: &::redis::RedisError) -> bool {
         let detail = detail.to_ascii_lowercase();
         detail.contains("unknown command") || detail.contains("unknown subcommand")
     })
+}
+
+fn is_multi_section_info_unsupported(error: &::redis::RedisError) -> bool {
+    error.code() == Some("ERR")
+        && error.detail().is_some_and(|detail| {
+            detail == "syntax error"
+                || detail.eq_ignore_ascii_case("wrong number of arguments for 'info' command")
+        })
 }
 
 fn is_with_attributes_unsupported(error: &::redis::RedisError) -> bool {

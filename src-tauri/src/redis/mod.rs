@@ -19,16 +19,19 @@ mod vector_set;
 mod workbench;
 
 pub use cli::CliManager;
+pub(crate) use cluster_node_connection::fan_out_cluster_nodes;
 pub use cluster_node_connection::ClusterNodeConnectionFactory;
 pub use cluster_scan::{
     scan_cluster, ClusterScanBackend, ClusterScanNode, ClusterScanPage, ClusterScanState,
     NodeScanCursor,
 };
 pub use cluster_topology::{
-    merge_node_metrics, parse_cluster_info, parse_cluster_nodes, parse_cluster_shards,
-    parse_cluster_shards_for_tls,
+    apply_node_info_results, cluster_node_info_command, merge_node_metrics, parse_cluster_info,
+    parse_cluster_node_info_reply, parse_cluster_nodes, parse_cluster_shards,
+    parse_cluster_shards_for_tls, ClusterNodeInfoResult,
 };
 pub use connection_manager::{RedisOperations, RedisService};
+pub use database_analysis::{allocate_primary_key_limits, merge_node_reports, NodeAnalysisState};
 pub use key_ops::decode_key_value;
 pub use monitor_transport::MonitorLineStream;
 pub use observability::{parse_monitor_line, parse_slow_log_config_reply, parse_slow_log_reply};

@@ -1,12 +1,28 @@
 use std::{
     collections::HashMap,
+    future::Future,
     sync::{Arc, RwLock},
     time::Duration,
 };
 
+use futures_util::{stream, StreamExt};
+
 use crate::{domain::ConnectionEndpoint, error::AppError};
 
 use super::standalone_transport::TlsClientMaterial;
+
+const MAX_NODE_FANOUT_CONCURRENCY: usize = 8;
+
+pub(crate) async fn fan_out_cluster_nodes<I, O, F, Fut>(items: Vec<I>, work: F) -> Vec<O>
+where
+    F: FnMut(I) -> Fut,
+    Fut: Future<Output = O>,
+{
+    stream::iter(items.into_iter().map(work))
+        .buffer_unordered(MAX_NODE_FANOUT_CONCURRENCY)
+        .collect()
+        .await
+}
 
 #[derive(Clone)]
 pub struct ClusterNodeConnectionFactory {
@@ -143,4 +159,36 @@ fn percent_encode(value: &str) -> String {
             _ => format!("%{byte:02X}"),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+
+    use super::fan_out_cluster_nodes;
+
+    #[tokio::test]
+    async fn node_fan_out_never_runs_more_than_eight_operations() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let maximum = Arc::new(AtomicUsize::new(0));
+        let outputs = fan_out_cluster_nodes((0..24).collect(), |item| {
+            let active = Arc::clone(&active);
+            let maximum = Arc::clone(&maximum);
+            async move {
+                let now = active.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                active.fetch_sub(1, Ordering::SeqCst);
+                item
+            }
+        })
+        .await;
+
+        assert_eq!(outputs.len(), 24);
+        assert_eq!(maximum.load(Ordering::SeqCst), 8);
+    }
 }

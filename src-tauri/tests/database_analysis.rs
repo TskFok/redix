@@ -7,13 +7,17 @@ use std::{
 };
 
 use redix_lib::domain::{
-    parse_command_stats, AnalysisAccumulator, AnalysisKeyMetadata, AnalyzeDatabaseInput,
-    ClusterConfig, ConnectionEndpoint, ConnectionProfile, InstanceDetails, ModuleSummary,
+    parse_command_stats, AnalysisAccumulator, AnalysisKeyMetadata, AnalysisProgress,
+    AnalyzeDatabaseInput, ClusterConfig, ConnectionEndpoint, ConnectionProfile, InstanceDetails,
+    ModuleSummary, NodeFailure,
 };
 use redix_lib::{
     error::AppError,
     persistence::ProfileRepository,
-    redis::{RedisOperations, RedisService},
+    redis::{
+        allocate_primary_key_limits, merge_node_reports, NodeAnalysisState, RedisOperations,
+        RedisService,
+    },
 };
 
 mod fixtures {
@@ -90,14 +94,33 @@ fn cluster_profile(port: u16) -> ConnectionProfile {
     }
 }
 
-async fn spawn_analysis_cluster() -> u16 {
+async fn spawn_analysis_cluster_with_keys(
+    key_count: usize,
+) -> (
+    u16,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();
     let port = listener.local_addr().unwrap().port();
+    let unavailable_port = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let (scan_entered_tx, scan_entered_rx) = tokio::sync::oneshot::channel();
+    let (scan_resume_tx, scan_resume_rx) = tokio::sync::oneshot::channel();
+    let scan_gate = Arc::new(tokio::sync::Mutex::new(Some((
+        scan_entered_tx,
+        scan_resume_rx,
+    ))));
     tokio::spawn(async move {
         loop {
             let (mut socket, _) = listener.accept().await.unwrap();
+            let scan_gate = Arc::clone(&scan_gate);
             tokio::spawn(async move {
                 let mut pending = Vec::new();
                 let mut buffer = [0_u8; 4096];
@@ -109,24 +132,47 @@ async fn spawn_analysis_cluster() -> u16 {
                     pending.extend_from_slice(&buffer[..size]);
                     while let Some((consumed, command)) = parse_resp_command(&pending) {
                         pending.drain(..consumed);
-                        let response: String = match command.first().map(Vec::as_slice) {
-                            Some(b"CLUSTER") => format!(
+                        let response: String = match (
+                            command.first().map(Vec::as_slice),
+                            command.get(1).map(Vec::as_slice),
+                        ) {
+                            (Some(b"CLUSTER"), Some(b"SLOTS")) => format!(
                                 "*1\r\n*3\r\n:0\r\n:16383\r\n*2\r\n$9\r\n127.0.0.1\r\n:{port}\r\n"
                             ),
-                            Some(b"PING") => "+PONG\r\n".into(),
-                            Some(b"INFO")
+                            (Some(b"CLUSTER"), Some(b"SHARDS")) => {
+                                "-ERR unknown subcommand 'SHARDS'\r\n".into()
+                            }
+                            (Some(b"CLUSTER"), Some(b"NODES")) => {
+                                let body = format!(
+                                    "analysis-node 127.0.0.1:{port}@1 master - 0 0 1 connected 0-8191\nfailed-node 127.0.0.1:{unavailable_port}@1 master - 0 0 2 connected 8192-16383\n"
+                                );
+                                format!("${}\r\n{body}\r\n", body.len())
+                            }
+                            (Some(b"PING"), _) => "+PONG\r\n".into(),
+                            (Some(b"INFO"), _)
                                 if command.get(1).map(Vec::as_slice) == Some(b"keyspace") =>
                             {
                                 "-ERR keyspace unavailable\r\n".into()
                             }
-                            Some(b"INFO") => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
-                            Some(b"MODULE") => "*0\r\n".into(),
-                            Some(b"SCAN") => "*2\r\n$1\r\n0\r\n*1\r\n$5\r\nkey:1\r\n".into(),
-                            Some(b"TYPE") => "+string\r\n".into(),
-                            Some(b"MEMORY") => ":64\r\n".into(),
-                            Some(b"TTL") => ":-1\r\n".into(),
-                            Some(b"STRLEN") => ":3\r\n".into(),
-                            Some(b"DBSIZE") => ":7\r\n".into(),
+                            (Some(b"INFO"), _) => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                            (Some(b"MODULE"), _) => "*0\r\n".into(),
+                            (Some(b"SCAN"), _) => {
+                                if let Some((entered, resume)) = scan_gate.lock().await.take() {
+                                    let _ = entered.send(());
+                                    let _ = resume.await;
+                                }
+                                let mut response = format!("*2\r\n$1\r\n0\r\n*{key_count}\r\n");
+                                for index in 1..=key_count {
+                                    let key = format!("key:{index}");
+                                    response.push_str(&format!("${}\r\n{key}\r\n", key.len()));
+                                }
+                                response
+                            }
+                            (Some(b"TYPE"), _) => "+string\r\n".into(),
+                            (Some(b"MEMORY"), _) => ":64\r\n".into(),
+                            (Some(b"TTL"), _) => ":-1\r\n".into(),
+                            (Some(b"STRLEN"), _) => ":3\r\n".into(),
+                            (Some(b"DBSIZE"), _) => ":7\r\n".into(),
                             _ => "+OK\r\n".into(),
                         };
                         socket.write_all(response.as_bytes()).await.unwrap();
@@ -135,7 +181,7 @@ async fn spawn_analysis_cluster() -> u16 {
             });
         }
     });
-    port
+    (port, scan_entered_rx, scan_resume_tx)
 }
 
 async fn spawn_select_gated_analysis_server() -> (
@@ -247,27 +293,270 @@ fn parse_resp_command(buffer: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
 
 #[tokio::test]
 async fn cluster_routes_existing_database_analysis_helpers() {
-    let port = spawn_analysis_cluster().await;
-    let service = RedisService::new(
+    let (port, scan_entered, scan_resume) = spawn_analysis_cluster_with_keys(1).await;
+    let service = Arc::new(RedisService::new(
         Arc::new(TestProfiles {
             profiles: vec![cluster_profile(port)],
         }),
         Arc::new(TestSecrets),
-    );
+    ));
     service.open_connection("cluster-analysis").await.unwrap();
 
-    let report = service
-        .analyze_database(AnalyzeDatabaseInput {
-            connection_id: "cluster-analysis".into(),
-            pattern: "*".into(),
-            delimiter: ":".into(),
-            max_keys: 1_000,
-        })
-        .await
-        .unwrap();
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .analyze_database(AnalyzeDatabaseInput {
+                connection_id: "cluster-analysis".into(),
+                pattern: "*".into(),
+                delimiter: ":".into(),
+                max_keys: 1_000,
+            })
+            .await
+    });
+    scan_entered.await.unwrap();
+    scan_resume.send(()).unwrap();
+    let report = request.await.unwrap().unwrap();
     assert_eq!(report.database, 0);
     assert_eq!(report.progress.processed, 1);
     assert_eq!(report.total_memory.total, 64);
+    assert_eq!(report.node_results.len(), 1);
+    assert_eq!(report.node_results[0].node_id, "analysis-node");
+    assert!(report.node_results[0].report.node_results.is_empty());
+    assert!(report.node_results[0].report.failed_nodes.is_empty());
+    assert_eq!(
+        report.failed_nodes,
+        vec![NodeFailure {
+            node_id: "failed-node".into(),
+            code: "CLUSTER_NODE_UNAVAILABLE".into(),
+        }]
+    );
+    assert!(report.progress.truncated);
+}
+
+#[tokio::test]
+async fn cluster_analysis_rejects_a_result_after_the_active_generation_is_closed() {
+    let (port, scan_entered, scan_resume) = spawn_analysis_cluster_with_keys(1).await;
+    let service = Arc::new(RedisService::new(
+        Arc::new(TestProfiles {
+            profiles: vec![cluster_profile(port)],
+        }),
+        Arc::new(TestSecrets),
+    ));
+    service.open_connection("cluster-analysis").await.unwrap();
+
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .analyze_database(AnalyzeDatabaseInput {
+                connection_id: "cluster-analysis".into(),
+                pattern: "*".into(),
+                delimiter: ":".into(),
+                max_keys: 1_000,
+            })
+            .await
+    });
+    scan_entered.await.unwrap();
+    service.close_connection("cluster-analysis").await.unwrap();
+    scan_resume.send(()).unwrap();
+
+    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+}
+
+#[tokio::test]
+async fn cluster_analysis_limits_a_complete_scan_page_to_its_primary_quota() {
+    let (port, scan_entered, scan_resume) = spawn_analysis_cluster_with_keys(700).await;
+    let service = Arc::new(RedisService::new(
+        Arc::new(TestProfiles {
+            profiles: vec![cluster_profile(port)],
+        }),
+        Arc::new(TestSecrets),
+    ));
+    service.open_connection("cluster-analysis").await.unwrap();
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .analyze_database(AnalyzeDatabaseInput {
+                connection_id: "cluster-analysis".into(),
+                pattern: "*".into(),
+                delimiter: ":".into(),
+                max_keys: 1_000,
+            })
+            .await
+    });
+    scan_entered.await.unwrap();
+    scan_resume.send(()).unwrap();
+    let report = request.await.unwrap().unwrap();
+    // Two advertised primaries receive 500 keys each; one is unavailable.
+    assert_eq!(report.progress.scanned, 700);
+    assert_eq!(report.progress.processed, 500);
+    assert_eq!(report.total_keys.total, 500);
+    assert_eq!(report.total_memory.total, 32_000);
+    assert_eq!(report.node_results[0].report.progress.max_keys, 500);
+    assert_eq!(report.node_results[0].report.progress.processed, 500);
+    assert!(report.node_results[0].report.progress.truncated);
+    assert_eq!(report.progress.max_keys, 1_000);
+}
+
+fn node_report(node_id: &str, keys: &[(&str, u64)]) -> NodeAnalysisState {
+    let mut accumulator = AnalysisAccumulator::new(0, "*".into(), ":".into(), 500);
+    for (key, memory_bytes) in keys {
+        accumulator.process(AnalysisKeyMetadata {
+            key: (*key).into(),
+            key_type: "string".into(),
+            length: Some(1),
+            memory_bytes: Some(*memory_bytes),
+            ttl_seconds: -1,
+        });
+    }
+    NodeAnalysisState {
+        node_id: node_id.into(),
+        endpoint: ConnectionEndpoint {
+            host: format!("{node_id}.example"),
+            port: 7000,
+        },
+        accumulator,
+        progress: AnalysisProgress {
+            scanned: keys.len() as u64,
+            processed: keys.len() as u64,
+            max_keys: 500,
+            truncated: false,
+        },
+    }
+}
+
+#[test]
+fn cluster_analysis_merges_successful_primaries_without_recursive_reports() {
+    let report = merge_node_reports(
+        vec![
+            node_report("node-2", &[("orders:2", 20), ("orders:3", 30)]),
+            node_report("node-1", &[("orders:1", 10)]),
+        ],
+        vec![NodeFailure {
+            node_id: "node-3".into(),
+            code: "CLUSTER_NODE_UNAVAILABLE".into(),
+        }],
+    );
+
+    assert_eq!(report.total_keys.total, 3);
+    assert_eq!(report.total_memory.total, 60);
+    assert_eq!(report.progress.scanned, 3);
+    assert_eq!(report.progress.processed, 3);
+    assert!(report.progress.truncated);
+    assert_eq!(report.top_namespaces_by_keys[0].namespace, "orders");
+    assert_eq!(report.top_namespaces_by_keys[0].keys, 3);
+    assert_eq!(report.node_results[0].node_id, "node-1");
+    assert_eq!(report.node_results[1].node_id, "node-2");
+    assert!(report
+        .node_results
+        .iter()
+        .all(|node| node.report.node_results.is_empty() && node.report.failed_nodes.is_empty()));
+    assert_eq!(report.failed_nodes[0].node_id, "node-3");
+}
+
+#[test]
+fn cluster_analysis_ranks_namespaces_after_merging_all_node_accumulators() {
+    let mut nodes = Vec::new();
+    for node_index in 0..2 {
+        let mut keys = Vec::new();
+        // Each node's 15 local leaders hide the shared namespace in both rankings.
+        for namespace in 0..15 {
+            for key in 0..3 {
+                keys.push((format!("node{node_index}-ns{namespace}:{key}"), 1));
+            }
+        }
+        keys.push(("shared:1".to_owned(), 1));
+        keys.push(("shared:2".to_owned(), 1));
+        let borrowed = keys
+            .iter()
+            .map(|(key, bytes)| (key.as_str(), *bytes))
+            .collect::<Vec<_>>();
+        nodes.push(node_report(&format!("node-{node_index}"), &borrowed));
+    }
+    let report = merge_node_reports(nodes, vec![]);
+    assert_eq!(report.top_namespaces_by_keys[0].namespace, "shared");
+    assert_eq!(report.top_namespaces_by_keys[0].keys, 4);
+    assert_eq!(report.top_namespaces_by_memory[0].namespace, "shared");
+    assert_eq!(report.top_namespaces_by_memory[0].memory_bytes, 4);
+    assert_eq!(report.top_namespaces_by_keys.len(), 15);
+    assert!(report.node_results.iter().all(|node| {
+        node.report.top_namespaces_by_keys.len() == 15
+            && node
+                .report
+                .top_namespaces_by_keys
+                .iter()
+                .all(|item| item.namespace != "shared")
+            && node
+                .report
+                .top_namespaces_by_memory
+                .iter()
+                .all(|item| item.namespace != "shared")
+    }));
+}
+
+#[test]
+fn cluster_analysis_preserves_namespaces_only_ranked_by_memory() {
+    let mut keys = (0..15)
+        .flat_map(|namespace| (0..2).map(move |key| (format!("small{namespace}:{key}"), 1)))
+        .collect::<Vec<_>>();
+    keys.push(("large:1".to_owned(), 1_000));
+    let borrowed = keys
+        .iter()
+        .map(|(key, bytes)| (key.as_str(), *bytes))
+        .collect::<Vec<_>>();
+    let report = merge_node_reports(vec![node_report("node-1", &borrowed)], vec![]);
+    assert_eq!(report.top_namespaces_by_memory[0].namespace, "large");
+    assert_eq!(report.top_namespaces_by_memory[0].memory_bytes, 1_000);
+    assert!(report
+        .top_namespaces_by_keys
+        .iter()
+        .all(|item| item.namespace != "large"));
+}
+
+#[test]
+fn analysis_memory_counters_saturate_within_and_across_nodes() {
+    let report = merge_node_reports(
+        vec![
+            node_report("node-1", &[("huge:1", u64::MAX), ("huge:2", 1)]),
+            node_report("node-2", &[("huge:3", 1)]),
+        ],
+        vec![],
+    );
+    assert_eq!(report.total_memory.total, u64::MAX);
+    assert_eq!(report.total_memory.observed, 3);
+    assert_eq!(report.total_memory.types[0].total, u64::MAX);
+    assert_eq!(report.top_namespaces_by_memory[0].memory_bytes, u64::MAX);
+    assert_eq!(report.top_namespaces_by_memory[0].keys, 3);
+    assert_eq!(report.expiration_groups[0].memory_bytes, u64::MAX);
+    assert_eq!(report.node_results[0].report.total_memory.total, u64::MAX);
+}
+
+#[test]
+fn old_standalone_analysis_json_defaults_node_arrays_to_empty() {
+    let report = AnalysisAccumulator::new(0, "*".into(), ":".into(), 1_000).finish(0, 0, false);
+    let mut value = serde_json::to_value(report).unwrap();
+    value.as_object_mut().unwrap().remove("node_results");
+    value.as_object_mut().unwrap().remove("failed_nodes");
+
+    let restored =
+        serde_json::from_value::<redix_lib::domain::DatabaseAnalysisReport>(value).unwrap();
+    assert!(restored.node_results.is_empty());
+    assert!(restored.failed_nodes.is_empty());
+}
+
+#[test]
+fn cluster_analysis_divides_the_key_budget_fairly_without_losing_remainder() {
+    assert_eq!(
+        allocate_primary_key_limits(1_000, 3).unwrap(),
+        vec![334, 333, 333]
+    );
+    assert_eq!(
+        allocate_primary_key_limits(1_000, 0),
+        Err(AppError::ClusterTopologyFailed)
+    );
+    assert_eq!(
+        allocate_primary_key_limits(1_000, 129),
+        Err(AppError::ClusterTopologyFailed)
+    );
 }
 
 #[tokio::test]

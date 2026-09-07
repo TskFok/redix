@@ -5,7 +5,8 @@ use tauri::Manager;
 use redix_lib::{
     commands::{
         analysis_history, array, browser, collection, connections, database, json, observability,
-        query_library, search, search_aggregate, settings, stream_entries, vector_set, workbench,
+        query_library, search, search_aggregate, settings, stream_entries, topology, vector_set,
+        workbench,
     },
     domain::{
         AppSettings, CliCommandInput, CliSessionInput, ClusterConfig, CommandHistoryEntry,
@@ -104,6 +105,8 @@ fn exposes_all_tauri_command_adapters() {
     let _ = database::get_database_overview;
     let _ = database::analyze_database;
     let _ = database::select_database;
+    let _ = topology::get_cluster_topology;
+    let _ = topology::refresh_cluster_topology;
     let _ = json::get_module_capabilities;
     let _ = json::get_json_path;
     let _ = json::set_json_path;
@@ -504,6 +507,33 @@ async fn spawn_command_cluster() -> u16 {
         }
     });
     port
+}
+
+#[tokio::test]
+async fn topology_commands_reject_an_open_standalone_connection_with_a_fixed_error() {
+    let port = spawn_command_cluster().await;
+    let mut profile = cluster_profile(port);
+    profile.id = "standalone-topology".into();
+    profile.cluster = None;
+    let app = tauri::test::mock_builder()
+        .manage(AppState::new(
+            Arc::new(StoredProfiles(Mutex::new(vec![profile]))),
+            Arc::new(EmptySecrets),
+        ))
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("test app must build");
+    connections::open_connection(app.state(), "standalone-topology".into())
+        .await
+        .unwrap();
+
+    assert_eq!(
+        topology::get_cluster_topology(app.state(), "standalone-topology".into()).await,
+        Err(AppError::UnsupportedFeature)
+    );
+    assert_eq!(
+        topology::refresh_cluster_topology(app.state(), "standalone-topology".into()).await,
+        Err(AppError::UnsupportedFeature)
+    );
 }
 
 async fn spawn_paused_cluster() -> (

@@ -129,6 +129,8 @@ pub fn run() {
             commands::database::get_database_overview,
             commands::database::analyze_database,
             commands::database::select_database,
+            commands::topology::get_cluster_topology,
+            commands::topology::refresh_cluster_topology,
             commands::json::get_module_capabilities,
             commands::json::get_json_path,
             commands::json::set_json_path,

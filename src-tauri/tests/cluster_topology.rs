@@ -1,12 +1,23 @@
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc, Mutex,
+};
+
 use redis::Value;
 use redix_lib::{
-    domain::{ClusterNodeHealth, ClusterNodeRole, SlotRange},
+    domain::{
+        ClusterConfig, ClusterNodeHealth, ClusterNodeRole, ConnectionEndpoint, ConnectionProfile,
+        NodeFailure, SlotRange,
+    },
     error::AppError,
+    persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
     redis::{
-        merge_node_metrics, parse_cluster_info, parse_cluster_nodes, parse_cluster_shards,
-        parse_cluster_shards_for_tls,
+        apply_node_info_results, cluster_node_info_command, merge_node_metrics, parse_cluster_info,
+        parse_cluster_node_info_reply, parse_cluster_nodes, parse_cluster_shards,
+        parse_cluster_shards_for_tls, ClusterNodeInfoResult, RedisOperations, RedisService,
     },
 };
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn bulk(value: &str) -> Value {
     Value::BulkString(value.as_bytes().to_vec())
@@ -311,6 +322,81 @@ fn info_parser_and_metric_merge_tolerate_partial_sections() {
 }
 
 #[test]
+fn topology_keeps_all_nodes_and_sorts_sanitized_info_failures() {
+    let mut nodes = parse_cluster_nodes(
+        "node-1 10.0.0.1:7001@17001 master - 0 0 1 connected 0-5000\n\
+         node-2 10.0.0.2:7002@17002 master - 0 0 2 connected 5001-10000\n\
+         node-3 10.0.0.3:7003@17003 master - 0 0 3 connected 10001-16383\n",
+    )
+    .unwrap();
+
+    let failures = apply_node_info_results(
+        &mut nodes,
+        vec![
+            ClusterNodeInfoResult::failure("node-3"),
+            ClusterNodeInfoResult::success(
+                "node-1",
+                ConnectionEndpoint {
+                    host: "127.0.0.1".into(),
+                    port: 47001,
+                },
+                "used_memory:1024\nconnected_clients:4\n",
+            ),
+            ClusterNodeInfoResult::failure("node-2"),
+        ],
+    );
+
+    assert_eq!(nodes.len(), 3);
+    assert_eq!(nodes[0].endpoint.host, "10.0.0.1");
+    assert_eq!(nodes[0].metrics.used_memory_bytes, Some(1024));
+    assert_eq!(nodes[0].metrics.connected_clients, Some(4));
+    assert_eq!(nodes[0].connection_endpoint.as_ref().unwrap().port, 47001);
+    assert_eq!(nodes[1].connection_endpoint, None);
+    assert_eq!(nodes[2].connection_endpoint, None);
+    assert_eq!(
+        failures,
+        vec![
+            NodeFailure {
+                node_id: "node-2".into(),
+                code: "CLUSTER_NODE_UNAVAILABLE".into(),
+            },
+            NodeFailure {
+                node_id: "node-3".into(),
+                code: "CLUSTER_NODE_UNAVAILABLE".into(),
+            },
+        ]
+    );
+}
+
+#[test]
+fn node_info_command_requests_only_the_explicit_bounded_sections() {
+    assert_eq!(
+        cluster_node_info_command().get_packed_command(),
+        b"*7\r\n$4\r\nINFO\r\n$6\r\nserver\r\n$7\r\nclients\r\n$6\r\nmemory\r\n$5\r\nstats\r\n$11\r\nreplication\r\n$8\r\nkeyspace\r\n"
+            .to_vec()
+    );
+}
+
+#[test]
+fn node_info_reply_rejects_oversized_non_utf8_and_wrapped_payloads() {
+    assert_eq!(
+        parse_cluster_node_info_reply(Value::BulkString(vec![b'x'; 4 * 1024 * 1024 + 1])),
+        Err(AppError::ClusterNodeUnavailable)
+    );
+    assert_eq!(
+        parse_cluster_node_info_reply(Value::BulkString(vec![0xff])),
+        Err(AppError::ClusterNodeUnavailable)
+    );
+    assert_eq!(
+        parse_cluster_node_info_reply(Value::Attribute {
+            data: Box::new(Value::BulkString(b"used_memory:1\n".to_vec())),
+            attributes: vec![(bulk("source"), bulk("node"))],
+        }),
+        Err(AppError::ClusterNodeUnavailable)
+    );
+}
+
+#[test]
 fn info_and_metrics_enforce_bounds_and_ignore_malformed_optional_values() {
     assert_eq!(
         parse_cluster_info("cluster_slots_ok:16385\n"),
@@ -502,6 +588,542 @@ fn topology_limits_accept_exact_boundaries_and_reject_the_next_value() {
         )),
         Err(AppError::ClusterTopologyFailed)
     );
+}
+
+struct TopologyProfiles(Vec<ConnectionProfile>);
+
+impl ProfileRepository for TopologyProfiles {
+    fn load(&self) -> Result<Vec<ConnectionProfile>, AppError> {
+        Ok(self.0.clone())
+    }
+
+    fn save(&self, _profiles: &[ConnectionProfile]) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+struct TopologySecrets;
+
+impl SecretStore for TopologySecrets {
+    fn read(&self, _connection_id: &str) -> Result<Option<ConnectionSecrets>, AppError> {
+        Ok(None)
+    }
+
+    fn write(&self, _connection_id: &str, _secrets: &ConnectionSecrets) -> Result<(), AppError> {
+        Ok(())
+    }
+
+    fn delete(&self, _connection_id: &str) -> Result<(), AppError> {
+        Ok(())
+    }
+}
+
+fn topology_profile(port: u16) -> ConnectionProfile {
+    ConnectionProfile {
+        id: "topology-cluster".into(),
+        name: "Topology cluster".into(),
+        host: "127.0.0.1".into(),
+        port,
+        username: None,
+        database: 0,
+        has_password: false,
+        tls: false,
+        verify_server_cert: true,
+        ca_certificate_name: None,
+        client_certificate_name: None,
+        has_ca_certificate: false,
+        has_client_certificate: false,
+        ssh: None,
+        sentinel: None,
+        cluster: Some(ClusterConfig {
+            nodes: vec![ConnectionEndpoint {
+                host: "127.0.0.1".into(),
+                port,
+            }],
+            read_from_replicas: false,
+        }),
+    }
+}
+
+fn parse_resp_command(buffer: &[u8]) -> Option<(usize, Vec<Vec<u8>>)> {
+    if buffer.first() != Some(&b'*') {
+        return None;
+    }
+    let header_end = buffer.windows(2).position(|pair| pair == b"\r\n")?;
+    let count = std::str::from_utf8(&buffer[1..header_end])
+        .ok()?
+        .parse::<usize>()
+        .ok()?;
+    let mut offset = header_end + 2;
+    let mut args = Vec::with_capacity(count);
+    for _ in 0..count {
+        let length_end = buffer[offset..]
+            .windows(2)
+            .position(|pair| pair == b"\r\n")?
+            + offset;
+        let length = std::str::from_utf8(&buffer[offset + 1..length_end])
+            .ok()?
+            .parse::<usize>()
+            .ok()?;
+        offset = length_end + 2;
+        let end = offset.checked_add(length)?;
+        if buffer.get(end..end + 2)? != b"\r\n" {
+            return None;
+        }
+        args.push(buffer[offset..end].to_vec());
+        offset = end + 2;
+    }
+    Some((offset, args))
+}
+
+async fn spawn_topology_cluster(
+    gate_node_info: bool,
+) -> (
+    u16,
+    Arc<AtomicUsize>,
+    Arc<Mutex<Vec<Vec<Vec<u8>>>>>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    spawn_topology_cluster_options(gate_node_info, false, false, false).await
+}
+
+async fn spawn_topology_cluster_options(
+    gate_node_info: bool,
+    healthy_nodes: bool,
+    gate_keyspace: bool,
+    fail_keyspace: bool,
+) -> (
+    u16,
+    Arc<AtomicUsize>,
+    Arc<Mutex<Vec<Vec<Vec<u8>>>>>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    spawn_topology_cluster_info_options(
+        gate_node_info,
+        healthy_nodes,
+        gate_keyspace,
+        fail_keyspace,
+        None,
+    )
+    .await
+}
+
+async fn spawn_topology_cluster_info_options(
+    gate_node_info: bool,
+    healthy_nodes: bool,
+    gate_keyspace: bool,
+    fail_keyspace: bool,
+    multi_info_error: Option<&'static str>,
+) -> (
+    u16,
+    Arc<AtomicUsize>,
+    Arc<Mutex<Vec<Vec<Vec<u8>>>>>,
+    tokio::sync::oneshot::Receiver<()>,
+    tokio::sync::oneshot::Sender<()>,
+) {
+    let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let unavailable = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+        .await
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let cluster_info_calls = Arc::new(AtomicUsize::new(0));
+    let node_info_commands = Arc::new(Mutex::new(Vec::new()));
+    let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+    let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+    let gate = Arc::new(tokio::sync::Mutex::new(Some((entered_tx, resume_rx))));
+    let calls = Arc::clone(&cluster_info_calls);
+    let info_commands = Arc::clone(&node_info_commands);
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let calls = Arc::clone(&calls);
+            let info_commands = Arc::clone(&info_commands);
+            let gate = Arc::clone(&gate);
+            tokio::spawn(async move {
+                let mut attempted_multi_info = false;
+                let mut pending = Vec::new();
+                let mut buffer = [0_u8; 4096];
+                loop {
+                    let size = match socket.read(&mut buffer).await {
+                        Ok(0) | Err(_) => return,
+                        Ok(size) => size,
+                    };
+                    pending.extend_from_slice(&buffer[..size]);
+                    while let Some((consumed, command)) = parse_resp_command(&pending) {
+                        pending.drain(..consumed);
+                        let response = match (
+                            command.first().map(Vec::as_slice),
+                            command.get(1).map(Vec::as_slice),
+                        ) {
+                            (Some(b"CLUSTER"), Some(b"SLOTS")) => format!(
+                                "*1\r\n*3\r\n:0\r\n:16383\r\n*2\r\n$9\r\n127.0.0.1\r\n:{port}\r\n"
+                            ),
+                            (Some(b"CLUSTER"), Some(b"SHARDS")) => {
+                                "-ERR unknown subcommand 'SHARDS'\r\n".into()
+                            }
+                            (Some(b"CLUSTER"), Some(b"NODES")) => {
+                                let second_port = if healthy_nodes { port } else { unavailable };
+                                let mut body = format!(
+                                    "node-1 127.0.0.1:{port}@1 master - 0 0 1 connected 0-8191\nnode-2 127.0.0.1:{second_port}@1 master - 0 0 2 connected 8192-16383\n"
+                                );
+                                if healthy_nodes {
+                                    body.push_str(&format!("replica-1 127.0.0.1:{port}@1 slave node-1 0 0 1 connected\n"));
+                                }
+                                format!("${}\r\n{body}\r\n", body.len())
+                            }
+                            (Some(b"CLUSTER"), Some(b"INFO")) => {
+                                calls.fetch_add(1, Ordering::SeqCst);
+                                let body = "cluster_state:ok\ncluster_slots_assigned:16384\ncluster_slots_ok:16384\ncluster_size:2\ncluster_known_nodes:2\n";
+                                format!("${}\r\n{body}\r\n", body.len())
+                            }
+                            (Some(b"INFO"), _) if command.len() == 7 => {
+                                info_commands.lock().unwrap().push(command);
+                                attempted_multi_info = true;
+                                if gate_node_info {
+                                    if let Some((entered, resume)) = gate.lock().await.take() {
+                                        let _ = entered.send(());
+                                        let _ = resume.await;
+                                    }
+                                }
+                                if let Some(error) = multi_info_error {
+                                    format!("-{error}\r\n")
+                                } else {
+                                    let body = "# Server\nuptime_in_seconds:60\n# Clients\nconnected_clients:4\n# Memory\nused_memory:1024\n# Stats\ninstantaneous_ops_per_sec:7\ntotal_commands_processed:12\n";
+                                    format!("${}\r\n{body}\r\n", body.len())
+                                }
+                            }
+                            (Some(b"INFO"), None) if attempted_multi_info => {
+                                info_commands.lock().unwrap().push(command);
+                                let body = "# Server\nredis_version:6.2.0\nuptime_in_seconds:60\n# Clients\nconnected_clients:4\n# Memory\nused_memory:1024\n# Stats\ninstantaneous_ops_per_sec:7\ntotal_commands_processed:12\n";
+                                format!("${}\r\n{body}\r\n", body.len())
+                            }
+                            (Some(b"INFO"), Some(b"keyspace")) => {
+                                if gate_keyspace {
+                                    if let Some((entered, resume)) = gate.lock().await.take() {
+                                        let _ = entered.send(());
+                                        let _ = resume.await;
+                                    }
+                                }
+                                if fail_keyspace {
+                                    "-NOPERM keyspace access denied\r\n".into()
+                                } else {
+                                    let body = "# Keyspace\ndb0:keys=7,expires=2,avg_ttl=100\n";
+                                    format!("${}\r\n{body}\r\n", body.len())
+                                }
+                            }
+                            (Some(b"DBSIZE"), _) => ":7\r\n".into(),
+                            (Some(b"INFO"), _) => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
+                            (Some(b"MODULE"), _) => "*0\r\n".into(),
+                            (Some(b"PING"), _) => "+PONG\r\n".into(),
+                            _ => "+OK\r\n".into(),
+                        };
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                }
+            });
+        }
+    });
+    (
+        port,
+        cluster_info_calls,
+        node_info_commands,
+        entered_rx,
+        resume_tx,
+    )
+}
+
+#[tokio::test]
+async fn live_topology_redis6_info_falls_back_on_the_same_connection() {
+    for error in [
+        "ERR syntax error",
+        "ERR wrong number of arguments for 'info' command",
+        "ERR wrong number of arguments for 'INFO' command",
+    ] {
+        let (port, cluster_info_calls, commands, _, _) =
+            spawn_topology_cluster_info_options(false, true, false, false, Some(error)).await;
+        let service = RedisService::new(
+            Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+            Arc::new(TopologySecrets),
+        );
+        service.open_connection("topology-cluster").await.unwrap();
+        let topology = service
+            .get_cluster_topology("topology-cluster")
+            .await
+            .unwrap();
+        assert!(
+            topology.failures.is_empty(),
+            "{error}: {:?}",
+            topology.failures
+        );
+        assert_eq!(topology.nodes.len(), 3);
+        assert!(topology
+            .nodes
+            .iter()
+            .all(|node| node.metrics.used_memory_bytes == Some(1024)));
+        assert_eq!(cluster_info_calls.load(Ordering::SeqCst), 1);
+        let commands = commands.lock().unwrap();
+        assert_eq!(
+            commands.iter().filter(|command| command.len() == 7).count(),
+            3
+        );
+        assert_eq!(
+            commands
+                .iter()
+                .filter(|command| command.as_slice() == [b"INFO".to_vec()])
+                .count(),
+            3
+        );
+    }
+}
+
+#[tokio::test]
+async fn live_topology_does_not_retry_acl_or_unrelated_info_errors() {
+    for error in [
+        "NOPERM syntax error",
+        "NOPERM this user has no permissions to run the 'info' command",
+        "ERR syntax error: unavailable",
+        "ERR wrong number of arguments for 'get' command",
+        "ERR temporarily unavailable",
+    ] {
+        let (port, cluster_info_calls, commands, _, _) =
+            spawn_topology_cluster_info_options(false, true, false, false, Some(error)).await;
+        let service = RedisService::new(
+            Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+            Arc::new(TopologySecrets),
+        );
+        service.open_connection("topology-cluster").await.unwrap();
+        let topology = service
+            .get_cluster_topology("topology-cluster")
+            .await
+            .unwrap();
+        assert_eq!(topology.failures.len(), 3, "{error}");
+        assert_eq!(cluster_info_calls.load(Ordering::SeqCst), 1);
+        let commands = commands.lock().unwrap();
+        assert_eq!(commands.len(), 3, "{error}");
+        assert!(commands.iter().all(|command| command.len() == 7));
+    }
+}
+
+#[tokio::test]
+async fn cluster_overviews_aggregate_all_instances_but_only_primary_keyspaces() {
+    let (port, _, _, _, _) = spawn_topology_cluster_options(false, true, false, false).await;
+    let service = RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    );
+    service.open_connection("topology-cluster").await.unwrap();
+    let overview = service
+        .get_instance_overview("topology-cluster")
+        .await
+        .unwrap();
+    assert_eq!(overview.redis_mode.as_deref(), Some("cluster"));
+    assert_eq!(overview.used_memory_bytes, Some(3072));
+    assert_eq!(overview.connected_clients, Some(12));
+    assert_eq!(overview.total_commands_processed, Some(36));
+    assert_eq!(overview.uptime_seconds, None);
+    assert_eq!(overview.role, None);
+    let databases = service
+        .get_database_overview("topology-cluster")
+        .await
+        .unwrap();
+    assert_eq!(databases.len(), 1);
+    assert_eq!(databases[0].database, 0);
+    assert_eq!(databases[0].key_count, Some(14));
+    assert_eq!(databases[0].expires, Some(4));
+    assert_eq!(databases[0].avg_ttl_ms, None);
+    assert_eq!(
+        service.get_instance_details("topology-cluster").await,
+        Err(AppError::UnsupportedFeature)
+    );
+}
+
+#[tokio::test]
+async fn cluster_overviews_do_not_present_partial_node_counts_as_complete_totals() {
+    let (port, _, _, _, _) = spawn_topology_cluster(false).await;
+    let service = RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    );
+    service.open_connection("topology-cluster").await.unwrap();
+    let overview = service
+        .get_instance_overview("topology-cluster")
+        .await
+        .unwrap();
+    assert_eq!(overview.used_memory_bytes, None);
+    assert_eq!(overview.connected_clients, None);
+    assert_eq!(overview.total_commands_processed, None);
+    let databases = service
+        .get_database_overview("topology-cluster")
+        .await
+        .unwrap();
+    assert_eq!(databases[0].database, 0);
+    assert_eq!(databases[0].key_count, None);
+    assert_eq!(databases[0].expires, None);
+}
+
+#[tokio::test]
+async fn cluster_database_overview_rejects_a_replaced_generation() {
+    let (port, _, _, entered, resume) =
+        spawn_topology_cluster_options(false, true, true, false).await;
+    let service = Arc::new(RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    ));
+    service.open_connection("topology-cluster").await.unwrap();
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .get_database_overview("topology-cluster")
+            .await
+    });
+    entered.await.unwrap();
+    service.open_connection("topology-cluster").await.unwrap();
+    resume.send(()).unwrap();
+    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+}
+
+#[tokio::test]
+async fn cluster_database_overview_falls_back_to_primary_dbsize_without_inventing_expirations() {
+    let (port, _, _, _, _) = spawn_topology_cluster_options(false, true, false, true).await;
+    let service = RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    );
+    service.open_connection("topology-cluster").await.unwrap();
+    let databases = service
+        .get_database_overview("topology-cluster")
+        .await
+        .unwrap();
+    assert_eq!(databases.len(), 1);
+    assert_eq!(databases[0].database, 0);
+    assert_eq!(databases[0].key_count, Some(14));
+    assert_eq!(databases[0].expires, None);
+    assert_eq!(databases[0].avg_ttl_ms, None);
+}
+
+#[test]
+fn cluster_overview_missing_and_overflowing_metrics_are_independently_unknown() {
+    use redix_lib::domain::{ClusterTopology, DatabaseOverview, InstanceOverview};
+    let mut nodes = parse_cluster_nodes("a 127.0.0.1:7000@1 master - 0 0 1 connected 0-8191\nb 127.0.0.1:7001@1 master - 0 0 2 connected 8192-16383\n").unwrap();
+    nodes[0].metrics.used_memory_bytes = Some(u64::MAX);
+    nodes[1].metrics.used_memory_bytes = Some(1);
+    nodes[0].metrics.connected_clients = Some(4);
+    nodes[1].metrics.connected_clients = Some(5);
+    nodes[0].metrics.commands_processed = Some(10);
+    let topology = ClusterTopology {
+        summary: parse_cluster_info("cluster_state:ok\n").unwrap(),
+        nodes,
+        failures: vec![],
+    };
+    let overview = InstanceOverview::from_cluster_topology(&topology);
+    assert_eq!(overview.used_memory_bytes, None);
+    assert_eq!(overview.connected_clients, Some(9));
+    assert_eq!(overview.total_commands_processed, None);
+    let databases = [
+        Some(DatabaseOverview {
+            database: 0,
+            key_count: Some(u64::MAX),
+            expires: Some(1),
+            avg_ttl_ms: Some(100),
+        }),
+        Some(DatabaseOverview {
+            database: 0,
+            key_count: Some(1),
+            expires: Some(2),
+            avg_ttl_ms: Some(200),
+        }),
+    ];
+    let database = DatabaseOverview::from_cluster_primaries(&databases);
+    assert_eq!(database.key_count, None);
+    assert_eq!(database.expires, Some(3));
+    assert_eq!(database.avg_ttl_ms, None);
+    assert_eq!(
+        DatabaseOverview::from_cluster_primaries(&[]).key_count,
+        None
+    );
+}
+
+#[tokio::test]
+async fn live_topology_falls_back_only_for_unknown_shards_and_keeps_failed_nodes() {
+    let (port, cluster_info_calls, node_info_commands, _entered, _resume) =
+        spawn_topology_cluster(false).await;
+    let service = RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    );
+    service.open_connection("topology-cluster").await.unwrap();
+
+    let topology = service
+        .get_cluster_topology("topology-cluster")
+        .await
+        .unwrap();
+    let refreshed = service
+        .refresh_cluster_topology("topology-cluster")
+        .await
+        .unwrap();
+
+    assert_eq!(cluster_info_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(topology.summary.slots_ok, 16_384);
+    assert_eq!(topology.nodes.len(), 2);
+    assert_eq!(topology.nodes[0].endpoint.port, port);
+    assert_eq!(
+        topology.nodes[0].connection_endpoint.as_ref().unwrap().port,
+        port
+    );
+    assert_eq!(topology.nodes[0].metrics.used_memory_bytes, Some(1024));
+    assert_eq!(topology.nodes[1].connection_endpoint, None);
+    assert_eq!(
+        topology.failures,
+        vec![NodeFailure {
+            node_id: "node-2".into(),
+            code: "CLUSTER_NODE_UNAVAILABLE".into(),
+        }]
+    );
+    assert_eq!(refreshed.failures, topology.failures);
+    let commands = node_info_commands.lock().unwrap();
+    assert_eq!(commands.len(), 2);
+    assert!(commands.iter().all(|command| {
+        command
+            == &[
+                b"INFO".to_vec(),
+                b"server".to_vec(),
+                b"clients".to_vec(),
+                b"memory".to_vec(),
+                b"stats".to_vec(),
+                b"replication".to_vec(),
+                b"keyspace".to_vec(),
+            ]
+    }));
+}
+
+#[tokio::test]
+async fn topology_rejects_a_result_after_the_active_generation_is_closed() {
+    let (port, _cluster_info_calls, _node_info_commands, entered, resume) =
+        spawn_topology_cluster(true).await;
+    let service = Arc::new(RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    ));
+    service.open_connection("topology-cluster").await.unwrap();
+
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .get_cluster_topology("topology-cluster")
+            .await
+    });
+    entered.await.unwrap();
+    service.close_connection("topology-cluster").await.unwrap();
+    resume.send(()).unwrap();
+
+    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
 }
 
 #[test]

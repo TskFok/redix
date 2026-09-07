@@ -1,9 +1,11 @@
-use ::redis::Value;
+use std::collections::HashMap;
+
+use ::redis::{Cmd, Value};
 
 use crate::{
     domain::{
         ClusterNode, ClusterNodeHealth, ClusterNodeMetrics, ClusterNodeRole, ClusterSummary,
-        ConnectionEndpoint, SlotRange,
+        ConnectionEndpoint, NodeFailure, SlotRange,
     },
     error::AppError,
 };
@@ -13,6 +15,97 @@ const MAX_DECODED_STRUCTURAL_ENVELOPE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NODES: usize = 128;
 const MAX_SLOT_RANGES: usize = 16_384;
 const MAX_ID_OR_HOST_BYTES: usize = 256;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClusterNodeInfoResult {
+    node_id: String,
+    connection_endpoint: Option<ConnectionEndpoint>,
+    info: Option<String>,
+}
+
+impl ClusterNodeInfoResult {
+    pub fn success(
+        node_id: impl Into<String>,
+        connection_endpoint: ConnectionEndpoint,
+        info: impl Into<String>,
+    ) -> Self {
+        Self {
+            node_id: node_id.into(),
+            connection_endpoint: Some(connection_endpoint),
+            info: Some(info.into()),
+        }
+    }
+
+    pub fn failure(node_id: impl Into<String>) -> Self {
+        Self {
+            node_id: node_id.into(),
+            connection_endpoint: None,
+            info: None,
+        }
+    }
+}
+
+pub fn cluster_node_info_command() -> Cmd {
+    let mut command = ::redis::cmd("INFO");
+    command
+        .arg("server")
+        .arg("clients")
+        .arg("memory")
+        .arg("stats")
+        .arg("replication")
+        .arg("keyspace");
+    command
+}
+
+pub fn parse_cluster_node_info_reply(value: Value) -> Result<String, AppError> {
+    let bytes = match &value {
+        Value::BulkString(bytes) => bytes.as_slice(),
+        Value::SimpleString(text) => text.as_bytes(),
+        _ => return Err(AppError::ClusterNodeUnavailable),
+    };
+    if bytes.len() > MAX_TOPOLOGY_TEXT_BYTES {
+        return Err(AppError::ClusterNodeUnavailable);
+    }
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|_| AppError::ClusterNodeUnavailable)
+}
+
+pub fn apply_node_info_results(
+    nodes: &mut [ClusterNode],
+    results: Vec<ClusterNodeInfoResult>,
+) -> Vec<NodeFailure> {
+    let mut results = results
+        .into_iter()
+        .map(|result| (result.node_id.clone(), result))
+        .collect::<HashMap<_, _>>();
+    let mut failures = Vec::new();
+    for node in nodes {
+        let Some(result) = results.remove(&node.id) else {
+            failures.push(node_failure(&node.id));
+            continue;
+        };
+        if let Some(endpoint) = result.connection_endpoint {
+            node.connection_endpoint = Some(endpoint);
+        }
+        if result
+            .info
+            .as_deref()
+            .is_none_or(|info| merge_node_metrics(node, info).is_err())
+        {
+            failures.push(node_failure(&node.id));
+        }
+    }
+    failures.sort_by(|left, right| left.node_id.cmp(&right.node_id));
+    failures
+}
+
+fn node_failure(node_id: &str) -> NodeFailure {
+    NodeFailure {
+        node_id: node_id.to_owned(),
+        code: AppError::ClusterNodeUnavailable.code().to_owned(),
+    }
+}
 
 pub fn parse_cluster_info(input: &str) -> Result<ClusterSummary, AppError> {
     ensure_text_size(input)?;
