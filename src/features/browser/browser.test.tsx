@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import BrowserPage from "./BrowserPage";
@@ -684,6 +684,9 @@ describe("Redis Browser", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
+    expect(deleteKeyMock).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
+
     await waitFor(() => {
       expect(deleteKeyMock).toHaveBeenCalledWith({
         connection_id: "local",
@@ -708,12 +711,16 @@ describe("Redis Browser", () => {
     await screen.findByDisplayValue("Alice");
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
-    expect(confirm).toHaveBeenCalledWith("确定删除键“user:1”吗？");
+    const dialog = screen.getByRole("alertdialog", { name: "确认删除" });
+    expect(dialog).toHaveTextContent("user:1");
+    await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "取消" })); });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(deleteKeyMock).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "删除" })).not.toBeDisabled();
   });
 
   it("确认删除后调用 deleteKey 并清理键", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => false));
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
@@ -725,15 +732,30 @@ describe("Redis Browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    expect(deleteKeyMock).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
 
     await waitFor(() => {
-      expect(confirm).toHaveBeenCalledWith("确定删除键“user:1”吗？");
       expect(deleteKeyMock).toHaveBeenCalledWith({
         connection_id: "local",
         key: "user:1",
       });
     });
     expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
+  });
+
+  it.each(["连接", "键"])("等待删除确认时切换%s会取消旧删除", async (scope) => {
+    const onDeleted = vi.fn();
+    const props = { connectionId: "local", detail: stringDetail, loading: false, onDetailChange: vi.fn(), onDeleted };
+    const { rerender } = render(<KeyDetails {...props} />);
+    await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    const approve = within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" });
+    rerender(<KeyDetails {...props} connectionId={scope === "连接" ? "other" : "local"} detail={scope === "键" ? { ...stringDetail, key: "other" } : stringDetail} />);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await act(async () => { fireEvent.click(approve); });
+    expect(deleteKeyMock).not.toHaveBeenCalled();
+    expect(onDeleted).not.toHaveBeenCalled();
   });
 
   it("设置 TTL 后刷新详情", async () => {
@@ -874,6 +896,8 @@ describe("Redis Browser", () => {
     );
     await screen.findByDisplayValue("Alice");
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(deleteKeyMock).toHaveBeenCalledOnce());
     unmount();
     deletion.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -1201,6 +1225,8 @@ describe("Redis Browser", () => {
     fireEvent.click(screen.getByLabelText("选择键 user:2"));
     expect(screen.getByRole("button", { name: "批量删除（2）" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "批量删除（2）" }));
+    expect(deleteKeysMock).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
 
     await waitFor(() => {
       expect(deleteKeysMock).toHaveBeenCalledTimes(1);

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import {
   deleteKey,
@@ -77,6 +78,9 @@ export function KeyDetails({
 }: KeyDetailsProps) {
   const [busy, setBusy] = useState(false);
   const [childBusy, setChildBusy] = useState(false);
+  const { confirm, confirmationDialog } = useConfirmDialog(
+    JSON.stringify([connectionId, detail?.key, loading, busy, childBusy]),
+  );
   const [error, setError] = useState<string | null>(null);
   const [jsonPathError, setJsonPathError] = useState<string | null>(null);
   const [searchIndexes, setSearchIndexes] = useState<KeySearchIndexSummary[]>([]);
@@ -238,10 +242,21 @@ export function KeyDetails({
   };
 
   const handleDelete = async () => {
-    if (!window.confirm(`确定删除键“${detail.key}”吗？`)) {
+    if (uiBusy || loading) {
       return;
     }
     const operation = beginOperation(detail.key);
+    if (!await confirm(`确定删除键“${operation.key}”吗？此操作无法撤销。`)) {
+      return;
+    }
+    if (
+      !mountedRef.current ||
+      currentConnectionRef.current !== operation.connectionId ||
+      currentKeyRef.current !== operation.key ||
+      operationRef.current !== operation.token - 1
+    ) {
+      return;
+    }
     operationRef.current = operation.token;
     setOperationBusy(operation, true);
     setError(null);
@@ -574,6 +589,7 @@ export function KeyDetails({
           onSetTtl={handleSetTtl}
         />
       )}
+      {confirmationDialog}
       {isModuleDetail && error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
       {isStringDetail && <StringValueEditor connectionId={connectionId} keyName={detail.key} disabled={busy} onBusyChange={handleChildBusy} onSaved={(result) => {
         // Keep the raw payload in the dedicated editor; the Browser DTO stays a preview.
