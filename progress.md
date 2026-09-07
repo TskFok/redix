@@ -516,3 +516,28 @@
 - **整批仍有一个 Important 残余风险：本地 Agent IPC 不可可靠中断，卡住可占用 worker/permit/CLI 生命周期锁。** 不将其标为已解决，不删除恢复记录；下一步需先决定并设计本地 Agent 调用隔离与取消方案。
 - 控制器在 `6487ef9` 独立验证 Rust 374 passed / 0 failed / 29 ignored、前端 35 files / 297 tests、真实 Cluster launcher 6 + integration 2、Web build 94 modules、non-cloud/fmt/diff，全部 exit 0。实现方另验证普通 Redis 7 实际流程 / 3 Stack early-skip、macOS offline no-bundle 1m16s。
 - 既有 warning 与一次前端时序超时的最终顺序重跑结果保留报告；没有把真实 sshd、Windows/Linux、TLS/Stack 或桌面 UI 未执行项记为通过。裁决与范围见 `docs/superpowers/connection-topology-decisions.md`。
+
+## 2026-09-07 继续补齐
+
+- 读取两仓源码、现有功能矩阵和已确认路线，工作区初始干净。
+- 启动三个只读并行对比：Browser；Search/Vector/Workbench；分析与本地产品能力。
+- 本轮在 main 修改，无分支创建，无参考仓库写入。
+
+### 本轮中间验证
+
+- KeyTree：新增可配置分隔符测试先失败后通过，当前5项通过。
+- BulkTaskManager：输入上限、去重/部分失败、取消等待在途结果、连接失效停止四项先编译失败后全部通过；任务中心2项通过。
+- Cargo首次被另一个并行任务冷编译锁阻塞，统一顺序共享target后恢复；没有终止不属于本任务的进程。
+- 一次只读参考路径constants.ts不存在，改用rg文件列表定位；一次Browser插入锚点缩进不匹配，未写入该文件，按实际位置修正。
+
+
+## 2026-09-07：继续补齐
+
+JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 索引详情初始化与查询请求竞争正在修复。并行推进 typed KNN、后台分析与 Workbench 内置图表，随后补实例趋势和 Cluster 节点指标。上述完成状态仍以最终统一验证为准，Redis Cloud 仍排除。
+
+
+### 2026-09-07 统一验收
+
+前端54文件420测试与Rust420测试（37ignored）通过；普通Redis11真实流程、Cluster4真实流程、launcher17单测通过。Search AS别名补齐JSON创建到typed KNN的流程。最终交叉审查未发现新增P1/P2。Web120模块构建通过，主包525.74kB有体积提示；macOS原生release验证中。Docker官方镜像拉取认证失败，Search模块实测未运行。详见docs/local-parity-2026-09-07.md；当前main未提交或推送。
+
+最终macOS离线no-bundle release构建通过（3分46秒），产物src-tauri/target/release/redix。临时浏览器和Vite预览已清理；所有验收完成，剩余功能明确保留在矩阵，整体目标未冒称全量完成。

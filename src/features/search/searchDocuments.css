@@ -6,3 +6,17 @@
 .search-document-table-wrap details { min-width: 200px; }
 .search-document-table-wrap summary { cursor: pointer; color: var(--color-primary); }
 .search-document-table-wrap dd { margin: 6px 0 14px; }
+.search-vector-options { grid-column: 1 / -1; width: 100%; min-width: 0; }
+.search-query-builder { margin-block: 12px; }
+.search-query-builder > summary { cursor: pointer; color: var(--color-primary); }
+.search-filter-row { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; margin-block: 10px; }
+.search-filter-row .field { flex: 1 1 130px; min-width: 0; }
+.search-filter-row input, .search-filter-row select { width: 100%; }
+.search-query-preview { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--color-text-code); }
+
+.search-vector-query { display: grid; gap: 12px; }
+.search-vector-preview { display: block; overflow-wrap: anywhere; white-space: pre-wrap; font-size: 12px; }
+.search-vector-query textarea { width: 100%; resize: vertical; font-family: monospace; }
+
+.search-field-row { grid-template-columns: minmax(0, 1fr) minmax(120px, 0.6fr) minmax(0, 1fr) auto; }
+@media (max-width: 760px) { .search-field-row { grid-template-columns: 1fr; } }

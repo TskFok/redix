@@ -51,13 +51,23 @@ def main():
                         del env[name]
                 env["REDIX_TEST_REDIS_URL"] = f"redis://127.0.0.1:{port}"
                 print("运行隔离 Redis 测试；Redis Stack 模块测试仍单独跳过。", flush=True)
-                return subprocess.run([
+                result = subprocess.run([
                     "cargo", "test", "--manifest-path", "src-tauri/Cargo.toml",
                     "--test", "redis_integration",
                     "--test", "collection_integration",
                     "--test", "stream_entries_integration",
+                    "--test", "bulk_tasks_integration",
+                    "--test", "stream_advanced_integration",
+                    "--test", "string_value_integration",
                     "--", "--ignored", "--nocapture", "--test-threads=1",
                 ], cwd=root, env=env).returncode
+                if result != 0:
+                    return result
+                return subprocess.run([
+                    "cargo", "test", "--manifest-path", "src-tauri/Cargo.toml",
+                    "--test", "analysis_tasks_integration", "standalone_",
+                    "--", "--ignored", "--nocapture", "--test-threads=1",
+                ], cwd=root, env=env, timeout=180).returncode
             finally:
                 if server.poll() is None:
                     server.terminate()

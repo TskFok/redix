@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import AnalysisHistory from "./AnalysisHistory";
+import AnalysisRecommendations from "./AnalysisRecommendations";
 
-import { analyzeDatabase } from "../../lib/tauri";
+import { useAnalysisTask } from "./useAnalysisTask";
 import type {
   AnalysisKey,
   DatabaseAnalysisReport,
@@ -14,7 +15,6 @@ import {
   formatAnalysisNumber,
   formatCoverage,
   initialDatabaseAnalysisState,
-  toUserFacingAnalysisError,
   type DatabaseAnalysisPageState,
 } from "./databaseAnalysisState";
 
@@ -215,6 +215,7 @@ function AnalysisResults({ report }: { report: DatabaseAnalysisReport }) {
           detail={`已扫描 ${formatAnalysisNumber(report.progress.scanned)}`}
         />
       </section>
+      <AnalysisRecommendations report={report} />
       <AnalysisTable title="类型统计" headers={["类型", "键数", "内存"]}>
         {report.total_keys.types.length > 0 ? report.total_keys.types.map((summary) => (
           <tr key={summary.type}>
@@ -248,62 +249,26 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
     ...initialDatabaseAnalysisState,
     input: { ...DEFAULT_ANALYSIS_INPUT, connection_id: connectionId },
   }));
-  const requestRef = useRef(0);
-  const mountedRef = useRef(true);
-
+  const job = useAnalysisTask(connectionId, activeDatabase);
+  const [timeoutSeconds, setTimeoutSeconds] = useState(300);
   useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      requestRef.current += 1;
-    };
-  }, []);
-
-  useEffect(() => {
-    requestRef.current += 1;
-    setState({
-      ...initialDatabaseAnalysisState,
-      input: { ...DEFAULT_ANALYSIS_INPUT, connection_id: connectionId },
-    });
+    setState({ ...initialDatabaseAnalysisState, input: { ...DEFAULT_ANALYSIS_INPUT, connection_id: connectionId } });
+    setTimeoutSeconds(300);
   }, [connectionId, activeDatabase]);
+  useEffect(() => {
+    if (job.task) setState((current) => ({ ...current, input: job.task!.analysis }));
+  }, [job.task?.id]);
 
   const handleSubmit = () => {
-    if (state.loading) {
-      return;
-    }
-
-    const error = validateInput(state.input);
-    if (error) {
-      setState((current) => ({ ...current, error }));
-      return;
-    }
-
-    const requestId = requestRef.current + 1;
-    requestRef.current = requestId;
-    const input = { ...state.input, connection_id: connectionId };
-    setState((current) => ({ ...current, input, loading: true, report: null, error: null }));
-
-    void analyzeDatabase(input)
-      .then((report) => {
-        if (!mountedRef.current || requestRef.current !== requestId) {
-          return;
-        }
-        setState((current) => ({ ...current, loading: false, report, error: null }));
-      })
-      .catch((caught: unknown) => {
-        if (!mountedRef.current || requestRef.current !== requestId) {
-          return;
-        }
-        setState((current) => ({
-          ...current,
-          loading: false,
-          error: toUserFacingAnalysisError(caught),
-        }));
-      });
+    if (job.loading) return;
+    const error = validateInput(state.input) ?? (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 900 ? "超时必须在 1 到 900 秒之间。" : null);
+    if (error) { setState((current) => ({ ...current, error })); return; }
+    setState((current) => ({ ...current, error: null }));
+    void job.start(state.input, timeoutSeconds);
   };
 
   return (
-    <section className="database-page" aria-labelledby="database-analysis-page-title" aria-busy={state.loading}>
+    <section className="database-page" aria-labelledby="database-analysis-page-title" aria-busy={job.loading}>
       <div className="page-heading database-page-heading">
         <div>
           <p className="eyebrow">DATABASE ANALYSIS</p>
@@ -320,12 +285,14 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
           <button
             type="button"
             className="button button-primary"
-            disabled={state.loading}
+            disabled={job.loading}
             onClick={handleSubmit}
           >
             开始分析
           </button>
         </div>
+        <fieldset className="editor-fieldset" disabled={job.loading}>
+        <legend>扫描选项</legend>
         <div className="form-grid">
           <label className="field">
             <span>匹配模式</span>
@@ -371,12 +338,27 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
               }
             />
           </label>
+          <label className="field"><span>任务超时（秒）</span><input aria-label="任务超时（秒）" type="number" min={1} max={900} step={1} value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(Number(event.target.value))} /></label>
         </div>
+        </fieldset>
       </section>
-      {state.error ? <p className="inline-error" role="alert">{state.error}</p> : null}
-      {state.loading ? <p className="empty-state-compact" role="status">正在分析数据库…</p> : null}
-      {state.report ? <AnalysisResults report={state.report} /> : null}
-      <AnalysisHistory key={JSON.stringify([connectionId, activeDatabase])} connectionId={connectionId} database={activeDatabase} report={state.report} renderReport={(report) => <AnalysisResults report={report} />} />
+      <section className="database-panel" aria-label="后台分析任务">
+        <p>任务和结果仅保留在本次应用内存，最多 16 条、同时运行 2 项；切页后可返回恢复，重启应用后清除。只有点击“保存当前分析”才写入本机历史。</p>
+        <p className="browser-helper">已扫描是 SCAN 返回的键次数，可能包含重复或已过期键；已处理是成功读取且仍存在的键次数。扫描上限不是全库总数，不表示完成百分比。沿用现有采样：单实例最后一页可能超过上限，Cluster 按主节点分配上限。</p>
+        {job.pending ? <p role="status">正在恢复或启动后台分析…</p> : null}
+        {job.task ? <>
+          <p role="status">已扫描 {formatAnalysisNumber(job.task.progress.scanned)} · 已处理 {formatAnalysisNumber(job.task.progress.processed)} · 扫描上限 {formatAnalysisNumber(job.task.progress.max_keys)} · 已结束节点 {job.task.nodes_completed}/{job.task.nodes_total}</p>
+          {job.task.status === "running" ? <><p>正在分析数据库…关闭连接或切换数据库会停止当前任务；取消后不会继续发送扫描请求，已经发出的只读请求可能仍在服务器执行。</p><button type="button" className="button button-secondary" disabled={job.task.cancel_requested} onClick={() => void job.cancel()}>{job.task.cancel_requested ? "正在取消…" : "取消分析"}</button></> : null}
+          {job.task.status === "cancelled" ? <p role="status">分析已取消，未生成完成报告。</p> : null}
+          {job.task.status === "timed_out" ? <p role="status">分析已超时，已停止后续扫描；可缩小范围或调整超时后重试。</p> : null}
+          {job.task.status === "completed" ? <p role="status">后台分析已完成。</p> : null}
+          {job.task.status === "partial_failure" ? <p role="status">后台分析部分完成，请结合失败节点查看报告。</p> : null}
+        </> : null}
+        <button type="button" className="button button-quiet" disabled={job.pending} onClick={() => void job.recover()}>重新读取任务</button>
+      </section>
+      {(state.error ?? job.error) ? <p className="inline-error" role="alert">{state.error ?? job.error}</p> : null}
+      {job.report ? <AnalysisResults report={job.report} /> : null}
+      <AnalysisHistory key={JSON.stringify([connectionId, activeDatabase])} connectionId={connectionId} database={activeDatabase} report={job.report} renderReport={(report) => <AnalysisResults report={report} />} />
     </section>
   );
 }

@@ -651,3 +651,27 @@ complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust doma
 - [x] 最终 Rust 374 通过 / 29 ignored、前端 297 通过、Cluster launcher 6 + 实际集成 2 通过、普通 Redis 7 实际通过 / 3 Stack early-skip；Web 与 macOS no-bundle 构建、non-cloud/fmt/diff 通过。
 - [ ] **未决 Important：本地 SSH Agent IPC 可同步阻塞。** 现有依赖无法独立中断该调用，仍可能占用 worker、permit 和 CLI lifecycle 锁；需要单独的隔离/取消架构方案，不能宣称所有 SSH 认证全程有界。
 - 原始 RESP 字节/分配上限、二进制键完整遍历、真实 sshd/TLS/Stack、Windows/Linux 和 native UI 验证边界见 `docs/superpowers/connection-topology-decisions.md`；这些不能被测试通过数替代。
+
+## Phase 20：继续对比并补齐本地功能（2026-09-07）
+
+- Status: local_batch_verified（整体对齐仍有矩阵所列差异）
+- 用户本轮要求：对比当前项目与本地 RedisInsight 并补齐缺失功能，Redis Cloud 除外。
+- 基线：Redix `67318ae`、RedisInsight `48ee19fab`；当前 main 干净，参考项目只读。
+- 延续已确认的 Rust/Tauri/React 本地功能设计，不重复已完成的连接拓扑实现；旧计划的 plan_ready 状态已过时，以源码和验证记录为准。
+- [x] 并行核实 Browser、Search/Workbench、分析/本地产品功能差异。
+- [x] 编写本轮具体接口和验证计划。
+- [x] 按独立模块补齐，并进行行为测试与审查。
+- [x] 跑前后端回归、隔离 Redis、构建、格式与排除范围检查。
+- [x] 同步功能矩阵及未覆盖边界，交付实际结果。
+
+
+## Phase 21：继续补齐本地查询、分析与可视化（本批已验证）
+
+JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 索引详情初始化与查询请求竞争正在修复。并行推进 typed KNN、后台分析与 Workbench 内置图表，随后补实例趋势和 Cluster 节点指标。上述完成状态仍以最终统一验证为准，Redis Cloud 仍排除。
+
+
+### Phase 20/21 当前验收
+
+已完成上列功能及审查修复，全量前端54文件420项、Rust420项/37ignored通过；隔离普通Redis11个真实流程、Cluster4个真实流程、launcher17单测通过。Web构建与non-cloud/fmt/diff通过，macOS原生release no-bundle构建通过（3分46秒）。RedisSearch模块实测受官方镜像拉取认证失败影响未执行。功能矩阵保持剩余差异，不将本批完成等同整体全量目标完成。
+
+最终记录：`docs/local-parity-2026-09-07.md`。临时预览标签页与Vite进程已关闭；未创建Docker测试容器，所有隔离Redis进程已由各launcher清理。源码保留在main工作区，未提交/推送。

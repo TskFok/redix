@@ -13,6 +13,8 @@ use persistence::{
 };
 
 pub struct AppState {
+    pub(crate) analysis_tasks: redis::analysis_tasks::AnalysisTaskManager,
+    pub(crate) bulk_tasks: redis::bulk_tasks::BulkTaskManager,
     pub(crate) profiles: Arc<dyn ProfileRepository>,
     pub(crate) secrets: Arc<dyn SecretStore>,
     pub(crate) redis: redis::RedisService,
@@ -32,6 +34,8 @@ impl AppState {
         data_dir: PathBuf,
     ) -> Self {
         Self {
+            analysis_tasks: redis::analysis_tasks::AnalysisTaskManager::default(),
+            bulk_tasks: redis::bulk_tasks::BulkTaskManager::default(),
             redis: redis::RedisService::new(profiles.clone(), secrets.clone()),
             cli: redis::CliManager::new(),
             analysis_history: persistence::analysis_history::AnalysisHistoryStore::new(
@@ -61,6 +65,24 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            commands::analysis_tasks::start_analysis_task,
+            commands::analysis_tasks::list_analysis_tasks,
+            commands::analysis_tasks::get_analysis_task,
+            commands::analysis_tasks::cancel_analysis_task,
+            commands::string_value::get_string_value,
+            commands::string_value::set_string_value,
+            commands::string_value::decode_string_value,
+            commands::string_value::encode_string_value,
+            commands::stream_advanced::update_stream_group_id,
+            commands::stream_advanced::get_stream_pending_page,
+            commands::stream_advanced::claim_stream_pending_advanced,
+            commands::local_products::list_connection_tags,
+            commands::local_products::save_connection_tags,
+            commands::local_products::export_query_package,
+            commands::local_products::import_query_package,
+            commands::bulk_tasks::start_bulk_delete,
+            commands::bulk_tasks::list_bulk_tasks,
+            commands::bulk_tasks::cancel_bulk_task,
             commands::stream_entries::get_stream_entries,
             commands::stream_entries::add_stream_entry,
             commands::stream_entries::delete_stream_entries,
@@ -141,6 +163,7 @@ pub fn run() {
             commands::search::get_search_index,
             commands::search::delete_search_index,
             commands::search::search_keys,
+            commands::search::search_vector_index,
             commands::search::get_key_search_indexes,
             commands::observability::get_slow_logs,
             commands::observability::clear_slow_logs,

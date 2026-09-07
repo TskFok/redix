@@ -14,6 +14,7 @@ export interface WorkbenchPageState {
   format: WorkbenchResultFormat;
   history: CommandHistoryEntry[];
   result: CommandResult | null;
+  resultCommand: string;
   batchResults: CommandExecutionItem[];
   catalog: CommandDefinition[];
   catalogLoading: boolean;
@@ -28,6 +29,7 @@ export const initialWorkbenchPageState: WorkbenchPageState = {
   format: "text",
   history: [],
   result: null,
+  resultCommand: "",
   batchResults: [],
   catalog: [],
   catalogLoading: false,

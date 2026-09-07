@@ -6,6 +6,8 @@ import {
   selectDatabase,
 } from "../../lib/tauri";
 import type { ConnectionProfile } from "../../lib/types";
+import { useAutoRefresh } from "../browser/useAutoRefresh";
+import InstanceTrends, { appendInstanceSample, type InstanceSample } from "./InstanceTrends";
 import {
   databaseLoadFailedMessage,
   databaseSwitchFailedMessage,
@@ -38,8 +40,12 @@ export function DatabasePage({
     ...initialDatabasePageState,
   }));
   const [reloadToken, setReloadToken] = useState(0);
+  const [refreshSeconds, setRefreshSeconds] = useState(0);
+  const [trend, setTrend] = useState<{ connectionId: string; samples: InstanceSample[] }>({ connectionId, samples: [] });
+  const previousConnection = useRef(connectionId);
   const requestRef = useRef(0);
   const mountedRef = useRef(false);
+  useAutoRefresh(refreshSeconds, state.loading || state.switching, () => setReloadToken((current) => current + 1));
 
   useEffect(() => {
     mountedRef.current = true;
@@ -52,11 +58,14 @@ export function DatabasePage({
   useEffect(() => {
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
+    const sameConnection = previousConnection.current === connectionId;
+    previousConnection.current = connectionId;
+    if (!sameConnection) setTrend({ connectionId, samples: [] });
     setState((current) => ({
-      ...initialDatabasePageState,
+      ...(sameConnection ? current : initialDatabasePageState),
       requestId,
       loading: true,
-      switching: current.switching,
+      switching: sameConnection ? current.switching : false,
     }));
 
     const overview = Promise.allSettled([
@@ -70,6 +79,13 @@ export function DatabasePage({
       }
 
       const details = instanceResult.status === "fulfilled" ? instanceResult.value : null;
+      if (!isCluster) {
+        setTrend((current) => ({ connectionId, samples: appendInstanceSample(current.connectionId === connectionId ? current.samples : [], {
+          at: Date.now(), memory: details?.overview.used_memory_bytes ?? null,
+          ops: details?.stats.instantaneous_ops_per_sec ?? null,
+          clients: details?.overview.connected_clients ?? null,
+        }) }));
+      }
       const databases =
         databaseResult.status === "fulfilled" ? databaseResult.value : [];
       const failed = [instanceResult, databaseResult].find(
@@ -142,6 +158,7 @@ export function DatabasePage({
             {isCluster ? "DB 0 键数和过期键由全部主节点聚合；节点或字段不可用时显示不可用。" : "查看当前 Redis 实例的只读指标和数据库键空间，不执行全库扫描。"}
           </p>
         </div>
+        <label className="field"><span>概览自动刷新</span><select aria-label="概览自动刷新" value={refreshSeconds} onChange={(event) => setRefreshSeconds(Number(event.target.value))}><option value={0}>关闭</option>{[2, 5, 10, 30].map((seconds) => <option key={seconds} value={seconds}>{seconds} 秒</option>)}</select></label>
         <button
           type="button"
           className="button button-secondary"
@@ -194,6 +211,8 @@ export function DatabasePage({
           )}`}
         />
       </div>
+
+      <InstanceTrends samples={trend.connectionId === connectionId ? trend.samples : []} />
 
       <InfoPanel
         id="client-details"

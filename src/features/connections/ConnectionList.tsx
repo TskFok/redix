@@ -1,5 +1,7 @@
 import type { ConnectionProfile } from "../../lib/types";
 import { connectionAddress } from "./connectionState";
+import { connectionTagsFor, ConnectionTagsPanel } from "./ConnectionTags";
+import type { ConnectionTag, ConnectionTags } from "../../lib/localProductsApi";
 
 interface ConnectionListProps {
   profiles: ConnectionProfile[];
@@ -10,6 +12,8 @@ interface ConnectionListProps {
   onEdit: (profile: ConnectionProfile) => void;
   onOpen: (profile: ConnectionProfile) => void;
   onDelete: (profile: ConnectionProfile) => void;
+  tags?: ConnectionTags;
+  onTagsSaved?: (id: string, tags: ConnectionTag[]) => void;
 }
 
 export function ConnectionList({
@@ -21,6 +25,8 @@ export function ConnectionList({
   onEdit,
   onOpen,
   onDelete,
+  tags,
+  onTagsSaved,
 }: ConnectionListProps) {
   if (profiles.length === 0) {
     return (
@@ -88,6 +94,8 @@ export function ConnectionList({
                 </dd>
               </div>
             </dl>
+
+            {tags && onTagsSaved && <ConnectionTagsPanel connectionId={profile.id} connectionName={profile.name} tags={connectionTagsFor(tags, profile.id)} onSaved={onTagsSaved} />}
 
             <div className="card-actions">
               <button

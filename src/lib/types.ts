@@ -141,6 +141,10 @@ export interface ClusterSummary {
 }
 
 export interface ClusterNodeMetrics {
+  server_version: string | null;
+  redis_mode: string | null;
+  total_keys: number | null;
+  maxmemory_bytes: number | null;
   used_memory_bytes: number | null;
   ops_per_second: number | null;
   connections_received: number | null;
@@ -197,7 +201,21 @@ export type SearchFieldType =
 
 export interface SearchIndexFieldInput {
   name: string;
+  alias?: string | null;
   field_type: SearchFieldType;
+  vector?: SearchVectorConfig | null;
+}
+
+export interface SearchVectorConfig {
+  algorithm: "FLAT" | "HNSW";
+  data_type: "FLOAT32" | "FLOAT64";
+  dimension: number;
+  distance_metric: "COSINE" | "L2" | "IP";
+  initial_capacity?: number;
+  block_size?: number;
+  m?: number;
+  ef_construction?: number;
+  ef_runtime?: number;
 }
 
 export interface SearchIndexSummary {
@@ -232,11 +250,33 @@ export interface KeySearchIndexSummary {
   prefixes: string[];
 }
 
+export interface SearchVectorFieldInfo {
+  data_type: string;
+  dimension: number;
+  distance_metric: string;
+}
+export interface SearchVectorQueryInput {
+  connection_id: string;
+  index: string;
+  field: string;
+  vector: number[];
+  count: number;
+  filter: string;
+}
+export interface SearchVectorQueryResult {
+  matches: { key: string; distance: number }[];
+  returned: number;
+  count: number;
+  distance_metric: string;
+}
+
 export interface SearchIndexAttribute {
   identifier: string;
+  query_name?: string | null;
   field_type: string;
   sortable: boolean;
   no_index: boolean;
+  vector?: SearchVectorFieldInfo | null;
 }
 
 export interface SearchIndexInfo {

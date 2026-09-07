@@ -11,6 +11,7 @@ use crate::{
     error::AppError,
 };
 
+use super::analysis_tasks::AnalysisControl;
 use super::{connection_manager::map_command_error, RoutedConnection};
 
 const METADATA_BATCH_SIZE: usize = 500;
@@ -148,6 +149,20 @@ pub(crate) async fn analyze_connection_accumulator<C>(
 where
     C: ::redis::aio::ConnectionLike + Send + Unpin,
 {
+    analyze_connection_observed(connection, database, input, strict_key_limit, None, "").await
+}
+
+pub(crate) async fn analyze_connection_observed<C>(
+    connection: &mut C,
+    database: u8,
+    input: &AnalyzeDatabaseInput,
+    strict_key_limit: bool,
+    control: Option<&AnalysisControl>,
+    node: &str,
+) -> Result<(AnalysisAccumulator, AnalysisProgress), AppError>
+where
+    C: ::redis::aio::ConnectionLike + Send + Unpin,
+{
     let mut cursor = 0_u64;
     let mut scanned = 0_u64;
     let mut processed = 0_u64;
@@ -159,6 +174,7 @@ where
     );
 
     loop {
+        analysis_checkpoint(control).await?;
         let (next_cursor, keys): (u64, Vec<String>) = ::redis::cmd("SCAN")
             .arg(cursor)
             .arg("MATCH")
@@ -182,11 +198,34 @@ where
             scan_page_plan(scanned, keys.len(), next_cursor, input.max_keys)
         };
         scanned = scanned.saturating_add(u64::try_from(keys.len()).unwrap_or(u64::MAX));
+        if let Some(control) = control {
+            control.progress(
+                node,
+                AnalysisProgress {
+                    scanned,
+                    processed,
+                    max_keys: input.max_keys,
+                    truncated: page_plan.truncated,
+                },
+            );
+        }
         let batch = &keys[..page_plan.process_count];
         for metadata_keys in metadata_key_batches(batch) {
-            let metadata = load_key_metadata(connection, metadata_keys).await?;
+            let metadata = load_key_metadata(connection, metadata_keys, control).await?;
             processed = processed.saturating_add(accumulate_metadata(&mut accumulator, metadata));
+            if let Some(control) = control {
+                control.progress(
+                    node,
+                    AnalysisProgress {
+                        scanned,
+                        processed,
+                        max_keys: input.max_keys,
+                        truncated: page_plan.truncated,
+                    },
+                );
+            }
         }
+        analysis_checkpoint(control).await?;
         if page_plan.truncated || next_cursor == 0 {
             return Ok((
                 accumulator,
@@ -200,6 +239,13 @@ where
         }
         cursor = next_cursor;
     }
+}
+
+async fn analysis_checkpoint(control: Option<&AnalysisControl>) -> Result<(), AppError> {
+    if let Some(control) = control {
+        control.checkpoint().await?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -251,6 +297,7 @@ fn metadata_key_batches(keys: &[String]) -> impl Iterator<Item = &[String]> {
 async fn load_key_metadata<C>(
     connection: &mut C,
     keys: &[String],
+    control: Option<&AnalysisControl>,
 ) -> Result<Vec<AnalysisKeyMetadata>, AppError>
 where
     C: ::redis::aio::ConnectionLike + Send + Unpin,
@@ -270,6 +317,7 @@ where
             .cmd("TTL")
             .arg(key);
     }
+    analysis_checkpoint(control).await?;
     let replies = metadata_pipeline
         .query_async::<Vec<Value>>(connection)
         .await
@@ -303,6 +351,7 @@ where
         return Ok(metadata);
     }
 
+    analysis_checkpoint(control).await?;
     let replies = length_pipeline
         .query_async::<Vec<Value>>(connection)
         .await
@@ -398,6 +447,135 @@ fn update_module_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct StoppingConnection {
+        stop_after: &'static str,
+        requests: std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+        generations: std::sync::Arc<tokio::sync::RwLock<HashMap<String, u64>>>,
+    }
+    impl ::redis::aio::ConnectionLike for StoppingConnection {
+        fn req_packed_command<'a>(
+            &'a mut self,
+            _command: &'a ::redis::Cmd,
+        ) -> ::redis::RedisFuture<'a, Value> {
+            Box::pin(async move {
+                self.requests.lock().unwrap().push("SCAN");
+                if self.stop_after != "metadata" {
+                    self.generations.write().await.insert("test".into(), 2);
+                }
+                let (cursor, keys) = if self.stop_after == "next_scan" {
+                    (1, vec![])
+                } else {
+                    (0, vec![Value::BulkString(b"key".to_vec())])
+                };
+                Ok(Value::Array(vec![Value::Int(cursor), Value::Array(keys)]))
+            })
+        }
+        fn req_packed_commands<'a>(
+            &'a mut self,
+            _pipeline: &'a ::redis::Pipeline,
+            _offset: usize,
+            count: usize,
+        ) -> ::redis::RedisFuture<'a, Vec<Value>> {
+            Box::pin(async move {
+                if count == 3 {
+                    self.requests.lock().unwrap().push("metadata");
+                    self.generations.write().await.insert("test".into(), 2);
+                    Ok(vec![
+                        Value::BulkString(b"string".to_vec()),
+                        Value::Int(64),
+                        Value::Int(-1),
+                    ])
+                } else {
+                    self.requests.lock().unwrap().push("length");
+                    Ok(vec![Value::Int(5)])
+                }
+            })
+        }
+        fn get_db(&self) -> i64 {
+            0
+        }
+    }
+
+    #[tokio::test]
+    async fn observed_scan_stops_before_next_scan_metadata_or_length_pipeline() {
+        use super::super::analysis_tasks::{
+            AnalysisGeneration, AnalysisTaskKey, AnalysisTaskManager, AnalysisTaskStatus,
+            StartAnalysisTaskInput,
+        };
+        use std::{
+            sync::{Arc, Mutex},
+            time::Duration,
+        };
+        for (stop_after, expected) in [
+            ("next_scan", vec!["SCAN"]),
+            ("metadata_start", vec!["SCAN"]),
+            ("metadata", vec!["SCAN", "metadata"]),
+        ] {
+            let generations = Arc::new(tokio::sync::RwLock::new(HashMap::from([(
+                "test".into(),
+                1,
+            )])));
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let mut connection = StoppingConnection {
+                stop_after,
+                requests: requests.clone(),
+                generations: generations.clone(),
+            };
+            let manager = AnalysisTaskManager::default();
+            let input = AnalyzeDatabaseInput {
+                connection_id: "test".into(),
+                pattern: "*".into(),
+                delimiter: ":".into(),
+                max_keys: 1000,
+            };
+            let task = manager
+                .start(
+                    StartAnalysisTaskInput {
+                        analysis: input.clone(),
+                        database: 0,
+                        timeout_seconds: Some(2),
+                    },
+                    AnalysisGeneration::new(1, generations),
+                    move |control| async move {
+                        let (accumulator, progress) = analyze_connection_observed(
+                            &mut connection,
+                            0,
+                            &input,
+                            false,
+                            Some(&control),
+                            "instance",
+                        )
+                        .await?;
+                        Ok(accumulator.finish(
+                            progress.scanned,
+                            progress.processed,
+                            progress.truncated,
+                        ))
+                    },
+                )
+                .unwrap();
+            let key = AnalysisTaskKey {
+                connection_id: "test".into(),
+                database: 0,
+                task_id: task.id,
+            };
+            let result = tokio::time::timeout(Duration::from_secs(1), async {
+                loop {
+                    let result = manager.get(&key).unwrap();
+                    if result.task.status != AnalysisTaskStatus::Running {
+                        break result;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(result.task.status, AnalysisTaskStatus::Cancelled);
+            assert_eq!(*requests.lock().unwrap(), expected);
+            assert!(result.report.is_none());
+        }
+    }
 
     #[test]
     fn builds_explicit_commandstats_info_command() {

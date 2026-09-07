@@ -38,6 +38,7 @@ export function KeyList({
   onLoadMore,
 }: KeyListProps) {
   const [view, setView] = useState<"flat" | "tree">("flat");
+  const [separator, setSeparator] = useState(":");
   return (
     <section className="browser-list-panel" aria-labelledby="key-list-title">
       <div className="browser-panel-heading">
@@ -91,6 +92,8 @@ export function KeyList({
         <button type="button" className="button button-secondary" aria-pressed={view === "tree"} onClick={() => setView("tree")}>树形</button>
       </div>
 
+      {view === "tree" ? <label className="field browser-filter"><span>键树分隔符</span><input value={separator} maxLength={16} onChange={(event) => setSeparator(event.target.value)} placeholder="留空显示完整键名" /></label> : null}
+
       {loading ? (
         <p className="loading-state browser-loading" role="status" aria-live="polite">
           正在扫描键…
@@ -100,7 +103,7 @@ export function KeyList({
       {keys.length === 0 && !loading ? (
         <p className="browser-empty-list">没有匹配的键。</p>
       ) : view === "tree" ? (
-        <KeyTree key={JSON.stringify([pattern, keyType])} keys={keys} selectedKey={selectedKey}
+        <KeyTree key={JSON.stringify([pattern, keyType, separator])} separator={separator} keys={keys} selectedKey={selectedKey}
           selectedKeys={selectedKeys} loading={loading} onSelect={onSelect} onToggleSelect={onToggleSelect} />
       ) : (
         <ul className="key-list" aria-label="Redis 键列表">

@@ -15,6 +15,8 @@ import type {
 } from "../../lib/types";
 import ConnectionForm from "./ConnectionForm";
 import ConnectionList from "./ConnectionList";
+import { listConnectionTags, type ConnectionTags } from "../../lib/localProductsApi";
+import { filterConnectionsByTag } from "./ConnectionTags";
 import {
   initialConnectionPageState,
   connectionCleanupFailedMessage,
@@ -81,6 +83,17 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
   const [formOpen, setFormOpen] = useState(false);
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferFeedback, setTransferFeedback] = useState<TransferFeedback | null>(null);
+  const [tags, setTags] = useState<ConnectionTags | null>(null);
+  const [tagsError, setTagsError] = useState(false);
+  const [tagQuery, setTagQuery] = useState("");
+  const [onlyUntagged, setOnlyUntagged] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    void listConnectionTags().then((loaded) => { if (mounted) { setTags(loaded); setTagsError(false); } })
+      .catch(() => { if (mounted) setTagsError(true); });
+    return () => { mounted = false; };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -312,6 +325,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
   };
 
   const editingId = state.editingProfile?.id ?? "new";
+  const visibleProfiles = tags ? filterConnectionsByTag(state.profiles, tags, tagQuery, onlyUntagged) : state.profiles;
 
   return (
     <section
@@ -383,9 +397,17 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
             <p className="loading-state" role="status" aria-live="polite">
               正在加载连接…
             </p>
-          ) : (
+          ) : (<>
+            {tags && state.profiles.length > 0 && <div className="form-grid">
+              <label className="field"><span>筛选连接标签</span><input value={tagQuery} placeholder="按标签键或值搜索，例如 env=prod" onChange={(event) => setTagQuery(event.target.value)} /></label>
+              <label className="field settings-checkbox"><span><input type="checkbox" checked={onlyUntagged} onChange={(event) => setOnlyUntagged(event.target.checked)} />仅显示无标签连接</span></label>
+            </div>}
+            {tagsError && <p role="status">连接标签加载失败。<button type="button" className="button button-quiet" onClick={() => { void listConnectionTags().then(loaded => {setTags(loaded);setTagsError(false);}).catch(() => setTagsError(true)); }}>重试加载标签</button></p>}
+            {state.profiles.length > 0 && visibleProfiles.length === 0 ? <p className="empty-state">没有匹配标签的连接。</p> :
             <ConnectionList
-              profiles={state.profiles}
+              profiles={visibleProfiles}
+              tags={tags ?? undefined}
+              onTagsSaved={(id, updated) => setTags((current) => ({ ...current, [id]: updated }))}
               activeId={state.activeId}
               openingId={state.openingId}
               deletingId={state.deletingId}
@@ -393,7 +415,8 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
               onEdit={handleEdit}
               onOpen={(profile) => void handleOpen(profile)}
               onDelete={(profile) => void handleDelete(profile)}
-            />
+            />}
+            </>
           )}
         </>
       ) : (

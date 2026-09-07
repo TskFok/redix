@@ -1,3 +1,6 @@
+import { BULK_TASK_FINISHED, type BulkTask } from "../tasks/bulkTaskApi";
+import { useAutoRefresh } from "./useAutoRefresh";
+import StartBulkDeleteButton from "../tasks/StartBulkDeleteButton";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getBrowserKey, getModuleCapabilities, scanKeys } from "../../lib/tauri";
@@ -26,6 +29,8 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   const [state, setState] = useState<BrowserPageState>(() => ({
     ...initialBrowserPageState,
   }));
+  const [bulkChanged, setBulkChanged] = useState(false);
+  const [refreshSeconds, setRefreshSeconds] = useState(0);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
   const [showAddKey, setShowAddKey] = useState(false);
@@ -228,6 +233,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
     if (state.loading) {
       return;
     }
+    setBulkChanged(false);
     void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
   };
 
@@ -247,6 +253,18 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
     setShowAddKey(false);
     void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
   };
+
+  useEffect(() => {
+    setBulkChanged(false);
+    const completed = (event: Event) => {
+      const task = (event as CustomEvent<BulkTask>).detail;
+      if (task.connection_id !== connectionId) return;
+      setState((current) => ({ ...current, selectedKeys: [] }));
+      setBulkChanged(true);
+    };
+    window.addEventListener(BULK_TASK_FINISHED, completed);
+    return () => window.removeEventListener(BULK_TASK_FINISHED, completed);
+  }, [connectionId]);
 
   const handleBulkDeleted = () => {
     void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
@@ -354,6 +372,9 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   };
 
   const listBusy = state.loading || detailLoading || detailActionLoading;
+  useAutoRefresh(refreshSeconds, listBusy || showAddKey || state.selectedKey !== null || state.selectedKeys.length > 0, () => {
+    void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
+  });
   const arraySupported =
     moduleProbe.status === "ready" && moduleProbe.capabilities.array_supported;
   const vectorSetSupported =
@@ -396,6 +417,10 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
         >
           刷新键列表
         </button>
+        {bulkChanged && <p role="status">后台删除已结束，选择已清除；列表可能已变化，请刷新查看最新结果。</p>}
+        <label className="field"><span>键列表自动刷新</span><select value={refreshSeconds} onChange={(event) => setRefreshSeconds(Number(event.target.value))}><option value={0}>关闭</option><option value={2}>每 2 秒</option><option value={5}>每 5 秒</option><option value={10}>每 10 秒</option><option value={30}>每 30 秒</option></select></label>
+        {refreshSeconds > 0 && <small>选择键、查看详情或编辑期间暂停自动刷新。</small>}
+        <StartBulkDeleteButton connectionId={connectionId} keys={state.selectedKeys} disabled={listBusy} />
         <BulkKeyActions
           connectionId={connectionId}
           selectedKeys={state.selectedKeys}

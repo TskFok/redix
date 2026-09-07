@@ -87,6 +87,10 @@ pub enum ClusterNodeHealth {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ClusterNodeMetrics {
+    pub server_version: Option<String>,
+    pub redis_mode: Option<String>,
+    pub total_keys: Option<u64>,
+    pub maxmemory_bytes: Option<u64>,
     pub used_memory_bytes: Option<u64>,
     pub ops_per_second: Option<u64>,
     pub connections_received: Option<u64>,

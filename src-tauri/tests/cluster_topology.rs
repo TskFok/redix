@@ -322,6 +322,90 @@ fn info_parser_and_metric_merge_tolerate_partial_sections() {
 }
 
 #[test]
+fn node_metadata_reads_existing_info_sections_and_sums_database_keys() {
+    let mut node = parse_cluster_nodes("id1 127.0.0.1:7000@17000 master - 0 0 1 connected\n")
+        .unwrap()
+        .remove(0);
+    merge_node_metrics(
+        &mut node,
+        "# Server\r\nredis_version:8.2.1\r\nredis_mode:cluster\r\n\
+         # Memory\r\nused_memory:1024\r\nmaxmemory:1048576\r\n\
+         # Keyspace\r\ndb0:keys=10,expires=3,avg_ttl=100\r\n\
+         db7:expires=1,keys=5,avg_ttl=50\r\n",
+    )
+    .unwrap();
+    let value = serde_json::to_value(&node.metrics).unwrap();
+    assert_eq!(value["server_version"], "8.2.1");
+    assert_eq!(value["redis_mode"], "cluster");
+    assert_eq!(value["maxmemory_bytes"], 1_048_576);
+    assert_eq!(value["total_keys"], 15);
+    assert_eq!(node.metrics.used_memory_bytes, Some(1024));
+}
+
+#[test]
+fn node_metadata_distinguishes_empty_missing_and_invalid_keyspace() {
+    for (input, expected) in [
+        ("# Keyspace\r\n", Some(0)),
+        ("# Keyspace\ndb0:keys=0,expires=0,avg_ttl=0\n", Some(0)),
+        ("# Server\nredis_version:8.2.1\n", None),
+        ("# Keyspace\ndb0:keys=bad\n", None),
+        ("# Keyspace\ndb0:expires=3\n", None),
+        ("# Keyspace\ndb0:keys=-1\n", None),
+        (
+            "# Keyspace\ndb0:keys=18446744073709551615\ndb1:keys=1\n",
+            None,
+        ),
+        ("# Keyspace\ndb0:keys=2\ndb0:keys=2\n", None),
+        ("# Keyspace\ndb0:keys=2,keys=3\n", None),
+    ] {
+        let mut node = parse_cluster_nodes("id1 127.0.0.1:7000@17000 master - 0 0 1 connected\n")
+            .unwrap()
+            .remove(0);
+        merge_node_metrics(&mut node, input).unwrap();
+        let value = serde_json::to_value(&node.metrics).unwrap();
+        assert_eq!(
+            value.get("total_keys"),
+            Some(&serde_json::json!(expected)),
+            "{input}"
+        );
+    }
+}
+
+#[test]
+fn node_metadata_missing_refresh_and_malformed_values_are_unavailable() {
+    let mut node = parse_cluster_nodes("id1 127.0.0.1:7000@17000 master - 0 0 1 connected\n")
+        .unwrap()
+        .remove(0);
+    merge_node_metrics(
+        &mut node,
+        "redis_version:8.2.1\nredis_mode:cluster\nmaxmemory:0\n# Keyspace\n",
+    )
+    .unwrap();
+    assert_eq!(
+        serde_json::to_value(&node.metrics).unwrap()["maxmemory_bytes"],
+        0
+    );
+    for input in [
+        "connected_clients:2\n".to_owned(),
+        format!(
+            "redis_version:{}\nredis_mode:\nmaxmemory:-1\n",
+            "x".repeat(257)
+        ),
+    ] {
+        merge_node_metrics(&mut node, &input).unwrap();
+        let value = serde_json::to_value(&node.metrics).unwrap();
+        for field in [
+            "server_version",
+            "redis_mode",
+            "maxmemory_bytes",
+            "total_keys",
+        ] {
+            assert_eq!(value.get(field), Some(&serde_json::Value::Null), "{field}");
+        }
+    }
+}
+
+#[test]
 fn topology_keeps_all_nodes_and_sorts_sanitized_info_failures() {
     let mut nodes = parse_cluster_nodes(
         "node-1 10.0.0.1:7001@17001 master - 0 0 1 connected 0-5000\n\

@@ -1,0 +1,20 @@
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, expect, it, vi } from "vitest";
+import { useAutoRefresh } from "./useAutoRefresh";
+afterEach(() => { cleanup(); vi.useRealTimers(); });
+it("只在启用且空闲时刷新，配置改变和卸载清理定时器", () => {
+  vi.useFakeTimers();
+  const refresh = vi.fn();
+  const { rerender, unmount } = renderHook(({ seconds, busy }) => useAutoRefresh(seconds, busy, refresh), { initialProps: { seconds: 0, busy: false } });
+  act(() => { vi.advanceTimersByTime(10000); });
+  expect(refresh).not.toHaveBeenCalled();
+  rerender({ seconds: 2, busy: false });
+  act(() => { vi.advanceTimersByTime(2000); });
+  expect(refresh).toHaveBeenCalledTimes(1);
+  rerender({ seconds: 2, busy: true });
+  act(() => { vi.advanceTimersByTime(4000); });
+  expect(refresh).toHaveBeenCalledTimes(1);
+  unmount();
+  act(() => { vi.advanceTimersByTime(4000); });
+  expect(refresh).toHaveBeenCalledTimes(1);
+});

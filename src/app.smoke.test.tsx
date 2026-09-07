@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
@@ -249,6 +249,47 @@ afterEach(() => {
 });
 
 describe("Redix 应用壳", () => {
+  it("操作面板展示连接限制，未连接可通过键盘打开设置", () => {
+    render(<App />);
+    fireEvent.keyDown(window, { key: "2", ctrlKey: true });
+    expect(screen.getByRole("button", { name: "连接管理" })).toHaveAttribute("aria-current", "page");
+    fireEvent.click(screen.getByRole("button", { name: "快捷键与操作" }));
+    expect(screen.getByRole("option", { name: /Browser/ })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("option", { name: /Cluster 拓扑/ })).toHaveAttribute("aria-disabled", "true");
+    const search = screen.getByRole("combobox", { name: "搜索操作" });
+    fireEvent.change(search, { target: { value: "应用偏好" } });
+    fireEvent.keyDown(search, { key: "Enter" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "设置" })).toHaveAttribute("aria-current", "page");
+    expect(screen.getByRole("button", { name: "设置" })).toHaveFocus();
+  });
+
+  it("连接后快捷键导航与聚焦现有编辑器，面板关闭恢复焦点且不执行命令", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByRole("heading", { name: "数据浏览" });
+    fireEvent.keyDown(window, { key: "3", metaKey: true });
+    const command = await screen.findByRole("textbox", { name: "Redis 命令" });
+    fireEvent.keyDown(window, { key: "F", metaKey: true, shiftKey: true });
+    expect(command).toHaveFocus();
+    fireEvent.change(command, { target: { value: "SET important value" } });
+    fireEvent.keyDown(command, { key: "2", metaKey: true });
+    expect(screen.getByRole("heading", { name: "Workbench" })).toBeInTheDocument();
+    fireEvent.keyDown(command, { key: "k", metaKey: true });
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(command).toHaveFocus();
+    expect(command).toHaveValue("SET important value");
+    fireEvent.keyDown(command, { key: "k", ctrlKey: true });
+    const dialog = screen.getByRole("dialog");
+    fireEvent.change(within(dialog).getByRole("combobox"), { target: { value: "保存查询" } });
+    fireEvent.keyDown(within(dialog).getByRole("combobox"), { key: "Enter" });
+    expect(screen.getByRole("heading", { name: "Query Library" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Query Library" })).toHaveFocus();
+    expect(executeCommandMock).not.toHaveBeenCalled();
+    expect(executeCommandsMock).not.toHaveBeenCalled();
+  });
+
   it("显示应用名称和默认工作区", () => {
     render(<App />);
 

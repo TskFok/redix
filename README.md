@@ -30,6 +30,7 @@ npm run test:frontend
 npm run test:rust
 npm run test:redis:local # 需要 redis-server；自动创建并清理隔离实例
 npm run test:redis:cluster # 需要 redis-server 与 redis-cli；自动创建并清理隔离三主节点
+npm run test:redis:stack # 需要本机 Docker 与预先下载的 redis:8.4.5；隔离模块测试
 npm run build
 npm run tauri:build
 ```
@@ -38,7 +39,7 @@ npm run tauri:build
 
 Browser 使用 Redis `SCAN` 分页浏览键，不使用阻塞式全量键枚举。Cluster 跨 primary 的完整遍历仅覆盖当前键 DTO 可表示的 UTF-8 键名；节点返回二进制键名时，该节点以可重试失败返回并保留游标，不能据此承诺任意二进制键空间都能完成遍历。Workbench 只在当前本地连接上执行用户输入的 Redis 命令。
 
-Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新以及校验后的本地 JSON 导入导出；基础数据类型支持 String、Hash、List、Set、Sorted Set、Stream。Hash、List、Set、Sorted Set 使用有界分页和字段/成员/索引级增量写入，不用当前页重建整个键；Stream 使用有界 ID 范围分页，并支持显式添加和删除消息。Stream 详情还支持 Consumer Group 的创建/删除、消费者与 Pending 列表、Pending 确认、消费者删除和显式 XCLAIM 转移。转移需要选择消息并指定目标消费者、最小空闲时间，只操作满足条件的 Pending 消息，不启用 FORCE 或自动消费。RedisJSON 同时支持根文档编辑，以及路径级读取、保存、删除和数组追加。连接级模块能力通过 `MODULE LIST` 探测并按 session 缓存；探测失败或未检测到 RedisJSON/RedisSearch 时，不会阻断普通 Browser 流程，对应的路径编辑器或 Search / Query 工作区会稳定降级为不可用提示。RedisSearch / Query 工作区在 Search 2.0+ 可用时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引和有限的 `FT.SEARCH ... LIMIT` 查询（默认 NOCONTENT，可开启文档字段结果表），以及 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 查询；查询文本不持久化；Browser 的 Hash/JSON 键详情会显示匹配的索引摘要。
+Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新以及校验后的本地 JSON 导入导出；基础数据类型支持 String、Hash、List、Set、Sorted Set、Stream。Hash、List、Set、Sorted Set 使用有界分页和字段/成员/索引级增量写入，不用当前页重建整个键；Stream 使用有界 ID 范围分页，并支持显式添加和删除消息。Stream 详情还支持 Consumer Group 的创建/删除、消费者与 Pending 列表、Pending 确认、消费者删除和显式 XCLAIM 转移。转移需要选择消息并指定目标消费者、最小空闲时间，只操作满足条件的 Pending 消息，基础转移不启用 FORCE；高级面板支持 IDLE/TIME/RETRYCOUNT/FORCE，FORCE 必须显式选择并说明会新增 Pending 记录，不自动消费。RedisJSON 同时支持根文档编辑，以及路径级读取、保存、删除和数组追加。连接级模块能力通过 `MODULE LIST` 探测并按 session 缓存；探测失败或未检测到 RedisJSON/RedisSearch 时，不会阻断普通 Browser 流程，对应的路径编辑器或 Search / Query 工作区会稳定降级为不可用提示。RedisSearch / Query 工作区在 Search 2.0+ 可用时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引和有限的 `FT.SEARCH ... LIMIT` 查询（默认 NOCONTENT，可开启文档字段结果表），以及 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 查询；查询文本不持久化；Browser 的 Hash/JSON 键详情会显示匹配的索引摘要。
 
 检测到对应命令集后，Browser 还支持 Redis Array 的连续/稀疏创建、范围读取、扫描、单元格编辑、追加、按索引或区间删除、ARGREP 搜索和 AROP 聚合；Vector Set 支持受限维度的元素创建与批量添加、分页浏览、向量/属性读取与编辑、FP32 向量下载、VSIM 相似度查询和元素删除。两类模块都通过 typed IPC 接入，模块缺失时只禁用对应类型和详情操作，不影响普通 Redis 键浏览；单次批量与响应大小均有固定上限。
 
@@ -50,11 +51,11 @@ Database 工作区提供服务器版本、运行模式、连接数、内存、�
 
 ## 当前边界
 
-本版本支持 Standalone、Sentinel 和 Cluster DB 0。Cluster 已支持普通命令的 slot 路由、跨 primary 的 UTF-8 键名完整 `SCAN`、16384 slot 拓扑摘要及 primary-only Database Analysis；Cluster+SSH、Cluster Pub/Sub、Cluster Profiler 和 typed Cluster Slow Log 明确不支持。拓扑 DTO 目前也没有 RedisInsight 目标中的每节点 version/mode/totalkeys 等额外指标，不能称为全量等价。SSH 由内置 `ssh2` transport 提供 Agent、Password、内存私钥或本机私钥文件认证；Standalone/Sentinel 可与 TLS 组合，Cluster+SSH 禁用。TCP 建连、SSH 握手和远端认证共享 6 秒建连预算，超时或调用方取消会关闭已建立且仍在初始化的自有 socket；Agent 按返回顺序最多尝试 32 个身份且不重置该预算。但锁定的 libssh2 在 Unix/Windows 本地 Agent IPC 中可能同步阻塞，当前进程内接口无法可靠打断该本地等待；卡住时仍可能占用 worker、permit 和 CLI 生命周期锁，不能视为全部 SSH 认证均可超时取消。普通连接导出不包含密码、证书正文、SSH 私钥、口令或 SSH 本机路径。
+本版本支持 Standalone、Sentinel 和 Cluster DB 0。Cluster 已支持普通命令的 slot 路由、跨 primary 的 UTF-8 键名完整 `SCAN`、16384 slot 拓扑摘要及 primary-only Database Analysis；Cluster+SSH、Cluster Pub/Sub、Cluster Profiler 和 typed Cluster Slow Log 明确不支持。拓扑复用节点 INFO 显示版本、运行模式、键总量及内存上限；缺失或损坏数据保持不可用。SSH 由内置 `ssh2` transport 提供 Agent、Password、内存私钥或本机私钥文件认证；Standalone/Sentinel 可与 TLS 组合，Cluster+SSH 禁用。TCP 建连、SSH 握手和远端认证共享 6 秒建连预算，超时或调用方取消会关闭已建立且仍在初始化的自有 socket；Agent 按返回顺序最多尝试 32 个身份且不重置该预算。但锁定的 libssh2 在 Unix/Windows 本地 Agent IPC 中可能同步阻塞，当前进程内接口无法可靠打断该本地等待；卡住时仍可能占用 worker、permit 和 CLI 生命周期锁，不能视为全部 SSH 认证均可超时取消。普通连接导出不包含密码、证书正文、SSH 私钥、口令或 SSH 本机路径。
 
 文中所述响应大小上限约束的是已解码结构、解析、typed IPC 或展示层；当前没有 Redis 传输层原始 RESP 字节/分配上限，服务端超大回复仍可能在解析拒绝前占用内存。
 
-Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics、远程插件与插件市场永久排除；没有云登录、云账户、云数据库发现、云 SDK 或 SQL。当前只收口六批路线中的连接与拓扑第一批，Browser 解码器、后台任务和其他矩阵差异仍在后续批次。
+Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics、远程插件与插件市场永久排除；没有云登录、云账户、云数据库发现、云 SDK 或 SQL。本轮已进一步补齐本地解码、选中键后台删除、Stream 高级操作、VECTOR 索引配置、查询构建、连接标签、查询包和分析建议/历史趋势；剩余差异继续逐项记录在功能矩阵。
 
 除已列出的 RedisJSON、RedisSearch、Array、Vector Set 和 Stream 能力外，其他模块专用数据编辑器、Monaco/插件运行时尚未实现；不能将这些差异视作已对齐。
 
@@ -70,3 +71,18 @@ Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics、远
 - Standalone/Sentinel CLI 通过专用持久 socket 保留多轮 MULTI/EXEC、WATCH 和 SELECT 状态，不影响 Browser 的数据库。Cluster CLI 使用共享路由池，只支持普通无会话状态命令；事务、数据库选择、认证/协议切换、订阅、复制、连接模式和 `SCRIPT DEBUG` 等 socket 状态命令会在发送前稳定拒绝，Workbench 的 single/batch 采用相同门控。关闭、离开页面或主连接切库会清理 CLI；每条命令超时 5 秒后断开且不重试。
 
 完整对比与尚未覆盖的能力见 [功能差异矩阵](docs/redisinsight-feature-matrix.md)。这不是与 RedisInsight 的全量等价实现。
+
+## 本轮新增（2026-09-07）
+
+- String 详情使用原始字节读取，支持 UTF-8、ASCII、Hex、Binary、Base64、JSON 编辑与 Gzip/Zlib/Deflate；MessagePack（含 CSharp LZ4）、PHP serialized 及无 schema Protobuf 为只读展示。单值读取最多4MiB，截断预览禁止整体保存；写入原子检查键存在/类型并保留TTL。普通读取不需要EVAL权限。结构化解码在Worker执行，最多2个并发、2秒期限；解析库的内部预分配不能被解析后节点限制完全覆盖。
+- 键树分隔符可配置，列表自动刷新默认关闭，选择键、查看详情或编辑时暂停。选中键可后台删除，支持进度、取消和部分失败；Cluster直接按当前槽位主节点发送，不重试写入。任务仅保留在当前应用会话，最多10000键、4个并发、20条任务记录；取消不能撤回已发送操作，失败项可能已生效。
+- Stream增加组位置SETID、按ID范围与消费者分页Pending，以及高级Claim。Search增加完整FLAT/HNSW VECTOR字段配置、版本门控及Text/Tag/Numeric/Geo查询构建器；预览回填后由用户显式执行。
+- 连接支持key/value标签与过滤；Query Library支持版本化JSON查询包导入导出，全量校验后原子追加，敏感命令不会导入，损坏存储不被静默覆盖。
+- 分析页显示基于保留Top Keys的本地建议，并可显式加载同参数/同节点范围历史趋势；提示采样、截断及失败节点限制，不自动修改Redis配置或数据。后台分析可取消、设定总超时并在切回页面后恢复，绑定原始连接代次；每个连接/数据库一个运行任务，全局最多2个，保留16条会话记录与单份最多1MiB报告，结果须显式保存才落盘。
+- Search KNN 从 FT.INFO 校验向量 schema，按 FLOAT32/FLOAT64 编码二进制 PARAMS，限制 K≤200；用户显式输入向量并执行，结果显示键和距离。索引创建可设置 AS 查询别名，使 JSONPath 字段也能用于安全的 KNN 查询；旧查询包和字段输入兼容。
+- Workbench 内置 TimeSeries 和 Geo 结果可视化，绑定已执行命令，保留原始结果，最多2000点、20条序列。地理结果为本地坐标散点，无地图底图；不加载远程插件。名称展示上限256字符，数据表分页100行。
+- 实例概览可开启2/5/10/30秒自动刷新并查看最近120次内存/操作数/客户端数趋势；默认关闭，后台窗口和切库期间暂停，切连接/离开页面清空样本。
+- Ctrl/Cmd+K 打开可搜索的快捷键与操作面板；支持导航、当前输入聚焦、键盘选择及焦点恢复。导航与聚焦快捷键避开输入区和输入法组字，不自动执行 Redis 命令。
+- JSON 路径草稿在等价数据、TTL和模块信息刷新时保留；切键、切连接或服务端数据真正变化时正确重置。PHP/Protobuf保留字符串BOM，PHP对象、引用和二进制键按标记数据展示，不创建类实例。
+
+本轮对比、验证和剩余功能见 [交付记录](docs/local-parity-2026-09-07.md)。

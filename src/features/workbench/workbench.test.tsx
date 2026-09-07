@@ -190,6 +190,19 @@ describe("Redis Workbench 工作区", () => {
     expect(Storage.prototype.setItem).not.toHaveBeenCalled();
   });
 
+  it("可视化绑定已执行命令，编辑新草稿不会改变旧结果含义", async () => {
+    executeCommandMock.mockResolvedValue({ kind: "array", value: [[1000, "3"]] });
+    const view = render(<WorkbenchPage connectionId="local" />);
+    typeCommand("TS.RANGE cpu - +");
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+    fireEvent.click(await screen.findByText("本地可视化"));
+    expect(await screen.findByRole("img", { name: "时间序列图" })).toBeInTheDocument();
+    typeCommand("GEOPOS city member");
+    expect(screen.getByRole("img", { name: "时间序列图" })).toBeInTheDocument();
+    view.rerender(<WorkbenchPage connectionId="another" />);
+    await waitFor(() => expect(screen.queryByText("本地可视化")).not.toBeInTheDocument());
+  });
+
   it("一次 IPC 执行多条命令并按顺序展示结果", async () => {
     executeCommandsMock.mockResolvedValue([
       { command: "PING", result: { kind: "string", value: "PONG" }, error_code: null },

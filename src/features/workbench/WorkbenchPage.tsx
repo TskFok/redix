@@ -259,6 +259,7 @@ export function WorkbenchPage({
       setState((current) => ({
         ...current,
         result: singleResult,
+        resultCommand: singleResult ? commands[0] : "",
         batchResults: singleResult ? [] : items,
         history: nextHistory,
         error: null,
@@ -443,6 +444,7 @@ export function WorkbenchPage({
         </div>
 
         <CommandResult
+          command={state.resultCommand}
           result={state.result}
           batchResults={state.batchResults}
           format={state.format}

@@ -56,3 +56,11 @@ pub async fn get_key_search_indexes(
 ) -> Result<Vec<KeySearchIndexSummary>, AppError> {
     state.redis.get_key_search_indexes(input).await
 }
+
+#[tauri::command]
+pub async fn search_vector_index(
+    state: tauri::State<'_, AppState>,
+    input: crate::domain::SearchVectorQueryInput,
+) -> Result<crate::domain::SearchVectorQueryResult, AppError> {
+    state.redis.search_vector_index(input).await
+}

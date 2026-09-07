@@ -4,6 +4,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ClusterTopology } from "../../lib/types";
@@ -36,6 +37,10 @@ const topology: ClusterTopology = {
       primary_id: null,
       slots: [{ start: 0, end: 16383 }],
       metrics: {
+        server_version: null,
+        redis_mode: null,
+        total_keys: null,
+        maxmemory_bytes: null,
         used_memory_bytes: 2048,
         ops_per_second: 42,
         connected_clients: 3,
@@ -67,6 +72,26 @@ it("显示健康节点及部分失败，显式刷新更新结果", async () => {
   await act(async () => {});
   expect(refresh).toHaveBeenCalledWith("cluster");
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+it("节点展示版本、运行模式、键总量和内存上限，并区分零值与缺失", async () => {
+  get.mockResolvedValue({ ...topology, nodes: [{ ...topology.nodes[0], metrics: {
+    ...topology.nodes[0].metrics,
+    server_version: "8.2.1", redis_mode: "cluster", total_keys: 15, maxmemory_bytes: 0,
+  } }, { ...topology.nodes[0], id: "node-2", metrics: {
+    ...topology.nodes[0].metrics,
+    server_version: null, redis_mode: null, total_keys: null, maxmemory_bytes: null,
+  } }] });
+  render(<TopologyPage connectionId="cluster" />);
+  await screen.findByText("node-1");
+  const headers = screen.getAllByRole("columnheader");
+  const present = within(screen.getByRole("rowheader", { name: "node-1" }).closest("tr")!);
+  const missing = within(screen.getByRole("rowheader", { name: "node-2" }).closest("tr")!);
+  for (const [label, expected] of [["服务端版本", "8.2.1"], ["运行模式", "cluster"], ["键总量", "15"], ["内存上限 (bytes)", "0（无限制）"]]) {
+    const index = headers.indexOf(screen.getByRole("columnheader", { name: label })) - 1;
+    expect(present.getAllByRole("cell")[index]).toHaveTextContent(expected);
+    expect(missing.getAllByRole("cell")[index]).toHaveTextContent("不可用");
+  }
 });
 it("切换连接后忽略旧请求及旧刷新结果", async () => {
   let finish: (value: ClusterTopology) => void = () => {};

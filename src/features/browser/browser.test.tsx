@@ -11,6 +11,11 @@ import KeyEditor from "./KeyEditor";
 import AddKey from "./AddKey";
 import type { KeyValue, RedisValue } from "../../lib/types";
 
+const { getStringValueMock, decodeStringValueMock, encodeStringValueMock, setStringValueMock } = vi.hoisted(() => ({
+  getStringValueMock: vi.fn(), decodeStringValueMock: vi.fn(), encodeStringValueMock: vi.fn(), setStringValueMock: vi.fn(),
+}));
+vi.mock("./valueCodecApi", () => ({ getStringValue: getStringValueMock, decodeStringValue: decodeStringValueMock, encodeStringValue: encodeStringValueMock, setStringValue: setStringValueMock }));
+
 const {
   acknowledgeStreamPendingEntriesMock,
   scanKeysMock,
@@ -189,6 +194,10 @@ describe("Redis Browser", () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     getKeyMock.mockResolvedValue(stringDetail);
+    getStringValueMock.mockResolvedValue({ base64: btoa("Alice"), total_bytes: 5, ttl_ms: -1, truncated: false });
+    decodeStringValueMock.mockImplementation(async ({ base64 }) => ({ text: atob(base64), byte_length: atob(base64).length }));
+    encodeStringValueMock.mockImplementation(async ({ text }) => btoa(text));
+    setStringValueMock.mockResolvedValue({ byte_length: 3, ttl_ms: -1 });
     getModuleCapabilitiesMock.mockResolvedValue({
       modules: [{ name: "ReJSON", version: "20611" }],
       json_supported: true,
@@ -442,7 +451,7 @@ describe("Redis Browser", () => {
     });
   });
 
-  it("保存 String 后刷新详情", async () => {
+  it("保存 String 原始字节后更新详情，不触发旧UTF8整值读取", async () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
@@ -454,26 +463,24 @@ describe("Redis Browser", () => {
         ...stringDetail,
         value: { String: { value: "Bob" } },
       });
-    setKeyMock.mockResolvedValue({
-      ...stringDetail,
-      value: { String: { value: "Bob" } },
-    });
+    setStringValueMock.mockResolvedValue({ byte_length: 3, ttl_ms: -1 });
 
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "user:1" }));
 
     const input = await screen.findByDisplayValue("Alice");
     fireEvent.change(input, { target: { value: "Bob" } });
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存值" }));
 
     await waitFor(() => {
-      expect(setKeyMock).toHaveBeenCalledWith({
+      expect(setStringValueMock).toHaveBeenCalledWith({
         connection_id: "local",
         key: "user:1",
-        value: { String: { value: "Bob" } },
+        base64: btoa("Bob"),
       });
     });
-    expect(getKeyMock).toHaveBeenCalledTimes(2);
+    expect(getKeyMock).toHaveBeenCalledTimes(1);
+    expect(setKeyMock).not.toHaveBeenCalled();
   });
 
   it("加载更多复用游标，过滤时重置游标并替换列表", async () => {
@@ -749,18 +756,20 @@ describe("Redis Browser", () => {
   });
 
   it("连接切换后忽略旧连接保存完成，不刷新旧详情", async () => {
-    const save = deferred<typeof stringDetail>();
+    const save = deferred<{ byte_length: number; ttl_ms: number }>();
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
       node_failures: [], has_more: false,
     });
-    setKeyMock.mockImplementation(() => save.promise);
+    setStringValueMock.mockImplementation(() => save.promise);
 
     const { rerender } = render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    fireEvent.change(screen.getByLabelText("String 值"), { target: { value: "Bob" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存值" }));
+    await waitFor(() => expect(setStringValueMock).toHaveBeenCalledTimes(1));
     const getCallsBeforeSwitch = getKeyMock.mock.calls.length;
 
     rerender(<BrowserPage connectionId="remote" />);
@@ -773,7 +782,7 @@ describe("Redis Browser", () => {
         key_type: null,
       });
     });
-    save.resolve(stringDetail);
+    save.resolve({ byte_length: 3, ttl_ms: -1 });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(getKeyMock).toHaveBeenCalledTimes(getCallsBeforeSwitch);
@@ -794,6 +803,7 @@ describe("Redis Browser", () => {
         onDeleted={vi.fn()}
       />,
     );
+    await screen.findByDisplayValue("Alice");
     fireEvent.change(screen.getByLabelText("TTL（毫秒）"), {
       target: { value: "1000" },
     });
@@ -820,6 +830,7 @@ describe("Redis Browser", () => {
         onDeleted={onDeleted}
       />,
     );
+    await screen.findByDisplayValue("Alice");
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     unmount();
     deletion.resolve();
@@ -1334,6 +1345,10 @@ describe("Redis Browser", () => {
         JSON.stringify({ name: "Bob", tags: ["redis"] }, null, 2),
       );
     });
+    expect(screen.getByLabelText("JSON Path")).toHaveValue("$");
+    expect(screen.getByLabelText("路径 JSON 值")).toHaveValue(
+      JSON.stringify({ name: "Bob", tags: ["redis"] }, null, 2),
+    );
   });
 
   it("根路径删除需要单独确认，取消时不调用 deleteJsonPath", async () => {
@@ -1532,6 +1547,8 @@ describe("Redis Browser", () => {
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存路径" })).toBeEnabled();
+    expect(screen.getByLabelText("JSON Path")).toHaveValue("$.name");
+    expect(screen.getByLabelText("路径 JSON 值")).toHaveValue('"Bob"');
   });
 
   it("JSON Path 读取失败时展示稳定映射文案", async () => {

@@ -6,6 +6,7 @@ import "./browserTrees.css";
 
 interface KeyRowsProps {
   keys: KeySummary[];
+  separator?: string;
   selectedKey: string | null;
   selectedKeys: string[];
   loading: boolean;
@@ -47,10 +48,10 @@ interface KeyFolder {
   count: number;
 }
 
-function buildFolders(keys: KeySummary[]): KeyFolder {
+function buildFolders(keys: KeySummary[], separator: string): KeyFolder {
   const root: KeyFolder = { segment: "", prefix: "", folders: new Map(), leaves: [], count: keys.length };
   for (const summary of keys) {
-    const segments = summary.key.split(":");
+    const segments = separator ? summary.key.split(separator) : [summary.key];
     let folder = root;
     // Keep deeply delimited names usable without creating unbounded nesting.
     const folderDepth = Math.min(segments.length - 1, 32);
@@ -58,19 +59,19 @@ function buildFolders(keys: KeySummary[]): KeyFolder {
       const segment = segments[index];
       let next = folder.folders.get(segment);
       if (!next) {
-        next = { segment, prefix: `${folder.prefix}${segment}:`, folders: new Map(), leaves: [], count: 0 };
+        next = { segment, prefix: `${folder.prefix}${segment}${separator}`, folders: new Map(), leaves: [], count: 0 };
         folder.folders.set(segment, next);
       }
       next.count += 1;
       folder = next;
     }
-    folder.leaves.push({ summary, label: segments.slice(folderDepth).join(":") || "（空段）" });
+    folder.leaves.push({ summary, label: segments.slice(folderDepth).join(separator) || "（空段）" });
   }
   return root;
 }
 
-export function KeyTree({ keys, selectedKey, selectedKeys, loading, onSelect, onToggleSelect }: KeyRowsProps) {
-  const root = useMemo(() => buildFolders(keys), [keys]);
+export function KeyTree({ keys, separator = ":", selectedKey, selectedKeys, loading, onSelect, onToggleSelect }: KeyRowsProps) {
+  const root = useMemo(() => buildFolders(keys, separator), [keys, separator]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const checked = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   const renderFolder = (folder: KeyFolder, depth: number): React.ReactNode => <>
@@ -83,7 +84,7 @@ export function KeyTree({ keys, selectedKey, selectedKeys, loading, onSelect, on
           return next;
         })}>
         <span aria-hidden="true">{expanded.has(child.prefix) ? "▾" : "▸"}</span>
-        <code>{child.segment || "（空段）"}:</code>
+        <code>{child.segment || "（空段）"}{separator}</code>
         <span className="key-tree-count">{child.count}</span>
       </button>
       {expanded.has(child.prefix) ? <ul className="key-tree-children" aria-label={`前缀 ${child.prefix} 的键`}>
@@ -97,7 +98,7 @@ export function KeyTree({ keys, selectedKey, selectedKeys, loading, onSelect, on
   </>;
 
   return <div className="key-tree-panel">
-    <p className="browser-helper">按 : 分层，仅展示已扫描的匹配键；展开前缀后可选择具体键。</p>
+    <p className="browser-helper">按 {separator || "完整键名"} 分层，仅展示已扫描的匹配键；展开前缀后可选择具体键。</p>
     <ul className="key-list key-tree" aria-label="Redis 键树">{renderFolder(root, 0)}</ul>
   </div>;
 }

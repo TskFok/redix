@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { DatabaseAnalysisReport } from "../../lib/types";
 import { deleteAnalysisHistory, getAnalysisHistory, listAnalysisHistory, saveAnalysisHistory,
   type AnalysisHistorySummary, type SavedAnalysis } from "./analysisHistoryApi";
+import AnalysisTrends, { analysisScope } from "./AnalysisTrends";
 
 interface Props {
   connectionId: string;
@@ -11,8 +12,8 @@ interface Props {
 }
 
 function Comparison({ current, previous }: { current: DatabaseAnalysisReport; previous: DatabaseAnalysisReport }) {
-  if (current.database !== previous.database || current.pattern !== previous.pattern || current.delimiter !== previous.delimiter || current.progress.max_keys !== previous.progress.max_keys) {
-    return <p role="status">扫描参数不同，不能直接比较差值；请使用相同数据库、匹配模式、分隔符和扫描上限重新分析。</p>;
+  if (analysisScope(current) !== analysisScope(previous)) {
+    return <p role="status">扫描参数不同或节点范围不同，不能直接比较差值；请使用相同数据库、匹配模式、分隔符和扫描上限，并确认成功/失败节点范围一致后重新分析。</p>;
   }
   const metrics = [
     ["已观察键数", previous.total_keys.observed, current.total_keys.observed],
@@ -35,6 +36,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [trendReports, setTrendReports] = useState<SavedAnalysis[] | null>(null);
   const generation = useRef(0);
   const scope = JSON.stringify([connectionId, database]);
   const scopeRef = useRef(scope);
@@ -42,7 +44,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
 
   useEffect(() => {
     const token = ++generation.current;
-    setItems([]); setSelected(null); setDeleteId(null); setError(null); setMessage(null); setBusy(true);
+    setItems([]); setSelected(null); setDeleteId(null); setError(null); setMessage(null); setTrendReports(null); setBusy(true);
     void listAnalysisHistory({ connection_id: connectionId, database })
       .then((result) => { if (token === generation.current && scopeRef.current === scope) setItems(result); })
       .catch(() => { if (token === generation.current && scopeRef.current === scope) setError("读取分析历史失败，本机文件可能损坏或不可访问；原文件不会被覆盖。"); })
@@ -64,7 +66,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
     if (!report || report.database !== database) return;
     void run(async (isCurrent) => {
       const summary = await saveAnalysisHistory({ connection_id: connectionId, report });
-      if (isCurrent()) { setItems((current) => [summary, ...current]); setMessage("分析报告已保存到本机。"); }
+      if (isCurrent()) { setItems((current) => [summary, ...current]); setTrendReports(null); setMessage("分析报告已保存到本机。"); }
     });
   };
 
@@ -75,6 +77,14 @@ export default function AnalysisHistory({ connectionId, database, report, render
     {message && <p role="status">{message}</p>}
     {busy && <p role="status">正在处理分析历史…</p>}
     {!busy && items.length === 0 && <p>当前数据库暂无已保存分析。</p>}
+    <button type="button" className="button button-secondary" disabled={busy || items.length === 0} onClick={() => void run(async (isCurrent) => {
+      const results = await Promise.allSettled(items.slice(0, 20).map((item) => getAnalysisHistory({ connection_id: connectionId, database, id: item.id })));
+      if (!isCurrent()) return;
+      const reports = results.flatMap((result) => result.status === "fulfilled" && result.value.connection_id === connectionId && result.value.report.database === database ? [result.value] : []);
+      setTrendReports(reports);
+      if (reports.length !== results.length) setMessage("部分历史报告读取失败，趋势只包含成功读取的记录。");
+    })}>加载历史趋势</button>
+    {trendReports && <AnalysisTrends key={JSON.stringify(trendReports.map((item) => item.id))} items={trendReports} current={report} />}
     {items.length > 0 && <div className="database-table-wrap"><table className="database-table" aria-label="已保存分析">
       <thead><tr><th>保存时间</th><th>匹配模式</th><th>键数</th><th>内存（字节）</th><th>操作</th></tr></thead>
       <tbody>{items.map((item) => <tr key={item.id}>
@@ -91,6 +101,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
         await deleteAnalysisHistory({ connection_id: connectionId, database, id });
         if (isCurrent()) {
           setItems((current) => current.filter((item) => item.id !== id));
+          setTrendReports(null);
           setSelected((current) => current?.id === id ? null : current); setDeleteId(null);
         }
       })}>确认删除报告</button><button className="button button-quiet" disabled={busy} onClick={() => setDeleteId(null)}>取消删除</button>

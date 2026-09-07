@@ -14,10 +14,16 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test:redis:local": "python3 scripts/test-local-redis.py",
-    "test:redis:cluster": "python3 -B -m unittest scripts/test_local_cluster_test.py -v && python3 -B scripts/test-local-cluster.py"
+    "test:redis:cluster": "python3 -B -m unittest scripts/test_local_cluster_test.py -v && python3 -B scripts/test-local-cluster.py",
+    "test:redis:stack": "python3 -B -m unittest scripts/test_local_stack_test.py -v && python3 -B scripts/test-local-stack.py"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
+    "buffer": "^6.0.3",
+    "json-bigint": "^1.0.0",
+    "lz4js": "^0.2.0",
+    "msgpackr": "^2.1.0",
+    "protobufjs": "^8.8.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

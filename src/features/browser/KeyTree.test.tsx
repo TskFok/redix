@@ -82,3 +82,14 @@ describe("键树浏览", () => {
     expect(screen.getByRole("button", { name: "user:1" })).toBeDisabled();
   });
 });
+
+it("可以用多字符分隔符分组，清空分隔符时按完整键名展示", () => {
+  render(<Harness keys={["user::one", "user::two"]} />);
+  fireEvent.click(screen.getByRole("button", { name: "树形" }));
+  fireEvent.change(screen.getByLabelText("键树分隔符"), { target: { value: "::" } });
+  fireEvent.click(screen.getByRole("button", { name: "展开前缀 user::" }));
+  expect(screen.getByRole("button", { name: "user::one" })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("键树分隔符"), { target: { value: "" } });
+  expect(screen.queryByRole("button", { name: /展开前缀/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "user::two" })).toBeInTheDocument();
+});

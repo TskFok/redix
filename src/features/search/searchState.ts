@@ -73,6 +73,11 @@ function compareVersions(left: [number, number, number], right: [number, number,
   return 0;
 }
 
+export function vectorSearchSupported(version: string | null): boolean {
+  const parsed = parseVersion(version);
+  return parsed !== null && compareVersions(parsed, [2, 4, 0]) >= 0;
+}
+
 export function searchCapabilityState(state: SearchProbeState): SearchCapabilityState {
   if (state.status === "loading") {
     return state;

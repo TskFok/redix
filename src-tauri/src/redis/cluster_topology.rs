@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ::redis::{Cmd, Value};
 
@@ -185,13 +185,28 @@ pub fn parse_cluster_nodes(input: &str) -> Result<Vec<ClusterNode>, AppError> {
 pub fn merge_node_metrics(node: &mut ClusterNode, input: &str) -> Result<(), AppError> {
     ensure_text_size(input)?;
     let mut metrics = node.metrics.clone();
+    metrics.server_version = None;
+    metrics.redis_mode = None;
+    metrics.maxmemory_bytes = None;
+    metrics.total_keys = None;
     let mut hits = None;
     let mut misses = None;
+    let mut keyspace_seen = false;
+    let mut total_keys = Some(0u64);
+    let mut databases = HashSet::new();
     for line in input.lines() {
+        if line.trim() == "# Keyspace" {
+            keyspace_seen = true;
+        }
         let Some((key, value)) = line.split_once(':') else {
             continue;
         };
         match key {
+            "redis_version" => {
+                metrics.server_version = bounded_text(value.trim()).ok().map(str::to_owned)
+            }
+            "redis_mode" => metrics.redis_mode = bounded_text(value.trim()).ok().map(str::to_owned),
+            "maxmemory" => metrics.maxmemory_bytes = parse_u64(value).ok(),
             "used_memory" => set_metric(&mut metrics.used_memory_bytes, parse_u64(value)),
             "instantaneous_ops_per_sec" => {
                 set_metric(&mut metrics.ops_per_second, parse_u64(value))
@@ -218,9 +233,26 @@ pub fn merge_node_metrics(node: &mut ClusterNode, input: &str) -> Result<(), App
             "uptime_in_seconds" => set_metric(&mut metrics.uptime_seconds, parse_u64(value)),
             "keyspace_hits" => hits = parse_u64(value).ok(),
             "keyspace_misses" => misses = parse_u64(value).ok(),
+            key if key.strip_prefix("db").is_some_and(|index| {
+                !index.is_empty() && index.bytes().all(|byte| byte.is_ascii_digit())
+            }) =>
+            {
+                keyspace_seen = true;
+                let count = if databases.insert(key) {
+                    database_key_count(value)
+                } else {
+                    None
+                };
+                total_keys = total_keys
+                    .zip(count)
+                    .and_then(|(total, count)| total.checked_add(count));
+            }
             _ => {}
         }
     }
+    // Redis omits empty databases. An explicit empty Keyspace section means
+    // zero keys; an absent section or any malformed database count is unknown.
+    metrics.total_keys = if keyspace_seen { total_keys } else { None };
     if let (Some(hits), Some(misses)) = (hits, misses) {
         if let Some(total) = hits.checked_add(misses).filter(|total| *total != 0) {
             metrics.cache_hit_ratio = Some(hits as f64 * 100.0 / total as f64);
@@ -228,6 +260,22 @@ pub fn merge_node_metrics(node: &mut ClusterNode, input: &str) -> Result<(), App
     }
     node.metrics = metrics;
     Ok(())
+}
+
+fn database_key_count(value: &str) -> Option<u64> {
+    let mut keys = None;
+    for field in value.split(',') {
+        let Some((name, count)) = field.split_once('=') else {
+            continue;
+        };
+        if name.trim() == "keys" {
+            if keys.is_some() {
+                return None;
+            }
+            keys = Some(parse_u64(count).ok()?);
+        }
+    }
+    keys
 }
 
 fn set_metric<T>(target: &mut Option<T>, result: Result<T, AppError>) {

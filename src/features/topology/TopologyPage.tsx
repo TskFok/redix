@@ -153,7 +153,9 @@ function TopologySession({ connectionId }: { connectionId: string }) {
                           .join("、") || "—"}
                       </td>
                       {topologyMetricLabels.map(([key]) => (
-                        <td key={key}>{node.metrics[key] ?? "不可用"}</td>
+                        <td key={key}>{key === "maxmemory_bytes" && node.metrics[key] === 0
+                          ? "0（无限制）"
+                          : node.metrics[key] ?? "不可用"}</td>
                       ))}
                     </tr>
                   ))}

@@ -150,6 +150,34 @@ afterEach(() => {
 });
 
 describe("DatabasePage", () => {
+  it("手动刷新累积趋势，换连接清空，并且自动刷新默认关闭", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
+    try {
+      const view = renderPage();
+      await screen.findByText("7.2.5");
+      expect(screen.getByRole("combobox", { name: "概览自动刷新" })).toHaveValue("0");
+      expect(screen.getByText("查看采样数据（1 次）")).toBeInTheDocument();
+      clock.mockReturnValue(2000);
+      fireEvent.click(screen.getByRole("button", { name: "刷新概览" }));
+      await screen.findByText("查看采样数据（2 次）");
+      clock.mockReturnValue(3000);
+      view.rerender(<DatabasePage connectionId="new" activeDatabase={0} onProfileChanged={vi.fn()} />);
+      await screen.findByText("查看采样数据（1 次）");
+      expect(screen.queryByText("查看采样数据（2 次）")).not.toBeInTheDocument();
+    } finally { clock.mockRestore(); }
+  });
+  it("切换DB尚未返回时更换连接，不锁住新连接刷新和DB选择", async () => {
+    let finish: (value: ConnectionProfile) => void = () => undefined;
+    selectDatabaseMock.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+    const view = renderPage("first");
+    await screen.findByText("数据库 1");
+    fireEvent.click(screen.getByRole("button", { name: "切换到数据库 1" }));
+    view.rerender(<DatabasePage connectionId="next" activeDatabase={0} onProfileChanged={vi.fn()} />);
+    await waitFor(() => expect(screen.getByRole("button", { name: "刷新概览" })).toBeEnabled());
+    expect(screen.getByRole("button", { name: "切换到数据库 1" })).toBeEnabled();
+    await act(async () => { finish(profile); });
+    expect(screen.getByRole("button", { name: "刷新概览" })).toBeEnabled();
+  });
   it("加载实例详情和数据库列表，并将空指标显示为不可用", async () => {
     renderPage();
 
@@ -231,5 +259,6 @@ describe("DatabasePage", () => {
     });
     expect(screen.queryByText("old")).not.toBeInTheDocument();
     expect(screen.getByText("8.0.0")).toBeInTheDocument();
+    expect(screen.getByText("查看采样数据（1 次）")).toBeInTheDocument();
   });
 });

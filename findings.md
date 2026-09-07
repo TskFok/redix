@@ -555,3 +555,14 @@
 - SSH/auth/commands 的成功测试路径已改为 `temp_dir()` 生成的平台原生绝对路径，并保留相对路径与控制字符拒绝；生产 `Path::is_absolute` 校验未弱化。本机只验证 macOS，三平台 workflow 尚未由 CI 实际运行。
 - 范围扫描新增 RDI、Copilot、Telemetry/Analytics 与远程插件的精确入口/依赖规则和正反例，避免用泛化 `AI` 字样误伤本地分析文本；文档目录仍不参与生产扫描。
 - 当前拓扑 DTO 没有目标中的节点 version/mode/totalkeys 等额外字段；Cluster typed SlowLog/PubSub/Profiler 与 Cluster+SSH 仍是明确缺口。连接与拓扑只是六批路线的第一批，Browser 解码器、后台任务等后续批次未完成。
+
+## 2026-09-07 新一轮源码对比
+
+- 当前 Redix HEAD `67318ae`，目标 RedisInsight `48ee19fab`。根计划早期仍显示 plan_ready，但源码和最终审查记录表明连接与拓扑已实施；不能按旧状态重复建设。
+- 现有 Browser String DTO 只有 UTF-8 文本，批量删除是同步单请求，无任务状态/取消；这些是需要源码补齐的真实能力缺口。
+- 既有设计采用本地内置解码器与可视化、typed IPC 和有界后台任务；沿用此架构，不引入 RedisInsight 的 Electron/Nest 后端。
+
+
+## 继续补齐的实际问题
+
+JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 索引详情初始化与查询请求竞争正在修复。并行推进 typed KNN、后台分析与 Workbench 内置图表，随后补实例趋势和 Cluster 节点指标。上述完成状态仍以最终统一验证为准，Redis Cloud 仍排除。

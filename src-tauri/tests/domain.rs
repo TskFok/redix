@@ -833,12 +833,16 @@ fn search_create_input_rejects_empty_index_and_duplicate_fields() {
         prefixes: vec!["user:".into()],
         fields: vec![
             SearchIndexFieldInput {
+                alias: None,
                 name: "name".into(),
                 field_type: SearchFieldType::Text,
+                vector: None,
             },
             SearchIndexFieldInput {
+                alias: None,
                 name: "name".into(),
                 field_type: SearchFieldType::Tag,
+                vector: None,
             },
         ],
     };
@@ -867,8 +871,10 @@ fn search_create_input_rejects_empty_index_and_duplicate_fields() {
 #[test]
 fn search_create_input_enforces_field_and_prefix_limits() {
     let field = |index: usize| SearchIndexFieldInput {
+        alias: None,
         name: format!("field:{index}"),
         field_type: SearchFieldType::Text,
+        vector: None,
     };
     let base = CreateSearchIndexInput {
         connection_id: "local".into(),
@@ -899,8 +905,10 @@ fn search_create_input_enforces_field_and_prefix_limits() {
     assert_eq!(
         CreateSearchIndexInput {
             fields: vec![SearchIndexFieldInput {
+                alias: None,
                 name: "x".repeat(257),
                 field_type: SearchFieldType::Text,
+                vector: None,
             }],
             ..base.clone()
         }

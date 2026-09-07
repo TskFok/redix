@@ -14,18 +14,23 @@ import type {
   SearchIndexInfo,
   SearchQueryResult,
   SearchKeyType,
+  SearchVectorConfig,
 } from "../../lib/types";
 import {
   replaceSearchResults,
   resetSearchState,
   searchCapabilityState,
   searchErrorMessage,
+  vectorSearchSupported,
   type SearchCapabilityState,
   type SearchProbeState,
   type SearchState,
 } from "./searchState";
 import { SearchDocumentTable } from "./SearchDocumentTable";
 import { AggregatePanel } from "./AggregatePanel";
+import { VectorSearchPanel } from "./VectorSearchPanel";
+import { SearchQueryBuilder } from "./SearchQueryBuilder";
+import { defaultSearchVectorConfig, validSearchVectorConfig, VectorIndexOptions } from "./VectorIndexOptions";
 import "./searchDocuments.css";
 
 interface SearchPageProps {
@@ -34,7 +39,9 @@ interface SearchPageProps {
 
 interface SearchFieldDraft {
   name: string;
+  alias?: string;
   field_type: SearchFieldType;
+  vector?: SearchVectorConfig;
 }
 
 interface SearchCreateDraft {
@@ -224,6 +231,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   const searchRequestRef = useRef(0);
 
   const capability = searchCapabilityState(probe);
+  const vectorSupported = capability.status === "ready" && vectorSearchSupported(capability.capabilities.search_version);
   const mutationBusy = createBusy || deleteBusy;
 
   const changeQuery = (changes: Partial<Pick<SearchState, "query" | "includeContent" | "selectedIndex">>) => {
@@ -258,6 +266,8 @@ export function SearchPage({ connectionId }: SearchPageProps) {
           info: selectionChanged ? null : current.info,
           result: selectionChanged ? null : current.result,
           offset: selectionChanged ? 0 : current.offset,
+          loading: selectionChanged ? false : current.loading,
+          requestToken: selectionChanged ? null : current.requestToken,
           error: null,
         };
       });
@@ -322,8 +332,6 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   useEffect(() => {
     const requestId = infoRequestRef.current + 1;
     infoRequestRef.current = requestId;
-    searchRequestRef.current += 1;
-    setState((current) => ({ ...current, loading: false, requestToken: null }));
     if (capability.status !== "ready" || !state.selectedIndex) {
       setInfoLoading(false);
       setState((current) => (current.info === null ? current : { ...current, info: null }));
@@ -399,7 +407,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
       }
     } catch (caught) {
       if (mountedRef.current && searchRequestRef.current === requestId) {
-        setState((current) => ({
+        setState((current) => current.requestToken?.requestId !== requestId || current.selectedIndex !== token.index ? current : ({
           ...current,
           loading: false,
           error: searchErrorMessage(caught, state.includeContent
@@ -415,7 +423,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
     const requestGeneration = connectionRequestRef.current;
     const index = createDraft.index.trim();
     const fields = createDraft.fields
-      .map((field) => ({ ...field, name: field.name.trim() }))
+      .map(({ alias, ...field }) => ({ ...field, name: field.name.trim(), ...(alias?.trim() ? { alias: alias.trim() } : {}) }))
       .filter((field) => field.name.length > 0);
     if (!index) {
       setCreateError("索引名称不能为空。");
@@ -427,6 +435,20 @@ export function SearchPage({ connectionId }: SearchPageProps) {
     }
     if (new Set(fields.map((field) => field.name)).size !== fields.length) {
       setCreateError("索引字段名称不能重复。");
+      return;
+    }
+    const aliases = fields.flatMap((field) => field.alias ? [field.alias] : []);
+    if (aliases.some((alias) => !/^[A-Za-z0-9_]{1,256}$/.test(alias)) || new Set(aliases).size !== aliases.length
+      || fields.some((field) => field.alias && fields.some((other) => other !== field && other.name === field.alias))) {
+      setCreateError("查询别名只能使用字母、数字或下划线，不得重复或与其他字段名称冲突。");
+      return;
+    }
+    if (fields.some((field) => field.field_type === "vector" && !/^[A-Za-z0-9_]{1,256}$/.test(field.alias || field.name))) {
+      setCreateError("VECTOR 字段需要安全查询别名（如 embedding），才能在 KNN 查询面板执行。");
+      return;
+    }
+    if (fields.some((field) => field.field_type === "vector" && (!vectorSupported || !validSearchVectorConfig(field.vector)))) {
+      setCreateError(vectorSupported ? "向量配置无效，请检查维度和算法参数的范围。" : "VECTOR 索引需要 RedisSearch 2.4 或更高版本。");
       return;
     }
 
@@ -559,13 +581,19 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                       </label>
                       <label className="field">
                         <span>字段类型</span>
-                        <select aria-label={`字段 ${fieldIndex + 1} 类型`} value={field.field_type} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, field_type: event.target.value as SearchFieldType } : item) }))} disabled={mutationBusy}>
-                          {fieldTypeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                        <select aria-label={`字段 ${fieldIndex + 1} 类型`} value={field.field_type} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { name: item.name, ...(item.alias ? { alias: item.alias } : {}), field_type: event.target.value as SearchFieldType, ...(event.target.value === "vector" ? { vector: defaultSearchVectorConfig() } : {}) } : item) }))} disabled={mutationBusy}>
+                          {fieldTypeOptions.map((option) => <option key={option.value} value={option.value} disabled={option.value === "vector" && !vectorSupported}>{option.label}</option>)}
                         </select>
+                      </label>
+                      <label className="field">
+                        <span>查询别名（可选）</span>
+                        <input aria-label={`字段 ${fieldIndex + 1} 查询别名`} value={field.alias ?? ""} placeholder={field.field_type === "vector" ? "建议：embedding" : "例如 name"} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, alias: event.target.value || undefined } : item) }))} disabled={mutationBusy} spellCheck={false} />
+                        <small>{field.field_type === "vector" ? "JSONPath 或含标点字段请显式填写，如 embedding；原字段路径保持不变。" : "AS 别名仅用于查询；留空保留原字段名称。"}</small>
                       </label>
                       <button type="button" className="button button-quiet" onClick={() => setCreateDraft((current) => ({ ...current, fields: current.fields.length > 1 ? current.fields.filter((_, index) => index !== fieldIndex) : current.fields }))} disabled={mutationBusy || createDraft.fields.length === 1}>
                         删除字段
                       </button>
+                      {field.field_type === "vector" && field.vector ? <VectorIndexOptions value={field.vector} index={fieldIndex} disabled={mutationBusy} onChange={(vector) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, vector } : item) }))} /> : null}
                     </div>
                   ))}
                 </div>
@@ -573,6 +601,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                   添加字段
                 </button>
               </fieldset>
+              {!vectorSupported ? <p className="browser-helper">VECTOR 索引需要 RedisSearch 2.4 或更高版本。</p> : null}
               {createError ? <p className="inline-error" role="alert">{createError}</p> : null}
               <div className="form-actions">
                 <button type="button" className="button button-primary" onClick={() => void handleCreate()} disabled={mutationBusy}>
@@ -617,6 +646,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                 </div>
                 <span className="panel-hint">{state.includeContent ? "文档内容" : "NOCONTENT"} · LIMIT {SEARCH_PAGE_SIZE}</span>
               </div>
+              <SearchQueryBuilder key={`${connectionId}:${state.selectedIndex}:${JSON.stringify(state.info?.attributes ?? [])}`} attributes={state.info?.attributes ?? []} disabled={!state.selectedIndex || state.loading || mutationBusy || infoLoading} onApply={(query) => changeQuery({ query })} />
               <div className="search-query-form">
                 <label className="field">
                   <span>查询语句</span>
@@ -634,6 +664,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
               {state.includeContent ? <p className="browser-helper">最多 64 个字段/文档、256 KiB/字段、4 MiB/响应；支持 UTF-8 文本及 JSON，过大或二进制文档请使用仅键名模式。</p> : null}
               <SearchResults result={state.result} busy={state.loading || mutationBusy} includeContent={state.includeContent} onNext={() => { if (nextOffset !== null) void runSearch(nextOffset); }} />
             </section>
+            <VectorSearchPanel connectionId={connectionId} index={state.selectedIndex} attributes={state.info?.attributes ?? []} enabled={vectorSupported && !mutationBusy && !infoLoading} />
             <AggregatePanel connectionId={connectionId} index={state.selectedIndex} enabled={!mutationBusy} />
           </div>
         </>

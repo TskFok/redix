@@ -1,4 +1,5 @@
 pub mod analysis_history;
+pub mod analysis_tasks;
 pub mod array;
 pub mod browser;
 pub mod cli;
@@ -53,3 +54,10 @@ pub use workbench::{
 pub mod collection;
 pub mod search_aggregate;
 pub mod stream_entries;
+
+pub mod bulk_tasks;
+pub mod local_products;
+
+pub mod stream_advanced;
+
+pub mod string_value;

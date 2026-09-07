@@ -35,6 +35,7 @@ import StreamConsumerGroups from "./StreamConsumerGroups";
 import VectorSetDetails from "./VectorSetDetails";
 import CollectionDetails from "./CollectionDetails";
 import StreamEntries from "./StreamEntries";
+import StringValueEditor from "./StringValueEditor";
 import type { CollectionKind } from "./collectionApi";
 import { searchCapabilityState } from "../search/searchState";
 
@@ -448,7 +449,8 @@ export function KeyDetails({
   const isVectorSetDetail = "VectorSet" in detail.value;
   const collectionKind = ["hash", "list", "set", "zset"].includes(detailKeyType) ? detailKeyType as CollectionKind : null;
   const isStreamDetail = detailKeyType === "stream";
-  const isModuleDetail = isArrayDetail || isVectorSetDetail || collectionKind !== null || isStreamDetail;
+  const isStringDetail = detailKeyType === "string";
+  const isModuleDetail = isArrayDetail || isVectorSetDetail || collectionKind !== null || isStreamDetail || isStringDetail;
   const arraySummary = "Array" in detail.value ? detail.value.Array : null;
   const vectorSetSummary = "VectorSet" in detail.value ? detail.value.VectorSet : null;
 
@@ -557,7 +559,7 @@ export function KeyDetails({
             </button>
           </div>
           <button type="button" className="button button-danger" onClick={() => void handleDelete()} disabled={uiBusy}>
-            {uiBusy ? "处理中…" : "删除整个键"}
+            {uiBusy ? "处理中…" : isStringDetail ? "删除" : "删除整个键"}
           </button>
         </div>
       ) : (
@@ -573,6 +575,11 @@ export function KeyDetails({
         />
       )}
       {isModuleDetail && error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
+      {isStringDetail && <StringValueEditor connectionId={connectionId} keyName={detail.key} disabled={busy} onBusyChange={handleChildBusy} onSaved={(result) => {
+        // Keep the raw payload in the dedicated editor; the Browser DTO stays a preview.
+        onDetailChange({ ...detail, ttl_ms: result.ttl_ms });
+        setLocalInfo(null); onMetadataChange?.(null);
+      }} />}
       {collectionKind && <CollectionDetails key={JSON.stringify([connectionId, detail.key, collectionKind])} connectionId={connectionId} keyName={detail.key} kind={collectionKind} disabled={busy} onBusyChange={handleChildBusy} />}
       {isStreamDetail && <StreamEntries key={JSON.stringify([connectionId, detail.key])} connectionId={connectionId} streamKey={detail.key} disabled={busy} onBusyChange={handleChildBusy} />}
       {isArrayDetail ? (
@@ -612,15 +619,7 @@ export function KeyDetails({
       ) : null}
       {showJsonPathEditor && "Json" in detail.value ? (
         <JsonPathEditor
-          key={JSON.stringify([
-            connectionId,
-            detail.key,
-            detail.ttl_ms,
-            detail.value,
-            moduleProbe.status,
-            moduleProbe.capabilities.json_supported,
-            moduleProbe.capabilities.json_version,
-          ])}
+          key={JSON.stringify([connectionId, detail.key])}
           value={detail.value.Json.value}
           busy={busy}
           error={jsonPathError}

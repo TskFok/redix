@@ -1,4 +1,5 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useLayoutEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import JsonPathEditor from "./JsonPathEditor";
@@ -21,6 +22,60 @@ const mutationResult: JsonMutationResult = {
 describe("JsonPathEditor", () => {
   afterEach(() => {
     cleanup();
+  });
+
+  it("初次挂载的被动effect不能覆盖已经接受的路径输入", async () => {
+    const onMutate = vi.fn().mockResolvedValue(mutationResult);
+    function ImmediateEditor() {
+      useLayoutEffect(() => {
+        // Dispatch before passive effects without opening a nested act scope during commit.
+        const input = screen.getByLabelText("JSON Path");
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "$.name");
+        input.dispatchEvent(new Event("input", { bubbles: true }));
+        const draft = screen.getByLabelText("路径 JSON 值");
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(draft, '"Bob"');
+        draft.dispatchEvent(new Event("input", { bubbles: true }));
+      }, []);
+      return <JsonPathEditor value={rootValue} busy={false} error={null} onRead={vi.fn()} onMutate={onMutate} />;
+    }
+    await act(async () => { render(<ImmediateEditor />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "保存路径" })); });
+    expect(onMutate).toHaveBeenCalledWith({ kind: "set", path: "$.name", value: "Bob" });
+  });
+
+  it("等价JSON新引用和属性顺序变化不清除路径、草稿与读取结果", async () => {
+    const onRead = vi.fn().mockResolvedValue({ key: "profile:1", path: "$.name", found: true, value: "Alice", ttl_ms: 5000 });
+    const onMutate = vi.fn().mockResolvedValue(mutationResult);
+    const props = { busy: false, error: null, onRead, onMutate };
+    const { rerender } = render(<JsonPathEditor value={rootValue} {...props} />);
+    fireEvent.change(screen.getByLabelText("JSON Path"), { target: { value: "$.name" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取路径" }));
+    await screen.findByLabelText("路径读取结果");
+    fireEvent.change(screen.getByLabelText("路径 JSON 值"), { target: { value: '"Bob"' } });
+    rerender(<JsonPathEditor value={{ name: "Alice", tags: ["redis"] }} {...props} />);
+    expect(screen.getByLabelText("JSON Path")).toHaveValue("$.name");
+    expect(screen.getByLabelText("路径 JSON 值")).toHaveValue('"Bob"');
+    rerender(<JsonPathEditor value={{ tags: ["redis"], name: "Alice" }} {...props} />);
+    expect(screen.getByLabelText("JSON Path")).toHaveValue("$.name");
+    expect(screen.getByLabelText("路径 JSON 值")).toHaveValue('"Bob"');
+    expect(screen.getByLabelText("路径读取结果")).toHaveTextContent('"Alice"');
+    fireEvent.click(screen.getByRole("button", { name: "保存路径" }));
+    expect(onMutate).toHaveBeenCalledWith({ kind: "set", path: "$.name", value: "Bob" });
+  });
+
+  it("实际JSON数据更新重置路径草稿，并丢弃更新前的读取结果", async () => {
+    let resolve!: (value: JsonPathValue) => void;
+    const result = new Promise<JsonPathValue>((done) => { resolve = done; });
+    const props = { busy: false, error: null, onRead: vi.fn(() => result), onMutate: vi.fn() };
+    const { rerender } = render(<JsonPathEditor value={rootValue} {...props} />);
+    fireEvent.change(screen.getByLabelText("JSON Path"), { target: { value: "$.name" } });
+    fireEvent.click(screen.getByRole("button", { name: "读取路径" }));
+    const changed = { name: "Carol", tags: ["redis", "json"] };
+    rerender(<JsonPathEditor value={changed} {...props} />);
+    expect(screen.getByLabelText("JSON Path")).toHaveValue("$");
+    expect(screen.getByLabelText("路径 JSON 值")).toHaveValue(JSON.stringify(changed, null, 2));
+    await act(async () => resolve({ key: "profile:1", path: "$.name", found: true, value: "Alice", ttl_ms: 5000 }));
+    expect(screen.queryByLabelText("路径读取结果")).not.toBeInTheDocument();
   });
 
   it("读取路径调用 onRead 并展示返回的值、TTL 和 path", async () => {

@@ -34,3 +34,8 @@ pub use workbench::*;
 pub mod collection;
 pub mod search_aggregate;
 pub mod stream_entries;
+
+pub mod local_products;
+pub mod value_codec;
+
+pub mod stream_advanced;

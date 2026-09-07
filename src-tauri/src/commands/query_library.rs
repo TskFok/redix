@@ -38,8 +38,11 @@ pub fn delete_query_library_item(
 }
 
 pub fn list_query_library_inner(state: &AppState) -> Result<Vec<QueryLibraryItem>, AppError> {
+    let _lock = super::local_products::QUERY_LIBRARY_LOCK
+        .lock()
+        .map_err(|_| AppError::PersistenceFailed)?;
     let mut items = query_library_store(state)
-        .load_or_default::<QueryLibraryDocument>()?
+        .load::<QueryLibraryDocument>()?
         .items;
     items.sort_by(|left, right| {
         right
@@ -55,8 +58,13 @@ pub fn save_query_library_item_inner(
     input: QueryLibraryItemInput,
 ) -> Result<QueryLibraryItem, AppError> {
     input.validate()?;
+    crate::domain::local_products::validate_query_text(&input.command)
+        .map_err(|_| AppError::InvalidConnection)?;
+    let _lock = super::local_products::QUERY_LIBRARY_LOCK
+        .lock()
+        .map_err(|_| AppError::PersistenceFailed)?;
     let store = query_library_store(state);
-    let mut document = store.load_or_default::<QueryLibraryDocument>()?;
+    let mut document = store.load::<QueryLibraryDocument>()?;
     let existing_index = input
         .id
         .as_deref()
@@ -97,8 +105,11 @@ pub fn delete_query_library_item_inner(state: &AppState, id: String) -> Result<(
         return Err(AppError::InvalidConnection);
     }
 
+    let _lock = super::local_products::QUERY_LIBRARY_LOCK
+        .lock()
+        .map_err(|_| AppError::PersistenceFailed)?;
     let store = query_library_store(state);
-    let mut document = store.load_or_default::<QueryLibraryDocument>()?;
+    let mut document = store.load::<QueryLibraryDocument>()?;
     let Some(index) = document.items.iter().position(|item| item.id == id) else {
         return Err(AppError::InvalidConnection);
     };

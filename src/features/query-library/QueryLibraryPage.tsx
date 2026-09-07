@@ -6,6 +6,7 @@ import {
   saveQueryLibraryItem,
 } from "../../lib/tauri";
 import type { QueryLibraryItem, QueryLibraryItemInput } from "../../lib/types";
+import QueryPackage from "./QueryPackage";
 import {
   filterQueryLibraryItems,
   initialQueryLibraryPageState,
@@ -166,6 +167,8 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
           新建查询
         </button>
       </div>
+
+      <QueryPackage disabled={state.loading || state.saving} onImported={(items) => setState((current) => ({ ...current, items: [...items, ...current.items] }))} />
 
       {state.error ? (
         <p className="feedback feedback-error" role="alert">

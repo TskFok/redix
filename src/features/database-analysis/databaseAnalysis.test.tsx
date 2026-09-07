@@ -1,17 +1,11 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { analyzeDatabase } from "../../lib/tauri";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as api from "./analysisTasksApi";
+import { listAnalysisHistory } from "./analysisHistoryApi";
 import type { DatabaseAnalysisReport } from "../../lib/types";
 import DatabaseAnalysisPage from "./DatabaseAnalysisPage";
-
-vi.mock("../../lib/tauri", () => ({
-  analyzeDatabase: vi.fn(),
-}));
-vi.mock("./analysisHistoryApi", () => ({ listAnalysisHistory: vi.fn().mockResolvedValue([]) }));
-
-const analyzeDatabaseMock = vi.mocked(analyzeDatabase);
-
+vi.mock("./analysisTasksApi", () => ({ startAnalysisTask: vi.fn(), listAnalysisTasks: vi.fn(), getAnalysisTask: vi.fn(), cancelAnalysisTask: vi.fn() }));
+vi.mock("./analysisHistoryApi", () => ({ listAnalysisHistory: vi.fn().mockResolvedValue([]), saveAnalysisHistory: vi.fn() }));
 const report: DatabaseAnalysisReport = {
   node_results: [], failed_nodes: [],
   database: 0,
@@ -39,141 +33,85 @@ const report: DatabaseAnalysisReport = {
   expiration_groups: [{ label: "No Expiry", keys: 1, memory_bytes: 128 }],
 };
 
-beforeEach(() => {
-  vi.clearAllMocks();
+
+const task: api.AnalysisTask = { id: "t1", connection_id: "local", database: 0, analysis: { connection_id: "local", pattern: "*", delimiter: ":", max_keys: 100000 }, status: "completed", progress: report.progress, nodes_total: 1, nodes_completed: 1, error_code: null, started_at: 1, cancel_requested: false };
+function resolveReport(value: DatabaseAnalysisReport) {
+  vi.mocked(api.startAnalysisTask).mockResolvedValue(task);
+  vi.mocked(api.getAnalysisTask).mockResolvedValue({ task, report: value });
+}
+beforeEach(() => { vi.resetAllMocks(); vi.mocked(listAnalysisHistory).mockResolvedValue([]); vi.mocked(api.listAnalysisTasks).mockResolvedValue([]); resolveReport(report); });
+afterEach(cleanup);
+async function start() { const button = screen.getByRole("button", { name: "开始分析" }); await waitFor(() => expect(button).toBeEnabled()); fireEvent.click(button); }
+
+it("启动后台任务携带原数据库范围并显示报告与只读建议", async () => {
+  const key = { key: "large:profile", key_type: "string", length: 100001, memory_bytes: 100001, ttl_seconds: -1 };
+  resolveReport({ ...report, top_keys_by_length: [key], top_keys_by_memory: [key] });
+  render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+  await start();
+  expect(await screen.findByRole("region", { name: "本地分析建议" })).toHaveTextContent("100,000");
+  expect(screen.getByRole("region", { name: "本地分析建议" })).toHaveTextContent("永不过期");
+  expect(screen.getByRole("region", { name: "本地分析建议" })).toHaveTextContent("Top Keys");
+  expect(api.startAnalysisTask).toHaveBeenCalledWith({ analysis: task.analysis, database: 0, timeout_seconds: 300 });
 });
-
-afterEach(() => {
-  cleanup();
+it("重新进入页面恢复完成报告，不重新扫描", async () => {
+  vi.mocked(api.listAnalysisTasks).mockResolvedValue([task]);
+  render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+  expect(await screen.findByText("user:2")).toBeInTheDocument();
+  expect(api.startAnalysisTask).not.toHaveBeenCalled();
+  expect(screen.getByText(/任务和结果仅保留在本次应用内存/)).toBeInTheDocument();
 });
-
-describe("DatabaseAnalysisPage", () => {
-  it("旧报告缺少节点字段时安全显示单份结果", async () => {
-    const legacy = { ...report };
-    delete (legacy as Partial<DatabaseAnalysisReport>).node_results;
-    delete (legacy as Partial<DatabaseAnalysisReport>).failed_nodes;
-    analyzeDatabaseMock.mockResolvedValue(legacy);
-    render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-    expect(await screen.findByText("总键数")).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
-  });
-  it("Cluster 部分分析明确失败及节点范围并可展开节点报告", async () => {
-    analyzeDatabaseMock.mockResolvedValue({ ...report, failed_nodes: [{ node_id: "node-b", code: "CONNECTION_FAILED" }], node_results: [{ node_id: "node-a", endpoint: { host: "::1", port: 7000 }, report }] });
-    render(<DatabaseAnalysisPage connectionId="cluster" activeDatabase={0} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("1 个主节点分析失败");
-    expect(screen.getByText(/node-a.*\[::1\]:7000/)).toBeInTheDocument();
-    expect(screen.getByText(/仅汇总成功主节点/)).toBeInTheDocument();
-  });
-  it("提交默认参数并展示分析摘要和 Top Key", async () => {
-    analyzeDatabaseMock.mockResolvedValue(report);
-    render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-
-    await waitFor(() =>
-      expect(analyzeDatabaseMock).toHaveBeenCalledWith({
-        connection_id: "local",
-        pattern: "*",
-        delimiter: ":",
-        max_keys: 100000,
-      }),
-    );
-    expect(await screen.findByText("总键数")).toBeInTheDocument();
-    expect(screen.getByText("user:2")).toBeInTheDocument();
-  });
-
-  it("显示截断提示和固定连接错误", async () => {
-    analyzeDatabaseMock.mockResolvedValue({
-      ...report,
-      progress: { ...report.progress, truncated: true },
-    });
-    const { rerender } = render(
-      <DatabaseAnalysisPage connectionId="local" activeDatabase={0} />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-    expect(
-      await screen.findByText("结果已达到扫描上限，可能不完整"),
-    ).toBeInTheDocument();
-
-    analyzeDatabaseMock.mockRejectedValueOnce({ code: "CONNECTION_FAILED" });
-    rerender(<DatabaseAnalysisPage connectionId="local-2" activeDatabase={0} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "无法连接 Redis，请检查连接状态。",
-    );
-  });
-
-  it("非法 max_keys 不调用 IPC", () => {
-    render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
-    fireEvent.change(screen.getByLabelText("最大扫描键数"), {
-      target: { value: "999" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-    expect(analyzeDatabaseMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "扫描键数必须在 1000 到 1000000 之间。",
-    );
-  });
-
-  it("连接切换后忽略旧分析响应", async () => {
-    let resolveFirst!: (value: DatabaseAnalysisReport) => void;
-    let resolveSecond!: (value: DatabaseAnalysisReport) => void;
-    analyzeDatabaseMock
-      .mockReturnValueOnce(
-        new Promise<DatabaseAnalysisReport>((resolve) => {
-          resolveFirst = resolve;
-        }),
-      )
-      .mockReturnValueOnce(
-        new Promise<DatabaseAnalysisReport>((resolve) => {
-          resolveSecond = resolve;
-        }),
-      );
-
-    const { rerender } = render(
-      <DatabaseAnalysisPage connectionId="old" activeDatabase={0} />,
-    );
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-    rerender(<DatabaseAnalysisPage connectionId="new" activeDatabase={1} />);
-    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
-
-    resolveSecond({ ...report, database: 1, top_keys_by_memory: [] });
-    await waitFor(() => expect(screen.getByText("数据库 1")).toBeInTheDocument());
-    resolveFirst({
-      ...report,
-      top_keys_by_memory: [
-        {
-          key: "old:key",
-          key_type: "string",
-          length: 3,
-          memory_bytes: 32,
-          ttl_seconds: -1,
-        },
-      ],
-    });
-    await waitFor(() => expect(screen.queryByText("old:key")).not.toBeInTheDocument());
-  });
-
-  it("加载期间禁用提交且只启动一次分析", async () => {
-    let resolveAnalysis!: (value: DatabaseAnalysisReport) => void;
-    analyzeDatabaseMock.mockReturnValueOnce(
-      new Promise<DatabaseAnalysisReport>((resolve) => {
-        resolveAnalysis = resolve;
-      }),
-    );
-    render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
-
-    const submit = screen.getByRole("button", { name: "开始分析" });
-    fireEvent.click(submit);
-    await waitFor(() => expect(submit).toBeDisabled());
-    fireEvent.click(submit);
-
-    expect(analyzeDatabaseMock).toHaveBeenCalledTimes(1);
-
-    resolveAnalysis(report);
-
-    await waitFor(() => expect(submit).toBeEnabled());
-  });
+it("旧报告缺少节点字段时安全显示单份结果", async () => {
+  const legacy = { ...report };
+  delete (legacy as Partial<DatabaseAnalysisReport>).node_results;
+  delete (legacy as Partial<DatabaseAnalysisReport>).failed_nodes;
+  resolveReport(legacy);
+  render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+  await start();
+  expect(await screen.findByText("总键数")).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+it("Cluster 部分报告明确失败节点与范围", async () => {
+  resolveReport({ ...report, failed_nodes: [{ node_id: "node-b", code: "CONNECTION_FAILED" }], node_results: [{ node_id: "node-a", endpoint: { host: "::1", port: 7000 }, report }] });
+  render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+  await start();
+  expect(await screen.findByRole("alert")).toHaveTextContent("1 个主节点分析失败");
+  expect(screen.getByText(/node-a.*\[::1\]:7000/)).toBeInTheDocument();
+});
+it("非法 max_keys 或超时不会启动任务", async () => {
+  render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+  fireEvent.change(screen.getByLabelText("最大扫描键数"), { target: { value: "999" } });
+  await start();
+  expect(screen.getByRole("alert")).toHaveTextContent("扫描键数必须在 1000 到 1000000 之间");
+  expect(api.startAnalysisTask).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("最大扫描键数"), { target: { value: "1000" } });
+  fireEvent.change(screen.getByLabelText("任务超时（秒）"), { target: { value: "901" } });
+  await start();
+  expect(screen.getByRole("alert")).toHaveTextContent("超时必须在 1 到 900 秒之间");
+  expect(api.startAnalysisTask).not.toHaveBeenCalled();
+});
+it("运行任务展示计数、禁用重复启动并允许取消", async () => {
+  const running: api.AnalysisTask = { ...task, status: "running", nodes_completed: 0 };
+  vi.mocked(api.listAnalysisTasks).mockResolvedValue([running]);
+  vi.mocked(api.getAnalysisTask).mockResolvedValue({ task: running, report: null });
+  render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+  const cancel = await screen.findByRole("button", { name: "取消分析" });
+  expect(screen.getByRole("button", { name: "开始分析" })).toBeDisabled();
+  expect(screen.getByText(/已扫描 3.*已处理 3/)).toBeInTheDocument();
+  fireEvent.click(cancel);
+  await waitFor(() => expect(api.cancelAnalysisTask).toHaveBeenCalledWith({ connection_id: "local", database: 0, task_id: "t1" }));
+});
+it.each([ ["timed_out", "分析已超时"], ["cancelled", "分析已取消"] ] as const)("终态 %s 不展示伪造成功结果", async (status, message) => {
+  const terminal = { ...task, status };
+  vi.mocked(api.listAnalysisTasks).mockResolvedValue([terminal]);
+  vi.mocked(api.getAnalysisTask).mockResolvedValue({ task: terminal, report: null });
+  render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+  expect(await screen.findByText(new RegExp(message))).toBeInTheDocument();
+  expect(screen.queryByText("总键数")).not.toBeInTheDocument();
+});
+it("连接错误只显示固定信息", async () => {
+  vi.mocked(api.startAnalysisTask).mockRejectedValue({ code: "CONNECTION_FAILED", message: "/secret/path" });
+  render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+  await start();
+  expect(await screen.findByRole("alert")).toHaveTextContent("无法连接 Redis，请检查连接状态");
+  expect(screen.queryByText(/secret/)).not.toBeInTheDocument();
 });

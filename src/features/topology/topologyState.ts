@@ -1,7 +1,11 @@
 import type { ClusterNodeMetrics } from "../../lib/types";
 
 export const topologyMetricLabels: Array<[keyof ClusterNodeMetrics, string]> = [
+  ["server_version", "服务端版本"],
+  ["redis_mode", "运行模式"],
+  ["total_keys", "键总量"],
   ["used_memory_bytes", "内存 (bytes)"],
+  ["maxmemory_bytes", "内存上限 (bytes)"],
   ["ops_per_second", "操作 / 秒"],
   ["connected_clients", "客户端"],
   ["connections_received", "累计连接"],

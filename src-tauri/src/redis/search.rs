@@ -12,6 +12,154 @@ use crate::{
     error::AppError,
 };
 
+impl super::RedisService {
+    pub async fn search_vector_index(
+        &self,
+        input: crate::domain::SearchVectorQueryInput,
+    ) -> Result<crate::domain::SearchVectorQueryResult, AppError> {
+        input.validate()?;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            let mut connection = self.search_vector_connection(&input.connection_id).await?;
+            let info = ::redis::cmd("FT.INFO")
+                .arg(&input.index)
+                .query_async(&mut connection)
+                .await
+                .map_err(super::connection_manager::map_command_error)?;
+            let info = parse_search_index_info(info)?;
+            let attribute = info
+                .attributes
+                .iter()
+                .find(|attribute| {
+                    attribute
+                        .query_name
+                        .as_ref()
+                        .unwrap_or(&attribute.identifier)
+                        == &input.field
+                        && attribute.field_type.eq_ignore_ascii_case("VECTOR")
+                        && !attribute.no_index
+                })
+                .ok_or(AppError::InvalidInput)?;
+            let schema = attribute
+                .vector
+                .as_ref()
+                .ok_or(AppError::UnsupportedFeature)?;
+            // Avoid overwriting a real document field with the generated distance alias.
+            let mut score = "__redix_distance".to_string();
+            while info.attributes.iter().any(|attribute| {
+                attribute
+                    .query_name
+                    .as_ref()
+                    .unwrap_or(&attribute.identifier)
+                    == &score
+            }) {
+                score.push('_');
+            }
+            let value = build_vector_search_command(&input, schema, &score)?
+                .query_async(&mut connection)
+                .await
+                .map_err(super::connection_manager::map_command_error)?;
+            parse_vector_search_result(value, input.count, &score, &schema.distance_metric)
+        })
+        .await
+        .map_err(|_| AppError::CommandFailed)?
+    }
+}
+
+fn build_vector_search_command(
+    input: &crate::domain::SearchVectorQueryInput,
+    schema: &crate::domain::SearchVectorFieldInfo,
+    score: &str,
+) -> Result<Cmd, AppError> {
+    if !crate::domain::safe_vector_field(score) {
+        return Err(AppError::InvalidInput);
+    }
+    let bytes = input.encode_vector(schema)?;
+    let mut command = ::redis::cmd("FT.SEARCH");
+    command
+        .arg(&input.index)
+        .arg(format!(
+            "({})=>[KNN {} @{} $__redix_vector AS {}]",
+            input.filter.trim(),
+            input.count,
+            input.field,
+            score
+        ))
+        .arg("PARAMS")
+        .arg(2)
+        .arg("__redix_vector")
+        .arg(bytes)
+        .arg("SORTBY")
+        .arg(score)
+        .arg("ASC")
+        .arg("RETURN")
+        .arg(1)
+        .arg(score)
+        .arg("LIMIT")
+        .arg(0)
+        .arg(input.count)
+        .arg("TIMEOUT")
+        .arg(4000)
+        .arg("DIALECT")
+        .arg(2);
+    Ok(command)
+}
+
+fn parse_vector_search_result(
+    value: Value,
+    count: u32,
+    score: &str,
+    metric: &str,
+) -> Result<crate::domain::SearchVectorQueryResult, AppError> {
+    ensure_response_size(&value)?;
+    let value = unwrap_attribute(value);
+    if let Value::Map(pairs) = &value {
+        for (key, value) in pairs {
+            if value_to_string(key, MAX_SEARCH_NAME_BYTES)
+                .is_some_and(|name| matches!(name.as_str(), "warning" | "warnings" | "error"))
+            {
+                match value {
+                    Value::Nil => (),
+                    Value::Array(values) if values.is_empty() => (),
+                    _ => return Err(AppError::CommandFailed),
+                }
+            }
+        }
+    }
+    let result = parse_search_query(value, 0, count, true)?;
+    if result.total > u64::from(count) {
+        return Err(AppError::CommandFailed);
+    }
+    let mut matches: Vec<crate::domain::SearchVectorMatch> = Vec::with_capacity(result.keys.len());
+    for key in result.keys {
+        let fields = key.fields.ok_or(AppError::CommandFailed)?;
+        if fields.len() != 1 || fields[0].name != score {
+            return Err(AppError::CommandFailed);
+        }
+        let value = &fields[0].value;
+        let distance = value
+            .as_f64()
+            .or_else(|| value.as_str().and_then(|value| value.parse::<f64>().ok()))
+            .filter(|value| value.is_finite())
+            .ok_or(AppError::CommandFailed)?;
+        if matches
+            .last()
+            .is_some_and(|previous| previous.distance > distance)
+        {
+            return Err(AppError::CommandFailed);
+        }
+        matches.push(crate::domain::SearchVectorMatch {
+            key: key.key,
+            distance,
+        });
+    }
+    Ok(crate::domain::SearchVectorQueryResult {
+        returned: matches.len(),
+        matches,
+        count,
+        distance_metric: metric.into(),
+    })
+}
+
 pub(crate) fn parse_search_index_list(value: Value) -> Result<Vec<SearchIndexSummary>, AppError> {
     ensure_response_size(&value)?;
     let values = match unwrap_attribute(value) {
@@ -331,7 +479,11 @@ pub(crate) fn build_create_search_index_command(
     }
     command.arg("SCHEMA");
     for field in &input.fields {
-        command.arg(&field.name).arg(match field.field_type {
+        command.arg(&field.name);
+        if let Some(alias) = &field.alias {
+            command.arg("AS").arg(alias);
+        }
+        command.arg(match field.field_type {
             SearchFieldType::Text => "TEXT",
             SearchFieldType::Tag => "TAG",
             SearchFieldType::Numeric => "NUMERIC",
@@ -339,6 +491,13 @@ pub(crate) fn build_create_search_index_command(
             SearchFieldType::Geoshape => "GEOSHAPE",
             SearchFieldType::Vector => "VECTOR",
         });
+        if let Some(vector) = &field.vector {
+            let arguments = vector.command_arguments();
+            command
+                .arg(vector.algorithm_name())
+                .arg(arguments.len())
+                .arg(arguments);
+        }
     }
     Ok(command)
 }
@@ -498,6 +657,9 @@ fn parse_attribute(value: Value) -> Result<SearchIndexAttribute, AppError> {
     let mut sortable = false;
     let mut no_index = false;
     let mut attribute_name = None;
+    let mut vector_type = None;
+    let mut vector_dimension = None;
+    let mut vector_metric = None;
     for (key, value) in pairs {
         let Some(key) = value_to_string(&key, MAX_SEARCH_NAME_BYTES) else {
             continue;
@@ -508,22 +670,44 @@ fn parse_attribute(value: Value) -> Result<SearchIndexAttribute, AppError> {
             "type" | "field_type" => {
                 field_type = Some(required_string(value, MAX_SEARCH_NAME_BYTES)?)
             }
+            "data_type" => vector_type = value_to_string(&value, MAX_SEARCH_NAME_BYTES),
+            "dim" => {
+                vector_dimension =
+                    parse_optional_u64(&value).and_then(|value| u32::try_from(value).ok())
+            }
+            "distance_metric" => vector_metric = value_to_string(&value, MAX_SEARCH_NAME_BYTES),
             "sortable" => sortable = parse_bool(&value),
             "no_index" | "noindex" => no_index = parse_bool(&value),
             _ => {}
         }
     }
+    // Modern FT.INFO reports the source path as identifier and the query alias as attribute.
+    // Older responses in supported deployments may use attribute for the field type instead.
+    let query_name = field_type.as_ref().and(attribute_name.clone());
     let identifier = identifier
         .or_else(|| attribute_name.clone())
         .ok_or(AppError::CommandFailed)?;
     let field_type = field_type
         .or(attribute_name)
         .ok_or(AppError::CommandFailed)?;
+    let vector = if field_type.eq_ignore_ascii_case("VECTOR") {
+        vector_type.zip(vector_dimension).zip(vector_metric).map(
+            |((data_type, dimension), distance_metric)| crate::domain::SearchVectorFieldInfo {
+                data_type: data_type.to_ascii_uppercase(),
+                dimension,
+                distance_metric: distance_metric.to_ascii_uppercase(),
+            },
+        )
+    } else {
+        None
+    };
     Ok(SearchIndexAttribute {
         identifier,
+        query_name,
         field_type,
         sortable,
         no_index,
+        vector,
     })
 }
 
@@ -1092,28 +1276,40 @@ mod tests {
             prefixes: vec!["doc:".into(), "profile:".into()],
             fields: vec![
                 SearchIndexFieldInput {
+                    alias: None,
                     name: "title value".into(),
                     field_type: SearchFieldType::Text,
+                    vector: None,
                 },
                 SearchIndexFieldInput {
+                    alias: None,
                     name: "labels".into(),
                     field_type: SearchFieldType::Tag,
+                    vector: None,
                 },
                 SearchIndexFieldInput {
+                    alias: None,
                     name: "score".into(),
                     field_type: SearchFieldType::Numeric,
+                    vector: None,
                 },
                 SearchIndexFieldInput {
+                    alias: None,
                     name: "location".into(),
                     field_type: SearchFieldType::Geo,
+                    vector: None,
                 },
                 SearchIndexFieldInput {
+                    alias: None,
                     name: "shape".into(),
                     field_type: SearchFieldType::Geoshape,
+                    vector: None,
                 },
                 SearchIndexFieldInput {
+                    alias: None,
                     name: "embedding".into(),
                     field_type: SearchFieldType::Vector,
+                    vector: Some(serde_json::from_value(serde_json::json!({"algorithm": "FLAT", "data_type": "FLOAT32", "dimension": 384, "distance_metric": "COSINE"})).unwrap()),
                 },
             ],
         };
@@ -1150,10 +1346,563 @@ mod tests {
                 "GEOSHAPE",
                 "embedding",
                 "VECTOR",
+                "FLAT",
+                "6",
+                "TYPE",
+                "FLOAT32",
+                "DIM",
+                "384",
+                "DISTANCE_METRIC",
+                "COSINE",
             ]
         );
         assert!(!String::from_utf8(command.get_packed_command())
             .unwrap()
             .contains("DD"));
+    }
+
+    #[test]
+    fn vector_create_emits_complete_hnsw_arguments() {
+        let input: CreateSearchIndexInput = serde_json::from_value(serde_json::json!({
+            "connection_id": "local", "index": "idx:vector", "key_type": "hash",
+            "prefixes": [], "fields": [{"name": "embedding", "field_type": "vector",
+                "vector": {"algorithm": "HNSW", "data_type": "FLOAT32", "dimension": 768,
+                    "distance_metric": "COSINE", "m": 16, "ef_construction": 200, "ef_runtime": 10}}]
+        })).unwrap();
+        let command = build_create_search_index_command(&input).unwrap();
+        let args = command
+            .args_iter()
+            .filter_map(|arg| match arg {
+                Arg::Simple(value) => Some(String::from_utf8(value.to_vec()).unwrap()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &args[4..],
+            &[
+                "SCHEMA",
+                "embedding",
+                "VECTOR",
+                "HNSW",
+                "12",
+                "TYPE",
+                "FLOAT32",
+                "DIM",
+                "768",
+                "DISTANCE_METRIC",
+                "COSINE",
+                "M",
+                "16",
+                "EF_CONSTRUCTION",
+                "200",
+                "EF_RUNTIME",
+                "10"
+            ]
+        );
+    }
+
+    #[test]
+    fn vector_create_rejects_missing_config_and_invalid_dimension() {
+        for vector in [
+            serde_json::Value::Null,
+            serde_json::json!({"algorithm": "FLAT",
+            "data_type": "FLOAT32", "dimension": 0, "distance_metric": "L2"}),
+        ] {
+            let input: CreateSearchIndexInput = serde_json::from_value(serde_json::json!({
+                "connection_id": "local", "index": "idx", "key_type": "hash", "prefixes": [],
+                "fields": [{"name": "embedding", "field_type": "vector", "vector": vector}]
+            }))
+            .unwrap();
+            assert_eq!(input.validate(), Err(AppError::InvalidInput));
+        }
+    }
+
+    #[test]
+    fn vector_flat_optional_argument_count_and_json_storage_are_correct() {
+        let input: CreateSearchIndexInput = serde_json::from_value(serde_json::json!({
+            "connection_id": "local", "index": "idx:vector", "key_type": "json", "prefixes": ["docs:"],
+            "fields": [{"name": "$.embedding", "field_type": "vector", "vector": {
+                "algorithm": "FLAT", "data_type": "FLOAT64", "dimension": 32,
+                "distance_metric": "IP", "initial_capacity": 128, "block_size": 64
+            }}]
+        })).unwrap();
+        let command = build_create_search_index_command(&input).unwrap();
+        let args = command
+            .args_iter()
+            .filter_map(|arg| match arg {
+                Arg::Simple(value) => Some(String::from_utf8(value.to_vec()).unwrap()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            [
+                "FT.CREATE",
+                "idx:vector",
+                "ON",
+                "JSON",
+                "PREFIX",
+                "1",
+                "docs:",
+                "SCHEMA",
+                "$.embedding",
+                "VECTOR",
+                "FLAT",
+                "10",
+                "TYPE",
+                "FLOAT64",
+                "DIM",
+                "32",
+                "DISTANCE_METRIC",
+                "IP",
+                "INITIAL_CAP",
+                "128",
+                "BLOCK_SIZE",
+                "64"
+            ]
+        );
+    }
+
+    #[test]
+    fn index_attributes_keep_query_alias_separate_from_json_path() {
+        let result = super::parse_attribute(Value::Array(vec![
+            text("identifier"),
+            text("$.name"),
+            text("attribute"),
+            text("name"),
+            text("type"),
+            text("TEXT"),
+        ]))
+        .unwrap();
+        assert_eq!(result.identifier, "$.name");
+        assert_eq!(result.query_name.as_deref(), Some("name"));
+        let legacy = super::parse_attribute(Value::Array(vec![
+            text("identifier"),
+            text("name"),
+            text("attribute"),
+            text("TEXT"),
+        ]))
+        .unwrap();
+        assert_eq!(legacy.query_name, None);
+        assert_eq!(legacy.field_type, "TEXT");
+    }
+
+    #[tokio::test]
+    #[ignore = "需要独立 Redis Stack：设置 REDIX_TEST_REDIS_STACK_URL 后显式运行"]
+    async fn vector_indexes_execute_real_flat_and_hnsw_knn_queries() {
+        let url = std::env::var("REDIX_TEST_REDIS_STACK_URL")
+            .expect("请设置独立测试 Redis 的 REDIX_TEST_REDIS_STACK_URL");
+        let client = redis::Client::open(url).unwrap();
+        let mut connection = client.get_multiplexed_async_connection().await.unwrap();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        for algorithm in ["FLAT", "HNSW"] {
+            let prefix = format!(
+                "redix:vector:test:{}:{nonce}:{algorithm}:",
+                std::process::id()
+            );
+            let key = format!("{prefix}one");
+            let index = format!("{prefix}index");
+            let input: CreateSearchIndexInput = serde_json::from_value(serde_json::json!({
+                "connection_id": "integration", "index": index, "key_type": "hash", "prefixes": [prefix],
+                "fields": [{"name": "embedding", "field_type": "vector", "vector": {
+                    "algorithm": algorithm, "data_type": "FLOAT32", "dimension": 2, "distance_metric": "L2"
+                }}]
+            })).unwrap();
+            let flow: Result<Value, redis::RedisError> = async {
+                build_create_search_index_command(&input)
+                    .unwrap()
+                    .query_async::<Value>(&mut connection)
+                    .await?;
+                let vector = [1.0_f32, 0.0_f32]
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes)
+                    .collect::<Vec<_>>();
+                redis::cmd("HSET")
+                    .arg(&key)
+                    .arg("embedding")
+                    .arg(&vector)
+                    .query_async::<Value>(&mut connection)
+                    .await?;
+                redis::cmd("FT.SEARCH")
+                    .arg(&index)
+                    .arg("*=>[KNN 1 @embedding $vector AS score]")
+                    .arg("PARAMS")
+                    .arg(2)
+                    .arg("vector")
+                    .arg(&vector)
+                    .arg("SORTBY")
+                    .arg("score")
+                    .arg("NOCONTENT")
+                    .arg("DIALECT")
+                    .arg(2)
+                    .query_async(&mut connection)
+                    .await
+            }
+            .await;
+            let drop_result = redis::cmd("FT.DROPINDEX")
+                .arg(&index)
+                .query_async::<Value>(&mut connection)
+                .await;
+            let delete_result = redis::cmd("DEL")
+                .arg(&key)
+                .query_async::<Value>(&mut connection)
+                .await;
+            let result = flow.expect("VECTOR 索引创建和实际 KNN 查询必须成功");
+            drop_result.expect("清理测试索引");
+            delete_result.expect("清理测试键");
+            assert_eq!(result, Value::Array(vec![Value::Int(1), text(&key)]));
+        }
+    }
+    fn vector_input() -> crate::domain::SearchVectorQueryInput {
+        serde_json::from_value(serde_json::json!({"connection_id":"local", "index":"idx", "field":"embedding", "vector":[1.0, -2.0], "count":2, "filter":"@tag:{book}"})).unwrap()
+    }
+
+    fn vector_info() -> crate::domain::SearchVectorFieldInfo {
+        crate::domain::SearchVectorFieldInfo {
+            data_type: "FLOAT32".into(),
+            dimension: 2,
+            distance_metric: "L2".into(),
+        }
+    }
+
+    #[test]
+    fn typed_vector_params_are_binary_little_endian_and_command_tokens_are_fixed() {
+        let command =
+            super::build_vector_search_command(&vector_input(), &vector_info(), "__redix_distance")
+                .unwrap();
+        let args = command
+            .args_iter()
+            .map(|arg| match arg {
+                Arg::Simple(bytes) => bytes.to_vec(),
+                _ => panic!("unexpected argument"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            args[2],
+            b"(@tag:{book})=>[KNN 2 @embedding $__redix_vector AS __redix_distance]"
+        );
+        assert_eq!(args[3], b"PARAMS");
+        assert_eq!(args[4], b"2");
+        assert_eq!(
+            args[6],
+            [1.0_f32, -2.0]
+                .into_iter()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>()
+        );
+        let mut info = vector_info();
+        info.data_type = "FLOAT64".into();
+        let command =
+            super::build_vector_search_command(&vector_input(), &info, "__redix_distance").unwrap();
+        let expected = [1.0_f64, -2.0]
+            .into_iter()
+            .flat_map(f64::to_le_bytes)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            command.args_iter().nth(6).unwrap(),
+            Arg::Simple(expected.as_slice())
+        );
+    }
+
+    #[test]
+    fn typed_vector_rejects_invalid_parameters_and_unknown_schema() {
+        let mut input = vector_input();
+        for vector in [
+            vec![1.0],
+            vec![1e100, 0.0],
+            vec![f64::NAN, 0.0],
+            vec![f64::INFINITY, 0.0],
+        ] {
+            input.vector = vector;
+            assert!(
+                super::build_vector_search_command(&input, &vector_info(), "__redix_distance")
+                    .is_err()
+            );
+        }
+        for (field, filter, count) in [
+            ("embedding]", "*", 2),
+            ("embedding", "*)=>[KNN 1 @other $x] (", 2),
+            ("embedding", "*", 201),
+            ("embedding", "*", 0),
+        ] {
+            let mut input = vector_input();
+            input.field = field.into();
+            input.filter = filter.into();
+            input.count = count;
+            assert!(
+                super::build_vector_search_command(&input, &vector_info(), "__redix_distance")
+                    .is_err()
+            );
+        }
+        let mut info = vector_info();
+        info.data_type = "BFLOAT16".into();
+        assert!(
+            super::build_vector_search_command(&vector_input(), &info, "__redix_distance").is_err()
+        );
+        assert!(
+            crate::domain::SearchVectorQueryInput::validate_search_version(Some("2.2.0")).is_err()
+        );
+        assert!(crate::domain::SearchVectorQueryInput::validate_search_version(None).is_err());
+        assert!(
+            crate::domain::SearchVectorQueryInput::validate_search_version(Some("2.4.0")).is_ok()
+        );
+    }
+
+    #[test]
+    fn typed_vector_schema_keeps_modern_metadata_and_legacy_none() {
+        let attribute = super::parse_attribute(Value::Array(vec![
+            text("identifier"),
+            text("$.embedding"),
+            text("attribute"),
+            text("embedding"),
+            text("type"),
+            text("VECTOR"),
+            text("data_type"),
+            text("FLOAT32"),
+            text("dim"),
+            Value::Int(2),
+            text("distance_metric"),
+            text("L2"),
+        ]))
+        .unwrap();
+        assert_eq!(attribute.vector, Some(vector_info()));
+        let legacy = super::parse_attribute(Value::Array(vec![
+            text("identifier"),
+            text("embedding"),
+            text("attribute"),
+            text("VECTOR"),
+        ]))
+        .unwrap();
+        assert_eq!(legacy.vector, None);
+    }
+
+    #[test]
+    fn typed_vector_results_require_finite_sorted_distance_and_respect_count() {
+        let result = super::parse_vector_search_result(
+            Value::Array(vec![
+                Value::Int(1),
+                text("doc:1"),
+                Value::Array(vec![text("score"), text("-0.5")]),
+            ]),
+            2,
+            "score",
+            "IP",
+        )
+        .unwrap();
+        assert_eq!(result.matches[0].distance, -0.5);
+        for distance in ["NaN", "inf", "garbage"] {
+            assert!(super::parse_vector_search_result(
+                Value::Array(vec![
+                    Value::Int(1),
+                    text("doc:1"),
+                    Value::Array(vec![text("score"), text(distance)])
+                ]),
+                2,
+                "score",
+                "IP"
+            )
+            .is_err());
+        }
+        assert!(super::parse_vector_search_result(
+            Value::Array(vec![Value::Int(3)]),
+            2,
+            "score",
+            "L2"
+        )
+        .is_err());
+        assert!(super::parse_vector_search_result(
+            Value::Array(vec![
+                Value::Int(1),
+                text("doc:1"),
+                Value::Array(vec![text("wrong"), text("1")])
+            ]),
+            2,
+            "score",
+            "L2"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn search_create_alias_is_explicit_and_rejects_collisions() {
+        let make = |fields: serde_json::Value| {
+            serde_json::from_value::<CreateSearchIndexInput>(serde_json::json!({"connection_id":"local", "index":"idx", "key_type":"json", "prefixes":[], "fields":fields})).unwrap()
+        };
+        let input = make(
+            serde_json::json!([{"name":"$.embedding", "alias":"embedding", "field_type":"vector", "vector":{"algorithm":"FLAT", "data_type":"FLOAT32", "dimension":2, "distance_metric":"L2"}}]),
+        );
+        let command = build_create_search_index_command(&input).unwrap();
+        let args = command
+            .args_iter()
+            .map(|arg| match arg {
+                Arg::Simple(bytes) => String::from_utf8_lossy(bytes).into_owned(),
+                _ => panic!("unexpected argument"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(&args[5..9], &["$.embedding", "AS", "embedding", "VECTOR"]);
+        for fields in [
+            serde_json::json!([{"name":"$.a", "alias":"same", "field_type":"text"},{"name":"$.b", "alias":"same", "field_type":"text"}]),
+            serde_json::json!([{"name":"$.a", "alias":"b", "field_type":"text"},{"name":"b", "field_type":"text"}]),
+            serde_json::json!([{"name":"$.a", "alias":"bad]", "field_type":"text"}]),
+        ] {
+            assert!(make(fields).validate().is_err());
+        }
+        assert!(
+            make(serde_json::json!([{"name":"name", "field_type":"text"}]))
+                .validate()
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn typed_vector_filter_keeps_native_exclusive_numeric_ranges() {
+        let mut input = vector_input();
+        input.filter = "(@price:[(100 +inf] @tag:{book})".into();
+        assert!(input.validate().is_ok());
+        for filter in [
+            "@price:[0 1",
+            "*)=>[KNN 1 @other $x] (",
+            "@tag:{book}=>{$weight:2}",
+        ] {
+            input.filter = filter.into();
+            assert!(input.validate().is_err());
+        }
+    }
+
+    #[test]
+    fn typed_vector_resp3_rejects_partial_warnings_and_unsorted_results() {
+        let row = |key: &str, score: &str| {
+            Value::Map(vec![
+                (text("id"), text(key)),
+                (
+                    text("extra_attributes"),
+                    Value::Map(vec![(text("score"), text(score))]),
+                ),
+            ])
+        };
+        let response = |rows: Vec<Value>, warning: Value| {
+            Value::Map(vec![
+                (text("total_results"), Value::Int(rows.len() as i64)),
+                (text("results"), Value::Array(rows)),
+                (text("warning"), warning),
+            ])
+        };
+        assert!(super::parse_vector_search_result(
+            response(vec![row("a", "0.1"), row("b", "0.5")], Value::Array(vec![])),
+            2,
+            "score",
+            "L2"
+        )
+        .is_ok());
+        assert!(super::parse_vector_search_result(
+            response(vec![row("a", "0.5"), row("b", "0.1")], Value::Nil),
+            2,
+            "score",
+            "L2"
+        )
+        .is_err());
+        assert!(super::parse_vector_search_result(
+            response(
+                vec![row("a", "0.1")],
+                Value::Array(vec![text("Timeout limit was reached")])
+            ),
+            2,
+            "score",
+            "L2"
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    #[ignore = "需要独立 Redis Search：设置 REDIX_TEST_REDIS_STACK_URL 后显式运行"]
+    async fn typed_vector_query_executes_real_knn_search() {
+        let url =
+            std::env::var("REDIX_TEST_REDIS_STACK_URL").expect("请设置 REDIX_TEST_REDIS_STACK_URL");
+        let client = redis::Client::open(url).unwrap();
+        let mut connection = client.get_multiplexed_async_connection().await.unwrap();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        for (algorithm, data_type, storage) in [
+            ("FLAT", "FLOAT32", "hash"),
+            ("HNSW", "FLOAT64", "hash"),
+            ("FLAT", "FLOAT32", "json"),
+        ] {
+            let prefix = format!(
+                "redix:typed-vector:{}:{nonce}:{algorithm}:{storage}:",
+                std::process::id()
+            );
+            let index = format!("{prefix}index");
+            let key = format!("{prefix}one");
+            let input: crate::domain::SearchVectorQueryInput = serde_json::from_value(serde_json::json!({"connection_id":"integration", "index":index, "field":"embedding", "vector":[1.0,0.0], "count":2, "filter":"@tag:{book}"})).unwrap();
+            let create: CreateSearchIndexInput = serde_json::from_value(serde_json::json!({"connection_id":"integration", "index":index, "key_type":storage, "prefixes":[prefix], "fields":[{"name":if storage == "json" { "$.tag" } else { "tag" }, "alias":"tag", "field_type":"tag"}, {"name":if storage == "json" { "$.embedding" } else { "embedding" }, "alias":"embedding", "field_type":"vector", "vector":{"algorithm":algorithm, "data_type":data_type, "dimension":2, "distance_metric":"L2"}}]})).unwrap();
+            let flow: Result<crate::domain::SearchVectorQueryResult, AppError> = async {
+                build_create_search_index_command(&create)?
+                    .query_async::<Value>(&mut connection)
+                    .await
+                    .map_err(|_| AppError::CommandFailed)?;
+                let raw_info = redis::cmd("FT.INFO")
+                    .arg(&index)
+                    .query_async(&mut connection)
+                    .await
+                    .map_err(|_| AppError::CommandFailed)?;
+                let info = super::parse_search_index_info(raw_info)?;
+                let schema = info
+                    .attributes
+                    .iter()
+                    .find(|field| field.query_name.as_deref() == Some("embedding"))
+                    .and_then(|field| field.vector.as_ref())
+                    .ok_or(AppError::CommandFailed)?;
+                if storage == "json" {
+                    redis::cmd("JSON.SET")
+                        .arg(&key)
+                        .arg("$")
+                        .arg(r#"{"embedding":[1.0,0.0],"tag":"book"}"#)
+                        .query_async::<Value>(&mut connection)
+                        .await
+                        .map_err(|_| AppError::CommandFailed)?;
+                } else {
+                    let bytes = input.encode_vector(schema)?;
+                    redis::cmd("HSET")
+                        .arg(&key)
+                        .arg("embedding")
+                        .arg(bytes)
+                        .arg("tag")
+                        .arg("book")
+                        .query_async::<Value>(&mut connection)
+                        .await
+                        .map_err(|_| AppError::CommandFailed)?;
+                }
+                let raw = super::build_vector_search_command(&input, schema, "__redix_distance")?
+                    .query_async(&mut connection)
+                    .await
+                    .map_err(|_| AppError::CommandFailed)?;
+                super::parse_vector_search_result(
+                    raw,
+                    input.count,
+                    "__redix_distance",
+                    &schema.distance_metric,
+                )
+            }
+            .await;
+            let drop = redis::cmd("FT.DROPINDEX")
+                .arg(&index)
+                .query_async::<Value>(&mut connection)
+                .await;
+            let delete = redis::cmd("DEL")
+                .arg(&key)
+                .query_async::<Value>(&mut connection)
+                .await;
+            let result = flow.expect("typed KNN 实际查询失败");
+            drop.expect("清理索引");
+            delete.expect("清理键");
+            assert_eq!(result.returned, 1);
+            assert_eq!(result.matches[0].key, key);
+            assert_eq!(result.matches[0].distance, 0.0);
+        }
     }
 }

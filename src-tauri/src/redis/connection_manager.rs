@@ -309,7 +309,7 @@ struct ConnectionHandle {
     client: RoutedClient,
     profile: ConnectionProfile,
     target: ConnectionTarget,
-    cluster_node_factory: Option<ClusterNodeConnectionFactory>,
+    cluster_node_factory: Option<Arc<ClusterNodeConnectionFactory>>,
     _ssh: Option<super::ssh::SshTransport>,
 }
 
@@ -319,7 +319,7 @@ struct ActiveConnectionSnapshot {
     client: RoutedClient,
     profile: ConnectionProfile,
     target: ConnectionTarget,
-    cluster_node_factory: Option<ClusterNodeConnectionFactory>,
+    cluster_node_factory: Option<Arc<ClusterNodeConnectionFactory>>,
 }
 
 struct CapabilityConnection {
@@ -329,7 +329,7 @@ struct CapabilityConnection {
 
 #[derive(Clone)]
 struct RedisClusterScanBackend {
-    factory: ClusterNodeConnectionFactory,
+    factory: Arc<ClusterNodeConnectionFactory>,
 }
 
 impl ClusterScanBackend for RedisClusterScanBackend {
@@ -606,6 +606,197 @@ impl RedisService {
         snapshot.client.connection().await
     }
 
+    pub async fn start_analysis_task(
+        &self,
+        manager: &super::analysis_tasks::AnalysisTaskManager,
+        input: super::analysis_tasks::StartAnalysisTaskInput,
+    ) -> Result<super::analysis_tasks::AnalysisTask, AppError> {
+        input.validate()?;
+        let (snapshot, _) = self.active_snapshot(&input.analysis.connection_id).await?;
+        if snapshot.profile.database != input.database {
+            return Err(AppError::OperationCancelled);
+        }
+        let is_cluster = matches!(snapshot.target, ConnectionTarget::Cluster(_));
+        let tls = snapshot.profile.tls;
+        let database = snapshot.profile.database;
+        let client = snapshot.client;
+        let factory = snapshot.cluster_node_factory;
+        let generation = super::analysis_tasks::AnalysisGeneration::new(
+            snapshot.token,
+            self.generations.clone(),
+        );
+        let analysis = input.analysis.clone();
+        manager.start(input, generation, move |control| async move {
+            control.checkpoint().await?;
+            let mut connection = client.connection().await?;
+            control.checkpoint().await?;
+            if !is_cluster {
+                let (accumulator, progress) =
+                    super::database_analysis::analyze_connection_observed(
+                        &mut connection,
+                        database,
+                        &analysis,
+                        false,
+                        Some(&control),
+                        "instance",
+                    )
+                    .await?;
+                control.node_finished("instance");
+                return Ok(accumulator.finish(
+                    progress.scanned,
+                    progress.processed,
+                    progress.truncated,
+                ));
+            }
+            let factory = factory.ok_or(AppError::ClusterNodeUnavailable)?;
+            let mut primaries = load_cluster_nodes(&mut connection, tls)
+                .await?
+                .into_iter()
+                .filter(|node| node.role == ClusterNodeRole::Primary)
+                .collect::<Vec<_>>();
+            primaries.sort_by(|left, right| left.id.cmp(&right.id));
+            control.checkpoint().await?;
+            let quotas = allocate_primary_key_limits(analysis.max_keys, primaries.len())?;
+            control.set_nodes_total(primaries.len());
+            let results = fan_out_cluster_nodes(
+                primaries.into_iter().zip(quotas).collect(),
+                |(node, quota)| {
+                    let factory = factory.clone();
+                    let control = control.clone();
+                    let mut node_input = analysis.clone();
+                    node_input.max_keys = quota;
+                    async move {
+                        let result = async {
+                            control.checkpoint().await?;
+                            let mut connection = factory
+                                .connection_for_node_id(&node.id, &node.endpoint)
+                                .await?;
+                            let (accumulator, progress) =
+                                super::database_analysis::analyze_connection_observed(
+                                    &mut connection,
+                                    0,
+                                    &node_input,
+                                    true,
+                                    Some(&control),
+                                    &node.id,
+                                )
+                                .await?;
+                            Ok::<_, AppError>(NodeAnalysisState {
+                                node_id: node.id.clone(),
+                                endpoint: node.endpoint.clone(),
+                                accumulator,
+                                progress,
+                            })
+                        }
+                        .await;
+                        control.node_finished(&node.id);
+                        result.map_err(|_| NodeFailure {
+                            node_id: node.id,
+                            code: AppError::ClusterNodeUnavailable.code().to_owned(),
+                        })
+                    }
+                },
+            )
+            .await;
+            control.checkpoint().await?;
+            let mut nodes = Vec::new();
+            let mut failures = Vec::new();
+            for result in results {
+                match result {
+                    Ok(node) => nodes.push(node),
+                    Err(failure) => failures.push(failure),
+                }
+            }
+            let mut report = merge_node_reports(nodes, failures);
+            report.database = database;
+            report.pattern = analysis.pattern;
+            report.delimiter = analysis.delimiter;
+            report.progress.max_keys = analysis.max_keys;
+            Ok(report)
+        })
+    }
+
+    pub async fn start_bulk_delete(
+        &self,
+        manager: &super::bulk_tasks::BulkTaskManager,
+        input: super::bulk_tasks::StartBulkDeleteInput,
+    ) -> Result<super::bulk_tasks::BulkTask, AppError> {
+        let input = input.normalize()?;
+        let (snapshot, _) = self.active_snapshot(&input.connection_id).await?;
+        let mut connection = snapshot.client.connection().await?;
+        let target = match &mut connection {
+            RoutedConnection::Standalone(connection) => {
+                super::bulk_tasks::BulkDeleteTarget::Single(connection.clone())
+            }
+            RoutedConnection::Cluster(_) => {
+                let nodes = load_cluster_nodes(&mut connection, snapshot.profile.tls).await?;
+                let primaries: Vec<_> = nodes
+                    .into_iter()
+                    .filter(|node| node.role == ClusterNodeRole::Primary)
+                    .collect();
+                let factory = snapshot
+                    .cluster_node_factory
+                    .clone()
+                    .ok_or(AppError::ClusterNodeUnavailable)?;
+                let results = fan_out_cluster_nodes(primaries, |node| {
+                    let factory = factory.clone();
+                    async move {
+                        let connection = factory.connection(&node.endpoint).await;
+                        (node.slots, connection)
+                    }
+                })
+                .await;
+                let mut owners = HashMap::new();
+                let mut connections = Vec::new();
+                for (ranges, connection) in results {
+                    for range in ranges {
+                        for number in range.start..=range.end {
+                            let slot = ::redis::cluster_routing::Slot::new(number)
+                                .ok_or(AppError::ClusterTopologyFailed)?;
+                            if owners.insert(slot, connections.len()).is_some() {
+                                return Err(AppError::ClusterTopologyFailed);
+                            }
+                        }
+                    }
+                    connections.push(connection);
+                }
+                if owners.len() != 16_384 {
+                    return Err(AppError::ClusterTopologyFailed);
+                }
+                super::bulk_tasks::BulkDeleteTarget::Cluster {
+                    owners: Arc::new(owners),
+                    nodes: Arc::new(connections),
+                }
+            }
+        };
+        let generations = self.generations.clone();
+        let connection_id = input.connection_id.clone();
+        self.ensure_generation_current(&connection_id, snapshot.token)
+            .await?;
+        manager.start(input, move |key| {
+            let target = target.clone();
+            let generations = generations.clone();
+            let connection_id = connection_id.clone();
+            async move {
+                if generations
+                    .read()
+                    .await
+                    .get(&connection_id)
+                    .copied()
+                    .unwrap_or(0)
+                    != snapshot.token
+                {
+                    return Err(AppError::OperationCancelled);
+                }
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    target.delete(&key).await
+                })
+                .await
+                .map_err(|_| AppError::CommandFailed)?
+            }
+        })
+    }
+
     pub async fn routed_connection(
         &self,
         connection_id: &str,
@@ -833,7 +1024,7 @@ impl RedisService {
             .clone()
             .ok_or(AppError::ClusterNodeUnavailable)?;
         let mut routed = snapshot.client.connection().await?;
-        let primaries = load_cluster_nodes(&mut routed, snapshot.profile.tls)
+        let mut primaries = load_cluster_nodes(&mut routed, snapshot.profile.tls)
             .await?
             .into_iter()
             .filter(|node| node.role == ClusterNodeRole::Primary)
@@ -841,6 +1032,8 @@ impl RedisService {
         if primaries.is_empty() || primaries.len() > 128 {
             return Err(AppError::ClusterTopologyFailed);
         }
+        // CLUSTER SHARDS order can change between reads; assign remainder slots by stable node ID.
+        primaries.sort_by(|left, right| left.id.cmp(&right.id));
         let quotas = allocate_primary_key_limits(input.max_keys, primaries.len())?;
         let results = fan_out_cluster_nodes(
             primaries.into_iter().zip(quotas).collect(),
@@ -891,6 +1084,20 @@ impl RedisService {
         self.ensure_generation_current(connection_id, snapshot.token)
             .await?;
         Ok(report)
+    }
+
+    pub(super) async fn search_vector_connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<RoutedConnection, AppError> {
+        let context = self.capability_connection(connection_id).await?;
+        if !context.capabilities.search_compatible() {
+            return Err(AppError::UnsupportedFeature);
+        }
+        crate::domain::search::SearchVectorQueryInput::validate_search_version(
+            context.capabilities.search_version.as_deref(),
+        )?;
+        Ok(context.connection)
     }
 
     pub(super) async fn search_connection(
@@ -1871,7 +2078,12 @@ impl RedisOperations for RedisService {
 
     async fn create_search_index(&self, input: CreateSearchIndexInput) -> Result<(), AppError> {
         input.validate()?;
-        let mut connection = self.search_connection(&input.connection_id).await?;
+        let context = self.capability_connection(&input.connection_id).await?;
+        if !context.capabilities.search_compatible() {
+            return Err(AppError::UnsupportedFeature);
+        }
+        input.validate_search_version(context.capabilities.search_version.as_deref())?;
+        let mut connection = context.connection;
         build_create_search_index_command(&input)?
             .query_async::<Value>(&mut connection)
             .await
@@ -2764,6 +2976,9 @@ async fn read_key_mode(
 
     if preview {
         let value = match key_type.as_str() {
+            "string" => Some(RedisValue::String {
+                value: String::new(),
+            }),
             "hash" => Some(RedisValue::Hash { fields: vec![] }),
             "list" => Some(RedisValue::List { items: vec![] }),
             "set" => Some(RedisValue::Set { members: vec![] }),
@@ -3153,11 +3368,11 @@ async fn connect_handle_with_transport(
         None
     };
     let cluster_node_factory = if matches!(target, ConnectionTarget::Cluster(_)) {
-        Some(ClusterNodeConnectionFactory::new(
+        Some(Arc::new(ClusterNodeConnectionFactory::new(
             profile.username.clone(),
             secrets.password.clone(),
             cluster_tls.clone(),
-        )?)
+        )?))
     } else {
         None
     };
@@ -3681,7 +3896,9 @@ mod tests {
         .encode()
         .unwrap();
         let backend = RedisClusterScanBackend {
-            factory: crate::redis::ClusterNodeConnectionFactory::new(None, None, None).unwrap(),
+            factory: Arc::new(
+                crate::redis::ClusterNodeConnectionFactory::new(None, None, None).unwrap(),
+            ),
         };
 
         let page = crate::redis::scan_cluster(&backend, 5, &nodes, Some(&initial), "*", 100)
@@ -3704,7 +3921,8 @@ mod tests {
     #[tokio::test]
     async fn production_cluster_backend_records_only_successful_endpoints_in_shared_factory() {
         let successful_endpoint = spawn_cluster_scan_node(0, vec![b"visible".to_vec()]).await;
-        let factory = crate::redis::ClusterNodeConnectionFactory::new(None, None, None).unwrap();
+        let factory =
+            Arc::new(crate::redis::ClusterNodeConnectionFactory::new(None, None, None).unwrap());
         let backend = RedisClusterScanBackend {
             factory: factory.clone(),
         };

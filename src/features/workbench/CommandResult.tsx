@@ -7,8 +7,10 @@ import type {
   IpcError,
 } from "../../lib/types";
 import { RespTable, RespTree } from "./RespResult";
+import BuiltinVisualization from "./BuiltinVisualization";
 
 interface CommandResultProps {
+  command?: string;
   result: CommandResultValue | null;
   error: IpcError | null;
   batchResults?: CommandExecutionItem[];
@@ -35,6 +37,7 @@ export function formatResult(value: unknown, format: WorkbenchResultFormat = "te
 }
 
 export function CommandResult({
+  command = "",
   result,
   error,
   batchResults = [],
@@ -120,6 +123,7 @@ export function CommandResult({
                 <code>{item.command}</code>
                 <span>{item.error_code ? `错误：${item.error_code}` : "成功"}</span>
               </div>
+              {item.result ? <BuiltinVisualization key={`${item.command}-${JSON.stringify(item.result.value)}`} command={item.command} value={item.result.value} /> : null}
               {item.result ? (
                 format === "tree" ? <RespTree key={JSON.stringify(item.result.value)} value={item.result.value} /> : format === "table" ? <RespTable key={JSON.stringify(item.result.value)} value={item.result.value} /> : <pre className="command-result-pre">
                   {formatResult(item.result.value, format)}
@@ -129,6 +133,9 @@ export function CommandResult({
           ))}
         </ol>
       ) : result && formattedResult !== null ? (
+        <>
+        <BuiltinVisualization key={`${command}-${formattedResult}`} command={command} value={result.value} />
+        {
         format === "tree" ? <RespTree key={formattedResult} value={result.value} /> : format === "table" ? <RespTable key={formattedResult} value={result.value} /> :
         <details className="command-result-details" open={!isLargeResult}>
           <summary className="command-result-summary">
@@ -136,6 +143,8 @@ export function CommandResult({
           </summary>
           <pre className="command-result-pre">{formattedResult}</pre>
         </details>
+        }
+        </>
       ) : (
         <p className="workbench-empty-result">执行命令后，Redis 返回值会显示在这里。</p>
       )}

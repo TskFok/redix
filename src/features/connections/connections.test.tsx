@@ -14,6 +14,8 @@ const {
   exportConnectionsMock,
   importConnectionsMock,
   onOpenConnectionMock,
+  listConnectionTagsMock,
+  saveConnectionTagsMock,
 } = vi.hoisted(() => ({
   listConnectionsMock: vi.fn(),
   saveConnectionMock: vi.fn(),
@@ -24,6 +26,13 @@ const {
   exportConnectionsMock: vi.fn(),
   importConnectionsMock: vi.fn(),
   onOpenConnectionMock: vi.fn(),
+  listConnectionTagsMock: vi.fn(),
+  saveConnectionTagsMock: vi.fn(),
+}));
+
+vi.mock("../../lib/localProductsApi", () => ({
+  listConnectionTags: listConnectionTagsMock,
+  saveConnectionTags: saveConnectionTagsMock,
 }));
 
 vi.mock("../../lib/tauri", () => ({
@@ -80,6 +89,7 @@ describe("Redis 连接管理页面", () => {
     vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "local") });
     vi.stubGlobal("confirm", vi.fn(() => true));
     listConnectionsMock.mockResolvedValue([]);
+    listConnectionTagsMock.mockResolvedValue({});
     saveConnectionMock.mockResolvedValue(localProfile);
     openConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
     closeConnectionMock.mockResolvedValue(undefined);
@@ -90,6 +100,32 @@ describe("Redis 连接管理页面", () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+  });
+
+  it("连接标签可在列表中管理、筛选，清空筛选恢复连接", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile, { ...localProfile, id: "two", name: "另一个 Redis" }]);
+    listConnectionTagsMock.mockResolvedValue({ local: [{ key: "env", value: "prod" }] });
+    saveConnectionTagsMock.mockResolvedValue([{ key: "env", value: "dev" }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("env=prod");
+    fireEvent.change(screen.getByLabelText("筛选连接标签"), {target:{value:"prod"}});
+    expect(screen.queryByText("另一个 Redis")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", {name:"管理标签 本地 Redis"}));
+    fireEvent.change(screen.getByLabelText("标签值 1"), {target:{value:"dev"}});
+    fireEvent.click(screen.getByRole("button", {name:"保存标签"}));
+    expect(await screen.findByText("没有匹配标签的连接。")).toBeInTheDocument();
+    expect(saveConnectionTagsMock).toHaveBeenCalledWith("local", [{key:"env",value:"dev"}]);
+    fireEvent.change(screen.getByLabelText("筛选连接标签"), {target:{value:""}});
+    expect(screen.getByText("env=dev")).toBeInTheDocument();
+    expect(screen.getByText("另一个 Redis")).toBeInTheDocument();
+  });
+
+  it("特殊连接ID缺少标签时仍可打开标签编辑器", async () => {
+    listConnectionsMock.mockResolvedValue([{ ...localProfile, id: "__proto__" }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "管理标签 本地 Redis" }));
+    expect(screen.getByRole("button", { name: "添加标签" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("标签键 1")).not.toBeInTheDocument();
   });
 
   it("无连接时显示新增提示并能打开连接表单", async () => {

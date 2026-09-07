@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type {
   JsonMutationResult,
@@ -26,6 +26,27 @@ function parseJsonDraft(draft: string): JsonValue {
   return JSON.parse(draft) as JsonValue;
 }
 
+function sameJsonValue(left: JsonValue, right: JsonValue): boolean {
+  const pending: Array<[JsonValue, JsonValue]> = [[left, right]];
+  while (pending.length > 0) {
+    const [a, b] = pending.pop()!;
+    if (a === b) continue;
+    if (a === null || b === null || typeof a !== "object" || typeof b !== "object") return false;
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+      for (let index = 0; index < a.length; index += 1) pending.push([a[index], b[index]]);
+    } else {
+      const keys = Object.keys(a);
+      if (keys.length !== Object.keys(b).length) return false;
+      for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+        pending.push([a[key], b[key]]);
+      }
+    }
+  }
+  return true;
+}
+
 export function JsonPathEditor({
   value,
   busy,
@@ -42,6 +63,7 @@ export function JsonPathEditor({
   const [blockedReason, setBlockedReason] = useState<string | null>(null);
   const mountedRef = useRef(false);
   const readRequestRef = useRef(0);
+  const sourceValueRef = useRef(value);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -51,7 +73,12 @@ export function JsonPathEditor({
     };
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    // Mount is already initialized by useState. Metadata refreshes can also
+    // provide a new, equivalent JSON object without invalidating the draft.
+    const unchanged = sameJsonValue(sourceValueRef.current, value);
+    sourceValueRef.current = value;
+    if (unchanged) return;
     readRequestRef.current += 1;
     setPath("$");
     setBlockedReason(null);

@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import BulkTaskPanel from "./features/tasks/BulkTaskPanel";
+import { useEffect, useRef, useState } from "react";
 
 import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
@@ -12,6 +13,7 @@ import SearchPage from "./features/search/SearchPage";
 import SettingsPage from "./features/settings/SettingsPage";
 import WorkbenchPage from "./features/workbench/WorkbenchPage";
 import CliPage from "./features/cli/CliPage";
+import ShortcutPalette, { type ShortcutAction } from "./features/shortcuts/ShortcutPalette";
 import { getAppSettings } from "./lib/tauri";
 import type { AppSettings, ConnectionProfile, Workspace } from "./lib/types";
 import { DEFAULT_APP_SETTINGS } from "./features/settings/settingsState";
@@ -102,6 +104,24 @@ const sectionDescriptions: Record<AppSection, string> = {
   settings: "调整主题和工作区偏好",
 };
 
+const navigationShortcuts: Partial<Record<AppSection, ShortcutAction["shortcut"]>> = {
+  connections: { key: "1", label: "Ctrl/Cmd+1" },
+  browser: { key: "2", label: "Ctrl/Cmd+2" },
+  workbench: { key: "3", label: "Ctrl/Cmd+3" },
+  "query-library": { key: "4", label: "Ctrl/Cmd+4" },
+  settings: { key: ",", label: "Ctrl/Cmd+," },
+};
+
+// These selectors identify existing primary inputs without synthesizing clicks
+// or submissions. Focus is checked again when the action runs.
+const workspaceInputSelectors: Partial<Record<AppSection, string>> = {
+  browser: 'input[aria-describedby="key-filter-hint"]',
+  workbench: "#redis-command-input",
+  "search-query": 'input[aria-label="查询语句"]',
+  cli: ".cli-page input",
+  "query-library": 'input[aria-label="搜索已保存查询"]',
+};
+
 function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
   if (type === "connections") {
     return (
@@ -179,6 +199,7 @@ export default function App() {
     ...DEFAULT_APP_SETTINGS,
   }));
   const [pendingWorkbenchCommand, setPendingWorkbenchCommand] = useState<string | null>(null);
+  const workspace = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -224,6 +245,36 @@ export default function App() {
     section === "connections" || section === "query-library" || section === "settings";
   const showConnectionPage =
     activeSection === "connections" || (!activeProfile && !canAccessLocalResources(activeSection));
+  const navigationUnavailable = (section: AppSection) => {
+    if (!canAccessLocalResources(section) && !canAccessWorkspace) return "请先连接 Redis";
+    if (section === "topology" && !activeProfile?.cluster) return "仅 Cluster 连接可用";
+    return undefined;
+  };
+  const primaryInput = () => {
+    const selector = workspaceInputSelectors[activeSection];
+    const element = selector ? workspace.current?.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector) : null;
+    return element && !element.disabled ? element : null;
+  };
+  const shortcutActions: ShortcutAction[] = [
+    ...navigationItems.map((item) => ({
+      id: item.id,
+      label: item.label,
+      description: item.description,
+      shortcut: navigationShortcuts[item.id],
+      unavailable: () => navigationUnavailable(item.id),
+      run: () => {
+        if (navigationUnavailable(item.id)) return;
+        setActiveSection(item.id);
+        document.querySelector<HTMLButtonElement>(`[data-app-section="${item.id}"]`)?.focus();
+      },
+    })),
+    {
+      id: "focus-input", label: "聚焦当前输入", description: "键过滤、查询或命令编辑器",
+      shortcut: { key: "f", shift: true, label: "Ctrl/Cmd+Shift+F" },
+      unavailable: () => primaryInput() ? undefined : "当前工作区没有可用的查询或命令输入",
+      run: () => { primaryInput()?.focus(); },
+    },
+  ];
 
   return (
     <main className="app-shell">
@@ -250,6 +301,7 @@ export default function App() {
                   !isAvailable ? " app-navigation-item-disabled" : ""
                 }`}
                 key={item.id}
+                data-app-section={item.id}
                 aria-label={item.label}
                 aria-current={isActive ? "page" : undefined}
                 aria-disabled={!isAvailable}
@@ -283,6 +335,7 @@ export default function App() {
             <p>{sectionDescriptions[currentSection.id]}</p>
           </div>
           <div className="app-header-context">
+            <ShortcutPalette actions={shortcutActions} />
             <span
               className={`connection-indicator${
                 activeProfile ? " connection-indicator-active" : ""
@@ -299,7 +352,7 @@ export default function App() {
           </div>
         </header>
 
-        <section className="workspace" aria-label="当前工作区">
+        <section ref={workspace} className="workspace" aria-label="当前工作区">
           {showConnectionPage ? (
             <ConnectionPage onOpenConnection={handleOpenConnection} />
           ) : null}
@@ -357,6 +410,7 @@ export default function App() {
             <SettingsPage settings={settings} onSaved={setSettings} />
           ) : null}
         </section>
+        <BulkTaskPanel />
       </section>
     </main>
   );

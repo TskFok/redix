@@ -121,11 +121,24 @@ describe("RedisSearch / Query 页面", () => {
   it("更改查询清除旧分页结果", async () => {
     render(<SearchPage connectionId="local" />);
     await screen.findByRole("option", { name: "idx:users" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "查询" }));
     await screen.findByText("user:1");
     fireEvent.change(screen.getByRole("textbox", { name: "查询语句" }), { target: { value: "@name:Bob" } });
     expect(screen.queryByText("user:1")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "下一页" })).not.toBeInTheDocument();
+  });
+
+  it("索引详情尚未返回时可以查询，详情完成不会丢弃查询结果", async () => {
+    let resolveInfo!: (value: unknown) => void;
+    getSearchIndexMock.mockImplementationOnce(() => new Promise((resolve) => { resolveInfo = resolve; }));
+    render(<SearchPage connectionId="local" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "查询" }));
+    expect(await screen.findByText("user:1")).toBeInTheDocument();
+    await act(async () => resolveInfo(indexInfo));
+    expect(screen.getByText("user:1")).toBeInTheDocument();
   });
 
   it("切换连接清除内容模式和旧请求结果", async () => {
@@ -276,4 +289,80 @@ describe("RedisSearch / Query 页面", () => {
       });
     });
   });
+});
+
+
+it("VECTOR 表单提交必需配置，非法维度阻止创建", async () => {
+  render(<SearchPage connectionId="local" />);
+  fireEvent.click(await screen.findByRole("button", { name: "新建索引" }));
+  fireEvent.change(screen.getByLabelText("索引名称"), { target: { value: "idx:vectors" } });
+  fireEvent.change(screen.getByLabelText("字段 1"), { target: { value: "embedding" } });
+  fireEvent.change(screen.getByLabelText("字段 1 类型"), { target: { value: "vector" } });
+  fireEvent.change(screen.getByLabelText("字段 1 向量维度"), { target: { value: "0" } });
+  fireEvent.click(screen.getByRole("button", { name: "创建索引" }));
+  expect(createSearchIndexMock).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("字段 1 向量维度"), { target: { value: "128" } });
+  fireEvent.click(screen.getByRole("button", { name: "创建索引" }));
+  await waitFor(() => expect(createSearchIndexMock).toHaveBeenCalledWith(expect.objectContaining({
+    fields: [{ name: "embedding", field_type: "vector", vector: {
+      algorithm: "FLAT", data_type: "FLOAT32", dimension: 128, distance_metric: "COSINE",
+    } }],
+  })));
+});
+
+it("Search 2.2 降级禁止选择 VECTOR，普通索引仍可创建", async () => {
+  getModuleCapabilitiesMock.mockResolvedValue({ ...readyCapabilities, search_version: "2.2.0" });
+  render(<SearchPage connectionId="local" />);
+  fireEvent.click(await screen.findByRole("button", { name: "新建索引" }));
+  expect(screen.getByRole("option", { name: "VECTOR" })).toBeDisabled();
+  expect(screen.getByRole("option", { name: "TEXT" })).toBeEnabled();
+});
+
+it("构建器显式回填查询后才由查询按钮执行", async () => {
+  render(<SearchPage connectionId="local" />);
+  await screen.findByText("字段 name");
+  fireEvent.click(screen.getByText("可视查询构建器"));
+  fireEvent.change(await screen.findByLabelText("条件 1 值"), { target: { value: "Alice" } });
+  expect(screen.getByLabelText("查询语句")).toHaveValue("*");
+  fireEvent.click(screen.getByRole("button", { name: "回填查询语句" }));
+  expect(screen.getByLabelText("查询语句")).toHaveValue('@name:("Alice")');
+  expect(searchKeysMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "查询" }));
+  await screen.findByText("user:1");
+  expect(searchKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ query: '@name:("Alice")' }));
+});
+
+it("JSON VECTOR 创建显式填写查询别名并保留源路径", async () => {
+    render(<SearchPage connectionId="local" />);
+    await screen.findByRole("option", { name: "idx:users" });
+    fireEvent.click(screen.getByRole("button", { name: "新建索引" }));
+    fireEvent.change(screen.getByLabelText("索引名称"), { target: { value: "idx:json-vector" } });
+    fireEvent.change(screen.getByLabelText("键类型"), { target: { value: "json" } });
+    fireEvent.change(screen.getByLabelText("字段 1"), { target: { value: "$.embedding" } });
+    fireEvent.change(screen.getByLabelText("字段 1 类型"), { target: { value: "vector" } });
+    expect(screen.getByLabelText("字段 1 查询别名")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "创建索引" }));
+    expect((await screen.findAllByText(/VECTOR 字段需要安全查询别名/)).length).toBeGreaterThan(0);
+    expect(createSearchIndexMock).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("字段 1 查询别名"), { target: { value: "embedding" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建索引" }));
+    await waitFor(() => expect(createSearchIndexMock).toHaveBeenCalledWith(expect.objectContaining({ fields: [expect.objectContaining({ name: "$.embedding", alias: "embedding", field_type: "vector" })] })));
+  });
+
+
+it("创建索引拒绝别名重复和与其他源字段冲突", async () => {
+  render(<SearchPage connectionId="local" />);
+  fireEvent.click(await screen.findByRole("button", { name: "新建索引" }));
+  fireEvent.change(screen.getByLabelText("索引名称"), { target: { value: "idx:aliases" } });
+  fireEvent.change(screen.getByLabelText("字段 1"), { target: { value: "$.a" } });
+  fireEvent.change(screen.getByLabelText("字段 1 查询别名"), { target: { value: "b" } });
+  fireEvent.click(screen.getByRole("button", { name: "添加字段" }));
+  fireEvent.change(screen.getByLabelText("字段 2"), { target: { value: "b" } });
+  fireEvent.click(screen.getByRole("button", { name: "创建索引" }));
+  expect((await screen.findAllByText(/查询别名只能使用/)).length).toBeGreaterThan(0);
+  expect(createSearchIndexMock).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("字段 2"), { target: { value: "$.b" } });
+  fireEvent.change(screen.getByLabelText("字段 2 查询别名"), { target: { value: "b" } });
+  fireEvent.click(screen.getByRole("button", { name: "创建索引" }));
+  expect(createSearchIndexMock).not.toHaveBeenCalled();
 });

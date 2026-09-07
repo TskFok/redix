@@ -484,3 +484,67 @@ async fn cluster_rejects_socket_state_commands_without_polluting_routed_operatio
     }
     service.close_connection("cluster").await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "由 scripts/test-local-cluster.py 设置 REDIX_TEST_REDIS_CLUSTER_URLS"]
+async fn cluster_bulk_delete_uses_direct_primary_connections_for_all_slots() {
+    use redix_lib::redis::bulk_tasks::{BulkTaskManager, BulkTaskStatus, StartBulkDeleteInput};
+    let seeds =
+        std::env::var("REDIX_TEST_REDIS_CLUSTER_URLS").expect("isolated cluster launcher required");
+    let service = cluster_service(&seeds);
+    service.open_connection("cluster").await.unwrap();
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let keys: Vec<String> = (0..60).map(|i| format!("redix:bulk:{nonce}:{i}")).collect();
+    let mut connection = service.routed_connection("cluster").await.unwrap();
+    for key in &keys {
+        redis::cmd("SET")
+            .arg(key)
+            .arg("v")
+            .query_async::<()>(&mut connection)
+            .await
+            .unwrap();
+    }
+    let manager = BulkTaskManager::default();
+    let task = service
+        .start_bulk_delete(
+            &manager,
+            StartBulkDeleteInput {
+                connection_id: "cluster".into(),
+                keys: keys.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let latest = manager
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|item| item.id == task.id)
+                .unwrap();
+            if latest.status != BulkTaskStatus::Running {
+                break latest;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.status, BulkTaskStatus::Completed);
+    assert_eq!(result.deleted, 60);
+    for key in keys {
+        assert_eq!(
+            redis::cmd("EXISTS")
+                .arg(key)
+                .query_async::<u64>(&mut connection)
+                .await
+                .unwrap(),
+            0
+        );
+    }
+    service.close_connection("cluster").await.unwrap();
+}

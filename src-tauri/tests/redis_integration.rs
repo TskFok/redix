@@ -263,12 +263,16 @@ async fn redis_stack_search_flow_when_redis_stack_is_available() {
                 prefixes: vec![prefix.clone()],
                 fields: vec![
                     SearchIndexFieldInput {
+                        alias: None,
                         name: "title".into(),
                         field_type: SearchFieldType::Text,
+                        vector: None,
                     },
                     SearchIndexFieldInput {
+                        alias: None,
                         name: "label".into(),
                         field_type: SearchFieldType::Tag,
+                        vector: None,
                     },
                 ],
             })

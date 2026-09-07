@@ -1,0 +1,25 @@
+.shortcuts-trigger { white-space: nowrap; }
+.shortcuts-trigger kbd { margin-left: 7px; }
+.shortcuts-backdrop {
+  position: fixed; inset: 0; z-index: 1000; display: grid; align-items: center;
+  justify-items: center; padding: 24px 18px; background: #0009;
+}
+.shortcuts-dialog {
+  width: min(640px, 100%); max-height: calc(100dvh - 48px); overflow-y: auto;
+  padding: 20px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-lg);
+  background: var(--color-surface); box-shadow: var(--shadow-panel); color: var(--color-text);
+}
+.shortcuts-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.shortcuts-heading h2 { margin: 0; font-size: 18px; }
+.shortcuts-search { width: 100%; margin-bottom: 12px; }
+.shortcuts-list { max-height: 42dvh; overflow-y: auto; list-style: none; margin: 0; padding: 0; }
+.shortcuts-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid transparent; border-radius: var(--radius-md); cursor: pointer; }
+.shortcuts-list li[aria-selected="true"] { background: var(--color-surface-selected); border-color: var(--color-focus); }
+.shortcuts-list li[aria-disabled="true"] { color: var(--color-muted); cursor: default; opacity: 0.7; }
+.shortcuts-list li span { display: grid; gap: 4px; }
+.shortcuts-list small, .shortcuts-help, .shortcuts-existing { color: var(--color-muted); font-size: 12px; line-height: 1.6; }
+.shortcuts-help { margin: 16px 0 10px; }
+.shortcuts-existing { display: grid; gap: 5px; padding-top: 12px; border-top: 1px solid var(--color-border); }
+.shortcuts-dialog kbd, .shortcuts-trigger kbd { white-space: nowrap; font-size: 11px; font-family: inherit; padding: 2px 5px; border: 1px solid var(--color-border); border-radius: 4px; color: var(--color-muted); }
+.shortcuts-empty { padding: 12px; color: var(--color-muted); }
+@media (max-width: 760px) { .shortcuts-trigger kbd { display: none; } .shortcuts-backdrop { padding-top: 24px; } }
