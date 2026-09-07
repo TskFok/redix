@@ -2,10 +2,16 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
+vi.mock("./features/tasks/bulkTaskApi", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./features/tasks/bulkTaskApi")>(),
+  listBulkTasks: vi.fn().mockResolvedValue([]),
+}));
+
 const {
   listConnectionsMock,
   openConnectionMock,
   closeConnectionMock,
+  deleteConnectionMock,
   scanKeysMock,
   getModuleCapabilitiesMock,
   listSearchIndexesMock,
@@ -30,6 +36,7 @@ const {
   listConnectionsMock: vi.fn(),
   openConnectionMock: vi.fn(),
   closeConnectionMock: vi.fn(),
+  deleteConnectionMock: vi.fn(),
   scanKeysMock: vi.fn(),
   getModuleCapabilitiesMock: vi.fn(),
   listSearchIndexesMock: vi.fn(),
@@ -78,7 +85,7 @@ vi.mock("./lib/tauri", () => ({
   selectDatabase: selectDatabaseMock,
   getClusterTopology: vi.fn().mockResolvedValue({ summary: { state: "ok", slots_assigned: 16384, slots_ok: 16384, slots_pfail: 0, slots_fail: 0, current_epoch: 1, size: 0, known_nodes: 0 }, nodes: [], failures: [] }),
   refreshClusterTopology: vi.fn(),
-  deleteConnection: vi.fn(),
+  deleteConnection: deleteConnectionMock,
   saveConnection: vi.fn(),
   testConnection: vi.fn(),
   getKey: vi.fn(),
@@ -124,6 +131,7 @@ beforeEach(() => {
   listConnectionsMock.mockResolvedValue([]);
   openConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
   closeConnectionMock.mockResolvedValue(undefined);
+  deleteConnectionMock.mockResolvedValue(undefined);
   scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
   getModuleCapabilitiesMock.mockResolvedValue({
     modules: [],
@@ -290,15 +298,17 @@ describe("Redix 应用壳", () => {
     expect(executeCommandsMock).not.toHaveBeenCalled();
   });
 
-  it("显示应用名称和默认工作区", () => {
+  it("启动时显示独立连接管理页和应用名称", () => {
     render(<App />);
 
     expect(screen.getByRole("heading", { name: "Redix" })).toBeInTheDocument();
-    expect(screen.getByText("Browser")).toBeInTheDocument();
-    expect(screen.getByText("Workbench")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "连接管理" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "产品侧边栏" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/当前连接：|请先连接 Redis 后使用工作区/)).not.toBeInTheDocument();
+    expect(openConnectionMock).not.toHaveBeenCalled();
   });
 
-  it("未连接时以连接管理为默认入口并禁用数据工作区", () => {
+  it("连接管理页只提供本地功能入口", () => {
     render(<App />);
 
     const navigation = screen.getByRole("navigation", { name: "主导航" });
@@ -307,12 +317,108 @@ describe("Redix 应用壳", () => {
       "aria-current",
       "page",
     );
-    expect(screen.getByRole("button", { name: "Browser" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Workbench" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Database" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "数据库分析" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Browser" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workbench" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Database" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "数据库分析" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Query Library" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "设置" })).toBeEnabled();
+  });
+
+  it("连接成功后进入对应工作区，返回连接管理后可重新进入", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByRole("heading", { name: "数据浏览" });
+    expect(screen.getByRole("complementary", { name: "产品侧边栏" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "连接管理" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "连接管理" })).not.toBeInTheDocument();
+    expect(screen.getByText(/当前连接：/)).toHaveTextContent("本地 Redis · 127.0.0.1:6379");
+
+    fireEvent.click(screen.getByRole("button", { name: "返回连接管理" }));
+    await screen.findByText("已连接");
+    expect(screen.getByRole("heading", { name: "连接管理" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "数据浏览" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "产品侧边栏" })).not.toBeInTheDocument();
+    expect(closeConnectionMock).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(window, { key: "2", ctrlKey: true });
+    expect(screen.queryByRole("heading", { name: "数据浏览" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新连接" }));
+    await screen.findByRole("heading", { name: "数据浏览" });
+    expect(openConnectionMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("从其他工作区也能通过快捷键返回，切换连接后使用新连接", async () => {
+    const remoteProfile = { ...localProfile, id: "remote", name: "远程 Redis", host: "192.0.2.10" };
+    listConnectionsMock.mockResolvedValue([localProfile, remoteProfile]);
+    render(<App />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "连接" }))[0]);
+    await screen.findByRole("heading", { name: "数据浏览" });
+    fireEvent.click(screen.getByRole("button", { name: "Workbench" }));
+    await screen.findByRole("textbox", { name: "Redis 命令" });
+    fireEvent.keyDown(window, { key: "1", metaKey: true });
+    await screen.findByText("远程 Redis");
+    expect(screen.queryByRole("complementary", { name: "产品侧边栏" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "连接管理" })).toHaveFocus();
+
+    fireEvent.click(screen.getByRole("button", { name: "连接" }));
+    await screen.findByRole("heading", { name: "数据浏览" });
+    expect(closeConnectionMock).toHaveBeenCalledWith("local");
+    expect(screen.getByText(/当前连接：/)).toHaveTextContent("远程 Redis · 192.0.2.10:6379");
+    await waitFor(() => expect(scanKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ connection_id: "remote" })));
+  });
+
+  it("连接失败时停留在连接管理页，允许重试", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    openConnectionMock.mockRejectedValueOnce({ code: "CONNECTION_FAILED" });
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法连接到 Redis 服务器");
+    expect(screen.getByRole("heading", { name: "连接管理" })).toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "产品侧边栏" })).not.toBeInTheDocument();
+    expect(scanKeysMock).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "连接" }));
+    await screen.findByRole("heading", { name: "数据浏览" });
+  });
+
+  it("返回后删除当前连接会清除连接上下文", async () => {
+    const remoteProfile = { ...localProfile, id: "remote", name: "远程 Redis" };
+    listConnectionsMock.mockResolvedValue([localProfile, remoteProfile]);
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    render(<App />);
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "连接" }))[0]);
+    await screen.findByRole("heading", { name: "数据浏览" });
+    fireEvent.click(screen.getByRole("button", { name: "返回连接管理" }));
+    fireEvent.click(await screen.findByRole("button", { name: "删除 本地 Redis" }));
+    await waitFor(() => expect(screen.queryByText("本地 Redis")).not.toBeInTheDocument());
+    expect(deleteConnectionMock).toHaveBeenCalledWith("local");
+    expect(screen.queryByText("已连接")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "连接" }));
+    await screen.findByRole("heading", { name: "数据浏览" });
+    expect(closeConnectionMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/当前连接：/)).toHaveTextContent("远程 Redis");
+  });
+
+  it("在连接管理的查询库选择命令后，连接并进入 Workbench 仍可回填", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    listQueryLibraryMock.mockResolvedValue([
+      { id: "query-1", name: "读取用户", command: "GET user:1", tags: [], updated_at: 1 },
+    ]);
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Query Library" }));
+    fireEvent.click(await screen.findByRole("button", { name: "回填 Workbench 读取用户" }));
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByRole("heading", { name: "数据浏览" });
+    fireEvent.click(screen.getByRole("button", { name: "Workbench" }));
+    expect(await screen.findByRole("textbox", { name: "Redis 命令" })).toHaveValue("GET user:1");
+    expect(executeCommandMock).not.toHaveBeenCalled();
   });
 
   it("连接后显示可用的数据库分析入口，默认仍停留在 Browser", async () => {

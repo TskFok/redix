@@ -18,6 +18,7 @@ interface ConnectionFormProps {
   initial?: ConnectionProfile;
   onSaved: (profile: ConnectionProfile) => void;
   onCancel: () => void;
+  onConnect?: (profile: ConnectionProfile) => Promise<void>;
   onOpened?: (profile: ConnectionProfile) => void;
   onOpenFailed?: (profile: ConnectionProfile) => void;
   onTestingChange?: (testing: boolean) => void;
@@ -200,6 +201,7 @@ export function ConnectionForm({
   initial,
   onSaved,
   onCancel,
+  onConnect,
   onOpened,
   onOpenFailed,
   onTestingChange,
@@ -283,8 +285,12 @@ export function ConnectionForm({
     onSaved(saved);
     if (connectAfterSave) {
       try {
-        await openConnection(saved.id);
-        onOpened?.(saved);
+        if (onConnect) {
+          await onConnect(saved);
+        } else {
+          await openConnection(saved.id);
+          onOpened?.(saved);
+        }
       } catch {
         if (onOpenFailed) {
           onOpenFailed(saved);

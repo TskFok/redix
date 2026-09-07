@@ -179,14 +179,35 @@ function NavigationIcon({ type }: { type: NavigationItem["icon"] }) {
   );
 }
 
+function AppBrand() {
+  return (
+    <div className="app-brand">
+      <span className="app-brand-mark" aria-hidden="true">R</span>
+      <div>
+        <h1>Redix</h1>
+        <span>Redis desktop client</span>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeProfile, setActiveProfile] = useState<ConnectionProfile | null>(null);
+  const [connectionWorkspaceOpen, setConnectionWorkspaceOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<AppSection>("connections");
   const [settings, setSettings] = useState<AppSettings>(() => ({
     ...DEFAULT_APP_SETTINGS,
   }));
   const [pendingWorkbenchCommand, setPendingWorkbenchCommand] = useState<string | null>(null);
   const workspace = useRef<HTMLElement>(null);
+  const focusConnectionsOnReturn = useRef(false);
+
+  useEffect(() => {
+    if (focusConnectionsOnReturn.current && activeSection === "connections") {
+      document.querySelector<HTMLButtonElement>('[data-app-section="connections"]')?.focus();
+    }
+    focusConnectionsOnReturn.current = false;
+  }, [activeSection, connectionWorkspaceOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -216,7 +237,16 @@ export default function App() {
 
   const handleOpenConnection = (profile: ConnectionProfile | null) => {
     setActiveProfile(profile);
+    setConnectionWorkspaceOpen(profile !== null);
+    if (!profile) setPendingWorkbenchCommand(null);
     setActiveSection(profile ? "browser" : "connections");
+  };
+
+  const handleBackToConnections = () => {
+    focusConnectionsOnReturn.current = true;
+    setConnectionWorkspaceOpen(false);
+    setPendingWorkbenchCommand(null);
+    setActiveSection("connections");
   };
 
   const handleProfileChanged = (profile: ConnectionProfile) => {
@@ -227,15 +257,23 @@ export default function App() {
 
   const activeNavigation = navigationItems.find((item) => item.id === activeSection);
   const currentSection = activeNavigation ?? navigationItems[0];
-  const canAccessWorkspace = activeProfile !== null;
+  const canAccessWorkspace = connectionWorkspaceOpen && activeProfile !== null;
   const canAccessLocalResources = (section: AppSection) =>
     section === "connections" || section === "query-library" || section === "settings";
   const showConnectionPage =
-    activeSection === "connections" || (!activeProfile && !canAccessLocalResources(activeSection));
+    activeSection === "connections" || (!canAccessWorkspace && !canAccessLocalResources(activeSection));
   const navigationUnavailable = (section: AppSection) => {
-    if (!canAccessLocalResources(section) && !canAccessWorkspace) return "请先连接 Redis";
+    if (!canAccessLocalResources(section) && !canAccessWorkspace) return "请先从连接管理打开 Redis 连接";
     if (section === "topology" && !activeProfile?.cluster) return "仅 Cluster 连接可用";
     return undefined;
+  };
+  const navigateTo = (section: AppSection) => {
+    if (navigationUnavailable(section)) return;
+    if (section === "connections") {
+      handleBackToConnections();
+    } else {
+      setActiveSection(section);
+    }
   };
   const primaryInput = () => {
     const selector = workspaceInputSelectors[activeSection];
@@ -251,7 +289,7 @@ export default function App() {
       unavailable: () => navigationUnavailable(item.id),
       run: () => {
         if (navigationUnavailable(item.id)) return;
-        setActiveSection(item.id);
+        navigateTo(item.id);
         document.querySelector<HTMLButtonElement>(`[data-app-section="${item.id}"]`)?.focus();
       },
     })),
@@ -264,21 +302,26 @@ export default function App() {
   ];
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${canAccessWorkspace ? "" : " app-shell-home"}`}>
+      {canAccessWorkspace ? (
       <aside className="app-sidebar" aria-label="产品侧边栏">
-        <div className="app-brand">
-          <span className="app-brand-mark" aria-hidden="true">
-            R
-          </span>
-          <div>
-            <h1>Redix</h1>
-            <span>Redis desktop client</span>
-          </div>
-        </div>
+        <AppBrand />
+        <button
+          type="button"
+          className="app-back-button"
+          aria-label="返回连接管理"
+          title="返回连接管理 (Ctrl/Cmd+1)"
+          onClick={handleBackToConnections}
+        >
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="m12 5-7 7 7 7M5 12h14" />
+          </svg>
+          <span className="app-back-label">返回连接管理</span>
+        </button>
 
         <nav aria-label="主导航" className="app-navigation">
           <p className="app-navigation-label">工作区</p>
-          {navigationItems.filter((item) => item.id !== "topology" || activeProfile?.cluster).map((item) => {
+          {navigationItems.filter((item) => item.id !== "connections" && (item.id !== "topology" || activeProfile?.cluster)).map((item) => {
             const isAvailable = canAccessLocalResources(item.id) || canAccessWorkspace;
             const isActive = currentSection.id === item.id;
             return (
@@ -293,7 +336,7 @@ export default function App() {
                 aria-current={isActive ? "page" : undefined}
                 aria-disabled={!isAvailable}
                 disabled={!isAvailable}
-                onClick={() => setActiveSection(item.id)}
+                onClick={() => navigateTo(item.id)}
               >
                 <span className="app-navigation-icon">
                   <NavigationIcon type={item.icon} />
@@ -317,24 +360,49 @@ export default function App() {
           <small>v{appVersion} MVP</small>
         </div>
       </aside>
+      ) : (
+        <header className="app-home-header">
+          <AppBrand />
+          <div className="app-home-actions">
+            <nav className="app-home-navigation" aria-label="主导航">
+              {navigationItems.filter((item) => canAccessLocalResources(item.id)).map((item) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  className={`button button-quiet${currentSection.id === item.id ? " app-home-navigation-active" : ""}`}
+                  data-app-section={item.id}
+                  aria-current={currentSection.id === item.id ? "page" : undefined}
+                  onClick={() => navigateTo(item.id)}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+            <ShortcutPalette actions={shortcutActions} />
+          </div>
+        </header>
+      )}
 
       <section className="app-main">
-        <section ref={workspace} className="workspace" aria-label="当前工作区">
+        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
           {showConnectionPage ? (
-            <ConnectionPage onOpenConnection={handleOpenConnection} />
+            <ConnectionPage
+              activeConnectionId={activeProfile?.id ?? null}
+              onOpenConnection={handleOpenConnection}
+            />
           ) : null}
-          <p className="workspace-context" aria-live="polite">
-            {activeProfile
-              ? `当前连接：${activeProfile.name} · ${connectionAddress(activeProfile)}`
-              : "请先连接 Redis 后使用工作区。"}
-          </p>
-          {activeProfile && activeSection === "browser" ? (
+          {canAccessWorkspace && activeProfile ? (
+            <p className="workspace-context" aria-live="polite">
+              {`当前连接：${activeProfile.name} · ${connectionAddress(activeProfile)}`}
+            </p>
+          ) : null}
+          {canAccessWorkspace && activeProfile && activeSection === "browser" ? (
             <BrowserPage connectionId={activeProfile.id} scanCount={settings.scan_count} />
           ) : null}
-          {activeProfile && activeSection === "search-query" ? (
+          {canAccessWorkspace && activeProfile && activeSection === "search-query" ? (
             <SearchPage connectionId={activeProfile.id} />
           ) : null}
-          {activeProfile && activeSection === "workbench" ? (
+          {canAccessWorkspace && activeProfile && activeSection === "workbench" ? (
             <WorkbenchPage
               connectionId={activeProfile.id}
               defaultFormat={settings.result_format}
@@ -343,7 +411,7 @@ export default function App() {
               onCommandConsumed={() => setPendingWorkbenchCommand(null)}
             />
           ) : null}
-          {activeProfile && activeSection === "database" ? (
+          {canAccessWorkspace && activeProfile && activeSection === "database" ? (
             <DatabasePage
               connectionId={activeProfile.id}
               activeDatabase={activeProfile.database}
@@ -352,24 +420,24 @@ export default function App() {
               onOpenTopology={() => setActiveSection("topology")}
             />
           ) : null}
-          {activeProfile && activeSection === "cli" ? (
+          {canAccessWorkspace && activeProfile && activeSection === "cli" ? (
             <CliPage connectionId={activeProfile.id} database={activeProfile.database} isCluster={Boolean(activeProfile.cluster)} />
           ) : null}
-          {activeProfile && activeSection === "database-analysis" ? (
+          {canAccessWorkspace && activeProfile && activeSection === "database-analysis" ? (
             <DatabaseAnalysisPage
               connectionId={activeProfile.id}
               activeDatabase={activeProfile.database}
             />
           ) : null}
-          {activeProfile && activeSection === "observability" ? (
+          {canAccessWorkspace && activeProfile && activeSection === "observability" ? (
             <ObservabilityPage connectionId={activeProfile.id} isCluster={Boolean(activeProfile.cluster)} />
           ) : null}
-          {activeProfile?.cluster && activeSection === "topology" ? <TopologyPage connectionId={activeProfile.id} /> : null}
+          {canAccessWorkspace && activeProfile?.cluster && activeSection === "topology" ? <TopologyPage connectionId={activeProfile.id} /> : null}
           {activeSection === "query-library" ? (
             <QueryLibraryPage
               onFill={(command) => {
                 setPendingWorkbenchCommand(command);
-                setActiveSection("workbench");
+                setActiveSection(canAccessWorkspace ? "workbench" : "connections");
               }}
             />
           ) : null}

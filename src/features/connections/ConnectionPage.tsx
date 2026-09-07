@@ -28,6 +28,7 @@ import {
 } from "./connectionState";
 
 interface ConnectionPageProps {
+  activeConnectionId?: string | null;
   onOpenConnection: (profile: ConnectionProfile | null) => void;
 }
 
@@ -76,7 +77,7 @@ function transferFeedbackFromResult(result: ImportConnectionsResult): TransferFe
   };
 }
 
-export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
+export function ConnectionPage({ activeConnectionId, onOpenConnection }: ConnectionPageProps) {
   const [state, setState] = useState<ConnectionPageState>(() => ({
     ...initialConnectionPageState,
   }));
@@ -87,6 +88,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
   const [tagsError, setTagsError] = useState(false);
   const [tagQuery, setTagQuery] = useState("");
   const [onlyUntagged, setOnlyUntagged] = useState(false);
+  const activeId = activeConnectionId === undefined ? state.activeId : activeConnectionId;
 
   useEffect(() => {
     let mounted = true;
@@ -147,16 +149,8 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
     onOpenConnection(profile);
   };
 
-  const handleOpenFailed = (profile: ConnectionProfile) => {
-    setState((current) => ({
-      ...current,
-      profiles: replaceProfile(current.profiles, profile),
-      error: savedButOpenFailedMessage,
-    }));
-  };
-
-  const handleOpen = async (profile: ConnectionProfile) => {
-    const previousActiveId = state.activeId;
+  const handleOpen = async (profile: ConnectionProfile, openFailedMessage?: string) => {
+    const previousActiveId = activeId;
     setState((current) => ({
       ...current,
       openingId: profile.id,
@@ -188,7 +182,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
     } catch (caught) {
       setState((current) => ({
         ...current,
-        error: toUserFacingError(caught, "打开连接失败，请稍后重试。"),
+        error: openFailedMessage ?? toUserFacingError(caught, "打开连接失败，请稍后重试。"),
       }));
     } finally {
       setState((current) => ({ ...current, openingId: null }));
@@ -200,7 +194,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
       return;
     }
     const wasEditing = state.editingProfile?.id === profile.id;
-    const wasActive = state.activeId === profile.id;
+    const wasActive = activeId === profile.id;
 
     setState((current) => ({
       ...current,
@@ -408,7 +402,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
               profiles={visibleProfiles}
               tags={tags ?? undefined}
               onTagsSaved={(id, updated) => setTags((current) => ({ ...current, [id]: updated }))}
-              activeId={state.activeId}
+              activeId={activeId}
               openingId={state.openingId}
               deletingId={state.deletingId}
               onAdd={handleAdd}
@@ -424,8 +418,7 @@ export function ConnectionPage({ onOpenConnection }: ConnectionPageProps) {
           initial={state.editingProfile ?? undefined}
           onSaved={handleSaved}
           onCancel={handleCancel}
-          onOpened={handleOpened}
-          onOpenFailed={handleOpenFailed}
+          onConnect={(profile) => handleOpen(profile, savedButOpenFailedMessage)}
           onTestingChange={(testing) =>
             setState((current) => ({
               ...current,

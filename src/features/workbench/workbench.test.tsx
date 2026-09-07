@@ -441,12 +441,12 @@ describe("Redis Workbench 工作区", () => {
     expect(executeCommandMock).toHaveBeenCalledTimes(2);
   });
 
-  it("没有活动连接时导航明确禁用，有活动连接时可切换 Workbench", async () => {
+  it("连接管理页隐藏工作区导航，连接后可切换 Workbench", async () => {
     const { unmount } = render(<App />);
 
-    const disabledWorkbench = await screen.findByRole("button", { name: "Workbench" });
-    expect(disabledWorkbench).toBeDisabled();
-    expect(screen.getByText("请先连接 Redis 后使用工作区。" )).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "连接管理" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Workbench" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "产品侧边栏" })).not.toBeInTheDocument();
 
     unmount();
     listConnectionsMock.mockResolvedValue([localProfile]);
