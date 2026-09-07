@@ -7,7 +7,7 @@ use redis::Value;
 use redix_lib::{
     domain::{
         ClusterConfig, ClusterNodeHealth, ClusterNodeRole, ConnectionEndpoint, ConnectionProfile,
-        NodeFailure, SlotRange,
+        NodeFailure, ScanCursor, ScanKeysInput, SlotRange,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -706,6 +706,7 @@ async fn spawn_topology_cluster_options(
         gate_keyspace,
         fail_keyspace,
         None,
+        false,
     )
     .await
 }
@@ -716,6 +717,7 @@ async fn spawn_topology_cluster_info_options(
     gate_keyspace: bool,
     fail_keyspace: bool,
     multi_info_error: Option<&'static str>,
+    gate_scan_metadata: bool,
 ) -> (
     u16,
     Arc<AtomicUsize>,
@@ -819,6 +821,21 @@ async fn spawn_topology_cluster_info_options(
                                 }
                             }
                             (Some(b"DBSIZE"), _) => ":7\r\n".into(),
+                            (Some(b"SCAN"), _) => "*2\r\n$1\r\n0\r\n*1\r\n$3\r\nkey\r\n".into(),
+                            (Some(b"TYPE"), _) => "+string\r\n".into(),
+                            (Some(b"PTTL"), _) => ":-1\r\n".into(),
+                            (Some(b"STRLEN"), _) => ":5\r\n".into(),
+                            (Some(b"MEMORY"), _) => "$-1\r\n".into(),
+                            (Some(b"OBJECT"), Some(b"IDLETIME")) => {
+                                if gate_scan_metadata {
+                                    if let Some((entered, resume)) = gate.lock().await.take() {
+                                        let _ = entered.send(());
+                                        let _ = resume.await;
+                                    }
+                                }
+                                "$-1\r\n".into()
+                            }
+                            (Some(b"OBJECT"), _) => "$-1\r\n".into(),
                             (Some(b"INFO"), _) => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
                             (Some(b"MODULE"), _) => "*0\r\n".into(),
                             (Some(b"PING"), _) => "+PONG\r\n".into(),
@@ -847,7 +864,8 @@ async fn live_topology_redis6_info_falls_back_on_the_same_connection() {
         "ERR wrong number of arguments for 'INFO' command",
     ] {
         let (port, cluster_info_calls, commands, _, _) =
-            spawn_topology_cluster_info_options(false, true, false, false, Some(error)).await;
+            spawn_topology_cluster_info_options(false, true, false, false, Some(error), false)
+                .await;
         let service = RedisService::new(
             Arc::new(TopologyProfiles(vec![topology_profile(port)])),
             Arc::new(TopologySecrets),
@@ -893,7 +911,8 @@ async fn live_topology_does_not_retry_acl_or_unrelated_info_errors() {
         "ERR temporarily unavailable",
     ] {
         let (port, cluster_info_calls, commands, _, _) =
-            spawn_topology_cluster_info_options(false, true, false, false, Some(error)).await;
+            spawn_topology_cluster_info_options(false, true, false, false, Some(error), false)
+                .await;
         let service = RedisService::new(
             Arc::new(TopologyProfiles(vec![topology_profile(port)])),
             Arc::new(TopologySecrets),
@@ -986,6 +1005,64 @@ async fn cluster_database_overview_rejects_a_replaced_generation() {
     entered.await.unwrap();
     service.open_connection("topology-cluster").await.unwrap();
     resume.send(()).unwrap();
+    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+}
+
+#[tokio::test]
+async fn cluster_scan_rejects_a_page_after_the_active_generation_is_closed() {
+    let (port, _, _, entered, resume) =
+        spawn_topology_cluster_info_options(false, true, false, false, None, true).await;
+    let service = Arc::new(RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    ));
+    service.open_connection("topology-cluster").await.unwrap();
+
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .scan_keys(ScanKeysInput {
+                connection_id: "topology-cluster".into(),
+                cursor: ScanCursor::Standalone(0),
+                pattern: "*".into(),
+                count: 10,
+                key_type: None,
+            })
+            .await
+    });
+    entered.await.unwrap();
+    service.close_connection("topology-cluster").await.unwrap();
+    resume.send(()).unwrap();
+
+    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+}
+
+#[tokio::test]
+async fn cluster_scan_rejects_a_page_after_the_active_generation_is_replaced() {
+    let (port, _, _, entered, resume) =
+        spawn_topology_cluster_info_options(false, true, false, false, None, true).await;
+    let service = Arc::new(RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    ));
+    service.open_connection("topology-cluster").await.unwrap();
+
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .scan_keys(ScanKeysInput {
+                connection_id: "topology-cluster".into(),
+                cursor: ScanCursor::Standalone(0),
+                pattern: "*".into(),
+                count: 10,
+                key_type: None,
+            })
+            .await
+    });
+    entered.await.unwrap();
+    service.open_connection("topology-cluster").await.unwrap();
+    resume.send(()).unwrap();
+
     assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
 }
 

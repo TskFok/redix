@@ -4,8 +4,8 @@
 
 ## 允许项
 
-- 自管理 Redis Standalone、Sentinel 与 Cluster DB 0；Cluster 支持普通命令 slot 路由、跨 primary 的完整 `SCAN`、拓扑摘要和 primary-only Database Analysis。
-- `ssh2` transport 使用严格 known_hosts，支持 Agent、Password、内存 PrivateKey 和本机 identity file；Standalone/Sentinel 可与 TLS 组合并保留原目标 SNI。Cluster+SSH 禁用。
+- 自管理 Redis Standalone、Sentinel 与 Cluster DB 0；Cluster 支持普通命令 slot 路由、跨 primary 的 UTF-8 键名完整 `SCAN`、拓扑摘要和 primary-only Database Analysis。二进制键名使对应节点返回可重试失败并保留游标，不承诺任意键空间都能完成遍历。
+- `ssh2` transport 使用严格 known_hosts，支持 Agent、Password、内存 PrivateKey 和本机 identity file；Standalone/Sentinel 可与 TLS 组合并保留原目标 SNI。TCP 建连、握手和远端认证共享 6 秒预算，Agent 最多按顺序尝试 32 个身份；本地 Agent IPC 仍可能不可中断并占用 worker、permit 与 CLI 生命周期锁，不能称认证全程均可取消。Cluster+SSH 禁用。
 - 连接配置导入导出；普通导出只包含可迁移 profile 元数据，不包含密码、CA PEM、客户端证书、SSH 私钥/口令或 SSH 本机路径。
 - 使用系统钥匙串保存本地连接密码；前端 DTO 和连接列表不暴露密码。
 - Standalone TLS 的启用/关闭、服务端证书校验、自定义 CA 和 mTLS；TLS 材料继续保存在本机安全存储，不写普通 JSON 文档。
@@ -29,6 +29,8 @@
 - Slow Log 在 Standalone/Sentinel 支持读取、清空和配置；Cluster typed 四端点在网络操作前拒绝，避免把驱动的随机/全节点回复误称为明确节点作用域。
 - Pub/Sub 与 Profiler 在 Standalone/Sentinel 使用独立可取消 socket/transport；Cluster 的 typed 订阅、发布和 Profiler 明确拒绝。命令工作台原生命令仅遵循驱动路由，不提供跨节点保证。
 - React/Tauri 本地 UI、前端测试、Rust 单元测试和本地构建工具链。
+
+上述响应上限只覆盖已解码结构、解析、typed IPC 或展示层；Redis 传输层原始 RESP 字节/分配上限尚未实现，不能把解析后的限制描述为原始读取上限。
 
 ## 排除项与尚未覆盖能力
 

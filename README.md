@@ -36,7 +36,7 @@ npm run tauri:build
 
 `check:non-cloud` 只扫描产品源码目录和 `package.json`，不扫描 README、设计文档或范围说明。它用于阻止非本地产品入口意外进入代码和菜单文案。
 
-Browser 使用 Redis `SCAN` 分页浏览键，不使用阻塞式全量键枚举。Workbench 只在当前本地连接上执行用户输入的 Redis 命令。
+Browser 使用 Redis `SCAN` 分页浏览键，不使用阻塞式全量键枚举。Cluster 跨 primary 的完整遍历仅覆盖当前键 DTO 可表示的 UTF-8 键名；节点返回二进制键名时，该节点以可重试失败返回并保留游标，不能据此承诺任意二进制键空间都能完成遍历。Workbench 只在当前本地连接上执行用户输入的 Redis 命令。
 
 Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新以及校验后的本地 JSON 导入导出；基础数据类型支持 String、Hash、List、Set、Sorted Set、Stream。Hash、List、Set、Sorted Set 使用有界分页和字段/成员/索引级增量写入，不用当前页重建整个键；Stream 使用有界 ID 范围分页，并支持显式添加和删除消息。Stream 详情还支持 Consumer Group 的创建/删除、消费者与 Pending 列表、Pending 确认、消费者删除和显式 XCLAIM 转移。转移需要选择消息并指定目标消费者、最小空闲时间，只操作满足条件的 Pending 消息，不启用 FORCE 或自动消费。RedisJSON 同时支持根文档编辑，以及路径级读取、保存、删除和数组追加。连接级模块能力通过 `MODULE LIST` 探测并按 session 缓存；探测失败或未检测到 RedisJSON/RedisSearch 时，不会阻断普通 Browser 流程，对应的路径编辑器或 Search / Query 工作区会稳定降级为不可用提示。RedisSearch / Query 工作区在 Search 2.0+ 可用时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引和有限的 `FT.SEARCH ... LIMIT` 查询（默认 NOCONTENT，可开启文档字段结果表），以及 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 查询；查询文本不持久化；Browser 的 Hash/JSON 键详情会显示匹配的索引摘要。
 
@@ -50,7 +50,9 @@ Database 工作区提供服务器版本、运行模式、连接数、内存、�
 
 ## 当前边界
 
-本版本支持 Standalone、Sentinel 和 Cluster DB 0。Cluster 已支持普通命令的 slot 路由、跨 primary 的完整 `SCAN`、16384 slot 拓扑摘要及 primary-only Database Analysis；Cluster+SSH、Cluster Pub/Sub、Cluster Profiler 和 typed Cluster Slow Log 明确不支持。拓扑 DTO 目前也没有 RedisInsight 目标中的每节点 version/mode/totalkeys 等额外指标，不能称为全量等价。SSH 由内置 `ssh2` transport 提供 Agent、Password、内存私钥或本机私钥文件认证；Standalone/Sentinel 可与 TLS 组合，Cluster+SSH 禁用。普通连接导出不包含密码、证书正文、SSH 私钥、口令或 SSH 本机路径。
+本版本支持 Standalone、Sentinel 和 Cluster DB 0。Cluster 已支持普通命令的 slot 路由、跨 primary 的 UTF-8 键名完整 `SCAN`、16384 slot 拓扑摘要及 primary-only Database Analysis；Cluster+SSH、Cluster Pub/Sub、Cluster Profiler 和 typed Cluster Slow Log 明确不支持。拓扑 DTO 目前也没有 RedisInsight 目标中的每节点 version/mode/totalkeys 等额外指标，不能称为全量等价。SSH 由内置 `ssh2` transport 提供 Agent、Password、内存私钥或本机私钥文件认证；Standalone/Sentinel 可与 TLS 组合，Cluster+SSH 禁用。TCP 建连、SSH 握手和远端认证共享 6 秒建连预算，超时或调用方取消会关闭已建立且仍在初始化的自有 socket；Agent 按返回顺序最多尝试 32 个身份且不重置该预算。但锁定的 libssh2 在 Unix/Windows 本地 Agent IPC 中可能同步阻塞，当前进程内接口无法可靠打断该本地等待；卡住时仍可能占用 worker、permit 和 CLI 生命周期锁，不能视为全部 SSH 认证均可超时取消。普通连接导出不包含密码、证书正文、SSH 私钥、口令或 SSH 本机路径。
+
+文中所述响应大小上限约束的是已解码结构、解析、typed IPC 或展示层；当前没有 Redis 传输层原始 RESP 字节/分配上限，服务端超大回复仍可能在解析拒绝前占用内存。
 
 Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics、远程插件与插件市场永久排除；没有云登录、云账户、云数据库发现、云 SDK 或 SQL。当前只收口六批路线中的连接与拓扑第一批，Browser 解码器、后台任务和其他矩阵差异仍在后续批次。
 

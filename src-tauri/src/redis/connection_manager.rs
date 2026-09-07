@@ -1296,6 +1296,8 @@ impl RedisOperations for RedisService {
                 node_failures: page.node_failures,
             };
             ensure_cluster_scan_page_size(&page)?;
+            self.ensure_generation_current(&input.connection_id, snapshot.token)
+                .await?;
             return Ok(page);
         }
         let standalone_cursor = match input.cursor {

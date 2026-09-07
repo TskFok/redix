@@ -21,12 +21,63 @@ const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
 const PROXY_IDLE_WAIT: Duration = Duration::from_millis(2);
 const MAX_PROXY_WORKERS: usize = 32;
 const MAX_BLOCKING_SSH_WORKERS: usize = 64;
+const MAX_AGENT_IDENTITIES: usize = 32;
 
 fn blocking_ssh_limit() -> Arc<tokio::sync::Semaphore> {
     static LIMIT: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
     LIMIT
         .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(MAX_BLOCKING_SSH_WORKERS)))
         .clone()
+}
+
+#[derive(Default)]
+struct PendingConnection {
+    cancelled: AtomicBool,
+    socket: Mutex<Option<TcpStream>>,
+}
+
+impl PendingConnection {
+    fn register(&self, socket: &TcpStream) -> Result<(), AppError> {
+        let control = socket.try_clone().map_err(|_| AppError::SshTunnelFailed)?;
+        let mut pending = self.socket.lock().map_err(|_| AppError::SshTunnelFailed)?;
+        if self.cancelled.load(Ordering::SeqCst) {
+            let _ = control.shutdown(Shutdown::Both);
+            return Err(AppError::SshTunnelFailed);
+        }
+        *pending = Some(control);
+        Ok(())
+    }
+
+    fn disarm(&self) {
+        if let Ok(mut pending) = self.socket.lock() {
+            pending.take();
+        }
+    }
+
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::SeqCst);
+        if let Ok(mut pending) = self.socket.lock() {
+            if let Some(socket) = pending.take() {
+                let _ = socket.shutdown(Shutdown::Both);
+            }
+        }
+    }
+
+    fn ensure_active(&self) -> Result<(), AppError> {
+        if self.cancelled.load(Ordering::SeqCst) {
+            Err(AppError::SshTunnelFailed)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct CancelPendingConnection(Arc<PendingConnection>);
+
+impl Drop for CancelPendingConnection {
+    fn drop(&mut self) {
+        self.0.cancel();
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,8 +212,12 @@ impl ProxyChannel for ssh2::Channel {
 }
 
 trait SessionBackend: Send + Sync {
-    fn authenticate(&self, config: &SshConfig, secrets: &ConnectionSecrets)
-        -> Result<(), AppError>;
+    fn authenticate(
+        &self,
+        config: &SshConfig,
+        secrets: &ConnectionSecrets,
+        deadline: Instant,
+    ) -> Result<(), AppError>;
     fn open_channel(
         &self,
         target: &ConnectionEndpoint,
@@ -181,8 +236,9 @@ impl SessionBackend for Libssh2Backend {
         &self,
         config: &SshConfig,
         secrets: &ConnectionSecrets,
+        deadline: Instant,
     ) -> Result<(), AppError> {
-        authenticate_session(&self.session, config, secrets)
+        authenticate_session(&self.session, config, secrets, deadline)
     }
 
     fn open_channel(
@@ -330,12 +386,28 @@ where
         .await
         .map_err(|_| AppError::SshTunnelFailed)?
         .map_err(|_| AppError::SshTunnelFailed)?;
-    let backend = tokio::task::spawn_blocking(move || {
+    let deadline = Instant::now() + timeout;
+    let pending = Arc::new(PendingConnection::default());
+    let cancel_on_drop = CancelPendingConnection(Arc::clone(&pending));
+    let worker_pending = Arc::clone(&pending);
+    let mut worker = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        connect_blocking(&config, &secrets, addresses)
-    })
+        connect_blocking(&config, &secrets, addresses, deadline, &worker_pending)
+    });
+    let backend = match tokio::time::timeout_at(
+        tokio::time::Instant::from_std(deadline),
+        &mut worker,
+    )
     .await
-    .map_err(|_| AppError::SshTunnelFailed)??;
+    {
+        Ok(result) => result.map_err(|_| AppError::SshTunnelFailed)??,
+        Err(_) => {
+            pending.cancel();
+            worker.await.map_err(|_| AppError::SshTunnelFailed)??;
+            return Err(AppError::SshTunnelFailed);
+        }
+    };
+    drop(cancel_on_drop);
     Ok(SshTransport::from_backend(backend))
 }
 
@@ -343,39 +415,42 @@ fn connect_blocking(
     config: &SshConfig,
     secrets: &ConnectionSecrets,
     addresses: Vec<SocketAddr>,
+    deadline: Instant,
+    pending: &PendingConnection,
 ) -> Result<Arc<dyn SessionBackend>, AppError> {
-    let socket = connect_socket(addresses)?;
-    socket
-        .set_read_timeout(Some(SSH_CONNECT_TIMEOUT))
-        .map_err(|_| AppError::SshTunnelFailed)?;
-    socket
-        .set_write_timeout(Some(SSH_CONNECT_TIMEOUT))
-        .map_err(|_| AppError::SshTunnelFailed)?;
+    let socket = connect_socket(addresses, deadline)?;
+    pending.register(&socket)?;
+    configure_socket_deadline(&socket, deadline)?;
     let control_socket = socket.try_clone().map_err(|_| AppError::SshTunnelFailed)?;
 
     let mut session = ssh2::Session::new().map_err(|_| AppError::SshTunnelFailed)?;
+    configure_session_deadline(&session, deadline)?;
     session.set_tcp_stream(socket);
     session.handshake().map_err(|_| AppError::SshTunnelFailed)?;
+    ensure_deadline(deadline)?;
     verify_session_host_key(&session, config, secrets)?;
+    configure_session_deadline(&session, deadline)?;
     let backend = Arc::new(Libssh2Backend {
         session,
         socket: control_socket,
     });
-    authenticate_backend(backend.as_ref(), config, secrets)?;
+    authenticate_backend(backend.as_ref(), config, secrets, deadline)?;
     if !backend.session.authenticated() {
         return Err(AppError::SshTunnelFailed);
     }
+    ensure_deadline(deadline)?;
+    pending.ensure_active()?;
 
     backend
         .socket
         .set_nonblocking(true)
         .map_err(|_| AppError::SshTunnelFailed)?;
     backend.session.set_blocking(false);
+    pending.disarm();
     Ok(backend)
 }
 
-fn connect_socket(addresses: Vec<SocketAddr>) -> Result<TcpStream, AppError> {
-    let deadline = Instant::now() + SSH_CONNECT_TIMEOUT;
+fn connect_socket(addresses: Vec<SocketAddr>, deadline: Instant) -> Result<TcpStream, AppError> {
     for address in addresses.into_iter().take(8) {
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             break;
@@ -387,6 +462,42 @@ fn connect_socket(addresses: Vec<SocketAddr>) -> Result<TcpStream, AppError> {
         }
     }
     Err(AppError::SshTunnelFailed)
+}
+
+fn remaining_before(deadline: Instant) -> Result<Duration, AppError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or(AppError::SshTunnelFailed)
+}
+
+fn ensure_deadline(deadline: Instant) -> Result<(), AppError> {
+    remaining_before(deadline).map(|_| ())
+}
+
+fn configure_socket_deadline(socket: &TcpStream, deadline: Instant) -> Result<(), AppError> {
+    let remaining = remaining_before(deadline)?;
+    socket
+        .set_read_timeout(Some(remaining))
+        .map_err(|_| AppError::SshTunnelFailed)?;
+    socket
+        .set_write_timeout(Some(remaining))
+        .map_err(|_| AppError::SshTunnelFailed)
+}
+
+fn configure_session_deadline(session: &ssh2::Session, deadline: Instant) -> Result<(), AppError> {
+    let remaining = remaining_before(deadline)?;
+    session.set_timeout(protocol_timeout_millis(remaining));
+    Ok(())
+}
+
+fn protocol_timeout_millis(remaining: Duration) -> u32 {
+    let nanos = remaining.as_nanos();
+    nanos
+        .saturating_add(999_999)
+        .checked_div(1_000_000)
+        .unwrap_or(1)
+        .clamp(1, u32::MAX as u128) as u32
 }
 
 fn verify_session_host_key(
@@ -418,17 +529,22 @@ fn authenticate_backend(
     backend: &dyn SessionBackend,
     config: &SshConfig,
     secrets: &ConnectionSecrets,
+    deadline: Instant,
 ) -> Result<(), AppError> {
-    backend.authenticate(config, secrets)
+    backend.authenticate(config, secrets, deadline)
 }
 
 fn authenticate_session(
     session: &ssh2::Session,
     config: &SshConfig,
     secrets: &ConnectionSecrets,
+    deadline: Instant,
 ) -> Result<(), AppError> {
+    configure_session_deadline(session, deadline)?;
     match select_auth(config, secrets)? {
-        AuthSelection::Agent => session.userauth_agent(&config.username),
+        AuthSelection::Agent => {
+            return authenticate_session_with_agent(session, &config.username, deadline);
+        }
         AuthSelection::Password(password) => session.userauth_password(&config.username, password),
         AuthSelection::PrivateKeyMemory {
             private_key,
@@ -440,6 +556,53 @@ fn authenticate_session(
         } => session.userauth_pubkey_file(&config.username, None, identity_file, passphrase),
     }
     .map_err(|_| AppError::SshTunnelFailed)
+}
+
+fn authenticate_session_with_agent(
+    session: &ssh2::Session,
+    username: &str,
+    deadline: Instant,
+) -> Result<(), AppError> {
+    ensure_deadline(deadline)?;
+    let mut agent = session.agent().map_err(|_| AppError::SshTunnelFailed)?;
+    agent.connect().map_err(|_| AppError::SshTunnelFailed)?;
+    ensure_deadline(deadline)?;
+    agent
+        .list_identities()
+        .map_err(|_| AppError::SshTunnelFailed)?;
+    ensure_deadline(deadline)?;
+    let identities = agent.identities().map_err(|_| AppError::SshTunnelFailed)?;
+    ensure_deadline(deadline)?;
+    let result = authenticate_agent_identities(
+        &identities,
+        deadline,
+        |identity| {
+            configure_session_deadline(session, deadline)?;
+            agent
+                .userauth(username, identity)
+                .map_err(|_| AppError::SshTunnelFailed)
+        },
+        || session.authenticated(),
+    );
+    let _ = agent.disconnect();
+    result
+}
+
+fn authenticate_agent_identities<T>(
+    identities: &[T],
+    deadline: Instant,
+    mut userauth: impl FnMut(&T) -> Result<(), AppError>,
+    mut authenticated: impl FnMut() -> bool,
+) -> Result<(), AppError> {
+    for identity in identities.iter().take(MAX_AGENT_IDENTITIES) {
+        ensure_deadline(deadline)?;
+        let accepted = userauth(identity).is_ok();
+        if accepted && authenticated() {
+            return Ok(());
+        }
+        ensure_deadline(deadline)?;
+    }
+    Err(AppError::SshTunnelFailed)
 }
 
 #[derive(Default)]
@@ -557,6 +720,7 @@ impl SessionBackend for TestForwardingBackend {
         &self,
         _config: &SshConfig,
         _secrets: &ConnectionSecrets,
+        _deadline: Instant,
     ) -> Result<(), AppError> {
         Ok(())
     }
@@ -752,6 +916,7 @@ mod tests {
         net::SocketAddr,
         sync::atomic::{AtomicUsize, Ordering},
     };
+    use tokio::io::AsyncReadExt;
 
     fn ssh_config(auth_method: SshAuthMethod) -> SshConfig {
         serde_json::from_value(serde_json::json!({
@@ -820,6 +985,122 @@ mod tests {
         )
         .await;
         assert!(matches!(result, Err(AppError::SshTunnelFailed)));
+    }
+
+    #[tokio::test]
+    async fn silent_ssh_banner_is_bounded_by_the_blocking_connect_budget() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let _socket = socket;
+            let _ = release_rx.await;
+        });
+
+        let started = Instant::now();
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            connect_with_resolver(
+                ssh_config(SshAuthMethod::Agent),
+                ConnectionSecrets::default(),
+                Arc::new(tokio::sync::Semaphore::new(1)),
+                Duration::from_millis(75),
+                move |_, _| async move { Ok(vec![address]) },
+            ),
+        )
+        .await;
+        let _ = release_tx.send(());
+        server.await.unwrap();
+
+        let result = result.expect("silent banner must not outlive the connect budget");
+        assert!(matches!(result, Err(AppError::SshTunnelFailed)));
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[tokio::test]
+    async fn cancelling_a_silent_handshake_closes_the_socket_and_releases_the_permit() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, mut release_rx) = tokio::sync::oneshot::channel();
+        let mut server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            accepted_tx.send(()).unwrap();
+            let mut byte = [0_u8; 1];
+            loop {
+                tokio::select! {
+                    read = socket.read(&mut byte) => match read.unwrap() {
+                        0 => break 0,
+                        _ => continue,
+                    },
+                    _ = &mut release_rx => break 1,
+                }
+            }
+        });
+        let limit = Arc::new(tokio::sync::Semaphore::new(1));
+        let task_limit = Arc::clone(&limit);
+        let connect = tokio::spawn(async move {
+            connect_with_resolver(
+                ssh_config(SshAuthMethod::Agent),
+                ConnectionSecrets::default(),
+                task_limit,
+                Duration::from_secs(2),
+                move |_, _| async move { Ok(vec![address]) },
+            )
+            .await
+        });
+        accepted_rx.await.unwrap();
+        connect.abort();
+        let _ = connect.await;
+
+        let server_read = match tokio::time::timeout(Duration::from_millis(500), &mut server).await
+        {
+            Ok(result) => result.unwrap(),
+            Err(_) => {
+                let _ = release_tx.send(());
+                server.await.unwrap()
+            }
+        };
+        let permit_released =
+            tokio::time::timeout(Duration::from_millis(500), limit.clone().acquire_owned())
+                .await
+                .is_ok();
+
+        assert_eq!(server_read, 0, "cancel must close the owned socket");
+        assert!(permit_released, "cancel must release the blocking permit");
+    }
+
+    #[test]
+    fn positive_submillisecond_protocol_budget_never_becomes_an_infinite_session_timeout() {
+        assert_eq!(protocol_timeout_millis(Duration::from_nanos(1)), 1);
+        assert_eq!(protocol_timeout_millis(Duration::from_millis(1)), 1);
+        assert_eq!(
+            protocol_timeout_millis(Duration::from_millis(1) + Duration::from_nanos(1)),
+            2
+        );
+    }
+
+    #[test]
+    fn successful_pending_connection_is_disarmed_before_the_cancel_guard_drops() {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let pending = Arc::new(PendingConnection::default());
+        let cancel_on_drop = CancelPendingConnection(Arc::clone(&pending));
+        pending.register(&client).unwrap();
+
+        pending.disarm();
+        drop(cancel_on_drop);
+        client.try_clone().unwrap().write_all(b"x").unwrap();
+
+        let mut byte = [0_u8; 1];
+        server.read_exact(&mut byte).unwrap();
+        assert_eq!(byte, [b'x']);
     }
 
     #[test]
@@ -920,6 +1201,90 @@ mod tests {
                 passphrase: Some("key-passphrase"),
             })
         );
+    }
+
+    #[test]
+    fn agent_authentication_tries_the_second_identity_after_the_first_is_rejected() {
+        let authenticated = std::cell::Cell::new(false);
+        let attempts = Mutex::new(Vec::new());
+        let identities = [0_u8, 1, 2];
+
+        let result = authenticate_agent_identities(
+            &identities,
+            Instant::now() + Duration::from_secs(1),
+            |identity| {
+                attempts.lock().unwrap().push(*identity);
+                if *identity == 1 {
+                    authenticated.set(true);
+                    Ok(())
+                } else {
+                    Err(AppError::SshTunnelFailed)
+                }
+            },
+            || authenticated.get(),
+        );
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(*attempts.lock().unwrap(), vec![0, 1]);
+    }
+
+    #[test]
+    fn agent_authentication_reports_a_fixed_error_when_all_identities_are_rejected() {
+        let attempts = Mutex::new(Vec::new());
+        let identities = [0_u8, 1, 2];
+
+        let result = authenticate_agent_identities(
+            &identities,
+            Instant::now() + Duration::from_secs(1),
+            |identity| {
+                attempts.lock().unwrap().push(*identity);
+                Err(AppError::SshTunnelFailed)
+            },
+            || false,
+        );
+
+        assert_eq!(result, Err(AppError::SshTunnelFailed));
+        assert_eq!(*attempts.lock().unwrap(), identities);
+    }
+
+    #[test]
+    fn agent_authentication_never_attempts_more_than_thirty_two_identities() {
+        let attempts = Mutex::new(Vec::new());
+        let identities = (0_u8..40).collect::<Vec<_>>();
+
+        let result = authenticate_agent_identities(
+            &identities,
+            Instant::now() + Duration::from_secs(1),
+            |identity| {
+                attempts.lock().unwrap().push(*identity);
+                Err(AppError::SshTunnelFailed)
+            },
+            || false,
+        );
+
+        assert_eq!(result, Err(AppError::SshTunnelFailed));
+        assert_eq!(attempts.lock().unwrap().len(), MAX_AGENT_IDENTITIES);
+        assert_eq!(attempts.lock().unwrap().last(), Some(&31));
+    }
+
+    #[test]
+    fn agent_identity_attempts_stop_when_the_shared_deadline_is_exhausted() {
+        let attempts = Mutex::new(Vec::new());
+        let identities = [0_u8, 1, 2];
+
+        let result = authenticate_agent_identities(
+            &identities,
+            Instant::now() + Duration::from_millis(5),
+            |identity| {
+                attempts.lock().unwrap().push(*identity);
+                std::thread::sleep(Duration::from_millis(20));
+                Err(AppError::SshTunnelFailed)
+            },
+            || false,
+        );
+
+        assert_eq!(result, Err(AppError::SshTunnelFailed));
+        assert_eq!(*attempts.lock().unwrap(), vec![0]);
     }
 
     #[test]
@@ -1325,6 +1690,7 @@ mod tests {
             &self,
             _config: &SshConfig,
             _secrets: &ConnectionSecrets,
+            _deadline: Instant,
         ) -> Result<(), AppError> {
             self.authenticated.fetch_add(1, Ordering::SeqCst);
             Ok(())
@@ -1403,6 +1769,7 @@ mod tests {
             backend.as_ref(),
             &ssh_config(SshAuthMethod::Agent),
             &ConnectionSecrets::default(),
+            Instant::now() + SSH_CONNECT_TIMEOUT,
         )
         .unwrap();
     }

@@ -561,6 +561,19 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
+    fn json_contains_string(value: &serde_json::Value, needle: &str) -> bool {
+        match value {
+            serde_json::Value::String(value) => value.contains(needle),
+            serde_json::Value::Array(values) => values
+                .iter()
+                .any(|value| json_contains_string(value, needle)),
+            serde_json::Value::Object(values) => values
+                .values()
+                .any(|value| json_contains_string(value, needle)),
+            _ => false,
+        }
+    }
+
     async fn spawn_cli_redis(label: &'static str) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -941,14 +954,11 @@ mod tests {
         );
         assert!(saved.ssh.as_ref().unwrap().has_password);
         assert!(saved.ssh.as_ref().unwrap().has_known_hosts_file);
-        assert!(!serde_json::to_string(&profiles.load().unwrap())
-            .unwrap()
-            .contains(&known_hosts));
-        assert!(
-            !serde_json::to_string(&export_connections_inner(&state).await.unwrap())
-                .unwrap()
-                .contains(&known_hosts)
-        );
+        let profile_json = serde_json::to_value(profiles.load().unwrap()).unwrap();
+        let export_json =
+            serde_json::to_value(export_connections_inner(&state).await.unwrap()).unwrap();
+        assert!(!json_contains_string(&profile_json, &known_hosts));
+        assert!(!json_contains_string(&export_json, &known_hosts));
     }
 
     #[tokio::test]

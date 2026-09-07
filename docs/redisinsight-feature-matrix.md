@@ -9,8 +9,8 @@
 |---|---|---|---|
 | Standalone、TLS、自定义 CA/mTLS、连接导入导出 | 已支持 | 保留凭据安全存储与无敏感信息导出 | `api/src/modules/database`、`database-import`、`certificate` |
 | Sentinel | 基础支持 | 种子回退、主节点发现、独立认证、重连刷新，并支持 SSH+TLS；不宣称无缝故障迁移 | `api/src/modules/redis-sentinel` |
-| SSH | 基础支持 | `ssh2` 严格主机校验，支持 Agent/Password/PrivateKey；Standalone/Sentinel 可组合 TLS，Cluster+SSH 禁用。当前只在 macOS 自动化验证 | `api/src/modules/ssh` |
-| Cluster / 节点路由 / 节点观察 | 本批新增 | DB 0 普通命令 slot 路由、跨 primary 完整 SCAN、16384 slot 拓扑摘要和 primary-only analysis 已支持；typed SlowLog/PubSub/Profiler 禁用，节点 DTO 尚无 version/mode/totalkeys 等目标额外指标 | `api/src/modules/cluster-monitor`、`ui/src/pages/redis-cluster` |
+| SSH | 基础支持 | `ssh2` 严格主机校验，支持 Agent/Password/PrivateKey；TCP/握手/远端认证共享 6 秒预算，Agent 最多顺序尝试 32 个身份。本地 Agent IPC 仍可能不可中断并占用 worker/permit/CLI 锁；Standalone/Sentinel 可组合 TLS，Cluster+SSH 禁用。当前只在 macOS 自动化验证 | `api/src/modules/ssh` |
+| Cluster / 节点路由 / 节点观察 | 本批新增 | DB 0 普通命令 slot 路由、跨 primary UTF-8 键名完整 SCAN、16384 slot 拓扑摘要和 primary-only analysis 已支持；二进制键名导致对应节点可重试失败并保留游标；typed SlowLog/PubSub/Profiler 禁用，节点 DTO 尚无 version/mode/totalkeys 等目标额外指标 | `api/src/modules/cluster-monitor`、`ui/src/pages/redis-cluster` |
 | 普通键浏览、新增/改名/删除/TTL、导入导出 | 基础支持 | 本轮增加 Hash/List/Set/ZSet 字段级分页与原位编辑；批量后台任务仍有差异 | `api/src/modules/browser`、`bulk-actions` |
 | 键树 | 缺失 | 本轮增加 `:` 前缀树与平铺切换，仅处理已扫描结果 | `ui/src/pages/browser/components/key-tree` |
 | JSON 根文档与路径编辑 | 已支持 API，缺树 | 本轮增加对象/数组折叠、节点定位、特殊属性安全路径及渲染上限 | `api/src/modules/browser/rejson-rl` |
@@ -33,12 +33,12 @@
 | 验证 | 结果 |
 |---|---|
 | 前端回归 | 35 文件、297 项通过；两类既有 jsdom/重复 saved key 警告不计失败 |
-| Rust 常规回归 | 362 项通过、29 项默认 ignored；ignored 未计为实际通过，保留 5 个既有 Array dead-code 警告和测试 helper 警告 |
+| Rust 常规回归 | 374 项通过、29 项默认 ignored；ignored 未计为实际通过，保留 5 个既有 Array dead-code 警告和测试 helper 警告 |
 | 隔离普通 Redis | 7 个实际流程通过；另 3 个 Redis Stack 流程因未配置环境而 early-skip |
-| 隔离 Cluster | launcher 安全单测 6 项、真实三主节点集成 2 项通过；覆盖跨 primary 键、完整 SCAN、拓扑、analysis、CROSSSLOT 与无副作用门控 |
-| SSH 路径兼容 focused | commands 相关 16 项、ssh 模块 18 项、Sentinel SSH 配置 1 项通过；没有运行真实 sshd |
+| 隔离 Cluster | launcher 安全单测 6 项、真实三主节点集成 2 项通过；覆盖跨 primary UTF-8 键名完整 SCAN、拓扑、analysis、CROSSSLOT 与无副作用门控 |
+| SSH 路径兼容 focused | connections commands 32 项、ssh 模块 26 项、Sentinel 集成 8 项通过（另 2 项默认 ignored）；没有运行真实 sshd |
 | 前端生产构建 | TypeScript / Vite 94 模块通过 |
-| macOS 原生 release 构建 | `CARGO_NET_OFFLINE=true npm run tauri:build -- --no-bundle` 通过（1 分 03 秒）；未打包、签名、安装或发布 |
+| macOS 原生 release 构建 | `CARGO_NET_OFFLINE=true npm run tauri:build -- --no-bundle` 通过（1 分 16 秒）；未打包、签名、安装或发布 |
 | 范围与格式 | non-cloud、范围扫描正反例、cargo fmt --check、git diff --check 通过 |
 
 未运行 Redis Stack、真实 sshd、真实 TLS/mTLS 组合、Windows/Linux 原生验证或完整 Tauri 桌面交互端到端；`.github/workflows/cross-platform.yml` 只是 CI 配置，本轮未在 GitHub 上执行，不能据此宣称三平台通过。响应限制主要约束解析、IPC 与展示，不能替代服务端资源限制或 Redis 客户端底层协议读取的内存限制。

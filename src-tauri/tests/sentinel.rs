@@ -15,6 +15,19 @@ use std::{
     time::Duration,
 };
 
+fn json_contains_string(value: &serde_json::Value, needle: &str) -> bool {
+    match value {
+        serde_json::Value::String(value) => value.contains(needle),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| json_contains_string(value, needle)),
+        serde_json::Value::Object(values) => values
+            .values()
+            .any(|value| json_contains_string(value, needle)),
+        _ => false,
+    }
+}
+
 fn sentinel_profile(port: u16) -> ConnectionProfile {
     let mut value = serde_json::to_value(support::valid_profile()).unwrap();
     value["host"] = serde_json::json!("invalid.example");
@@ -111,18 +124,21 @@ fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_co
     let mut value = serde_json::to_value(support::valid_profile()).unwrap();
     value["ssh"] = serde_json::json!({"host":"bastion.example", "port":22, "username":"operator", "identity_file":identity_file.clone()});
     let profile: ConnectionProfile = serde_json::from_value(value.clone()).unwrap();
-    assert_eq!(
-        serde_json::to_value(&profile).unwrap()["ssh"]["host"],
-        "bastion.example"
-    );
+    let profile_json = serde_json::to_value(&profile).unwrap();
+    assert_eq!(profile_json["ssh"]["host"], "bastion.example");
+    assert!(!json_contains_string(
+        &profile_json,
+        &identity_file.to_string_lossy()
+    ));
     assert!(profile.validate().is_ok());
     let export = serde_json::to_value(ConnectionExportDocument::from_profiles(&[profile])).unwrap();
     assert!(export["connections"][0]["ssh"]["has_identity_file"]
         .as_bool()
         .unwrap());
-    assert!(!export
-        .to_string()
-        .contains(&identity_file.to_string_lossy().into_owned()));
+    assert!(!json_contains_string(
+        &export,
+        &identity_file.to_string_lossy()
+    ));
     let mut imported = export;
     imported["connections"][0]["ssh"]["private_key"] =
         serde_json::json!("private-key-must-not-import");
@@ -149,6 +165,15 @@ fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_co
         .unwrap()
         .validate()
         .is_ok());
+}
+
+#[test]
+fn raw_json_search_detects_a_windows_path_leak() {
+    let windows_path = r"C:\Users\alice\.ssh\known_hosts";
+    let leaked = serde_json::json!({"path": windows_path});
+
+    assert!(!leaked.to_string().contains(windows_path));
+    assert!(json_contains_string(&leaked, windows_path));
 }
 
 #[tokio::test]
