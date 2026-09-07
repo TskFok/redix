@@ -174,6 +174,16 @@ function deferred<T>() {
 }
 
 describe("Redis Browser", () => {
+  it("部分节点失败可继续重试，完成 opaque cursor 不显示更多", async () => {
+    scanKeysMock.mockResolvedValueOnce({ cursor: "cluster:retry", keys: [], node_failures: [{ node_id: "node-b", code: "CONNECTION_FAILED" }], has_more: true }).mockResolvedValueOnce({ cursor: "cluster:complete", keys: [], node_failures: [], has_more: false });
+    render(<BrowserPage connectionId="cluster" />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("1 个节点扫描失败");
+    fireEvent.click(screen.getByRole("button", { name: "继续扫描并重试" }));
+    await waitFor(() => expect(scanKeysMock).toHaveBeenCalledTimes(2));
+    expect(scanKeysMock.mock.calls[1][0].cursor).toBe("cluster:retry");
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubGlobal("confirm", vi.fn(() => true));

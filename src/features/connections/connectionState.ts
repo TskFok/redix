@@ -1,4 +1,4 @@
-import type { ConnectionProfile } from "../../lib/types";
+import type { ConnectionEndpoint, ConnectionProfile, SshAuthMethod } from "../../lib/types";
 
 export interface ConnectionPageState {
   profiles: ConnectionProfile[];
@@ -19,7 +19,14 @@ export interface ConnectionFormValues {
   ssh_username: string;
   ssh_identity_file: string;
   ssh_known_hosts_file: string;
-  topology: "standalone" | "sentinel";
+  ssh_auth_method: SshAuthMethod;
+  ssh_password: string;
+  ssh_private_key: string;
+  ssh_passphrase: string;
+  clear_ssh_secrets: boolean;
+  topology: "standalone" | "sentinel" | "cluster";
+  cluster_nodes: string;
+  cluster_read_from_replicas: boolean;
   sentinel_master_name: string;
   sentinel_nodes: string;
   sentinel_username: string;
@@ -69,7 +76,14 @@ export function formValuesFromProfile(
     ssh_username: profile?.ssh?.username ?? "",
     ssh_identity_file: "",
     ssh_known_hosts_file: "",
-    topology: profile?.sentinel ? "sentinel" : "standalone",
+    ssh_auth_method: profile?.ssh?.auth_method ?? "agent",
+    ssh_password: "",
+    ssh_private_key: "",
+    ssh_passphrase: "",
+    clear_ssh_secrets: false,
+    topology: profile?.cluster ? "cluster" : profile?.sentinel ? "sentinel" : "standalone",
+    cluster_nodes: profile?.cluster?.nodes.map(formatEndpoint).join("\n") ?? "127.0.0.1:7000",
+    cluster_read_from_replicas: profile?.cluster?.read_from_replicas ?? false,
     sentinel_master_name: profile?.sentinel?.master_name ?? "",
     sentinel_nodes: profile?.sentinel?.nodes.map((node) => `${node.host.includes(":") ? `[${node.host}]` : node.host}:${node.port}`).join("\n") ?? "127.0.0.1:26379",
     sentinel_username: profile?.sentinel?.username ?? "",
@@ -92,6 +106,39 @@ export function formValuesFromProfile(
     clear_ca_certificate: false,
     clear_client_certificate: false,
   };
+}
+
+export function formatEndpoint(node: ConnectionEndpoint): string {
+  return `${node.host.includes(":") ? `[${node.host}]` : node.host}:${node.port}`;
+}
+
+export function connectionAddress(profile: ConnectionProfile): string {
+  if (profile.cluster) return `Cluster · ${profile.cluster.nodes.length} 个种子 · ${profile.cluster.nodes.map(formatEndpoint).join("、")}`;
+  if (profile.sentinel) return `Sentinel · ${profile.sentinel.master_name}`;
+  return formatEndpoint(profile);
+}
+
+export function parseSeedNodes(text: string): ConnectionEndpoint[] | null {
+  const lines = text.split(/[\n,]+/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length || lines.length > 32) return null;
+  const nodes: ConnectionEndpoint[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const match = /^(?:\[([0-9a-fA-F:.]+)\]|([a-zA-Z0-9_.-]+)):(\d+)$/.exec(line);
+    if (!match) return null;
+    const host = match[1] || match[2];
+    if (host.startsWith("-")) return null;
+    const port = Number(match[3]);
+    if (port < 1 || port > 65535 || !Number.isInteger(port)) return null;
+    let normalized = host.toLowerCase();
+    if (match[1]) {
+      try { normalized = new URL(`http://[${host}]`).hostname; } catch { return null; }
+    }
+    const key = `${normalized}:${port}`;
+    if (seen.has(key)) return null;
+    seen.add(key); nodes.push({ host, port });
+  }
+  return nodes;
 }
 
 export function replaceProfile(

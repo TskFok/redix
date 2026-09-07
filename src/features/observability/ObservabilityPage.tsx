@@ -46,13 +46,14 @@ type ObservabilityTab = "slowlog" | "pubsub" | "profiler";
 
 interface ObservabilityPageProps {
   connectionId: string;
+  isCluster?: boolean;
 }
 
-export function ObservabilityPage({ connectionId }: ObservabilityPageProps) {
-  return <ObservabilitySessionPage key={connectionId} connectionId={connectionId} />;
+export function ObservabilityPage({ connectionId, isCluster }: ObservabilityPageProps) {
+  return <ObservabilitySessionPage key={`${connectionId}:${isCluster}`} connectionId={connectionId} isCluster={isCluster} />;
 }
 
-function ObservabilitySessionPage({ connectionId }: ObservabilityPageProps) {
+function ObservabilitySessionPage({ connectionId, isCluster = false }: ObservabilityPageProps) {
   const [tab, setTab] = useState<ObservabilityTab>("slowlog");
   const [slowLogs, setSlowLogs] = useState<SlowLogEntry[]>([]);
   const [slowLogConfig, setSlowLogConfig] = useState<SlowLogConfig | null>(null);
@@ -416,12 +417,13 @@ function ObservabilitySessionPage({ connectionId }: ObservabilityPageProps) {
           <p className="eyebrow">OPERATIONS / OBSERVABILITY</p>
           <h2 id="observability-page-title">运维观察</h2>
           <p className="page-description">
-            用 Slow Log 定位慢命令、通过 Pub/Sub 观察频道消息，并用 Profiler 查看实时命令。所有操作只针对当前 Standalone Redis 连接。
+            用 Slow Log 定位慢命令、通过 Pub/Sub 观察频道消息，并用 Profiler 查看实时命令。操作针对当前连接。
           </p>
         </div>
         <span className="observability-scope">当前连接 · {connectionId}</span>
       </div>
 
+      {isCluster && <p className="observability-warning">Cluster 暂不支持 Pub/Sub 和 Profiler；它们需要明确的节点观察范围。Slow Log 当前由路由节点返回，不代表全部节点。</p>}
       <div className="observability-tabs" role="tablist" aria-label="运维观察模块">
         <button
           type="button"
@@ -439,6 +441,7 @@ function ObservabilitySessionPage({ connectionId }: ObservabilityPageProps) {
           aria-selected={tab === "pubsub"}
           className={`observability-tab${tab === "pubsub" ? " observability-tab-active" : ""}`}
           onClick={() => setTab("pubsub")}
+          disabled={isCluster}
         >
           Pub/Sub
           <small>频道消息流</small>
@@ -449,6 +452,7 @@ function ObservabilitySessionPage({ connectionId }: ObservabilityPageProps) {
           aria-selected={tab === "profiler"}
           className={`observability-tab${tab === "profiler" ? " observability-tab-active" : ""}`}
           onClick={() => setTab("profiler")}
+          disabled={isCluster}
         >
           Profiler
           <small>实时命令监控</small>

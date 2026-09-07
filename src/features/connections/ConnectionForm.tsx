@@ -5,9 +5,10 @@ import {
   saveConnection,
   testConnection,
 } from "../../lib/tauri";
-import type { ConnectionProfile, SaveConnectionInput, SentinelConfig, SshConfig } from "../../lib/types";
+import type { ClusterConfig, ConnectionProfile, SaveConnectionInput, SentinelConfig, SshConfig } from "../../lib/types";
 import {
   formValuesFromProfile,
+  parseSeedNodes,
   savedButOpenFailedMessage,
   toUserFacingError,
   type ConnectionFormValues,
@@ -30,25 +31,39 @@ interface FormValidation {
 
 function buildConnectionInput(
   values: ConnectionFormValues,
+  profileId: string,
   initial?: ConnectionProfile,
 ): FormValidation {
   const name = values.name.trim();
-  const host = values.host.trim();
-  const port = Number(values.port);
-  const database = Number(values.database);
+  let host = values.host.trim();
+  let port = Number(values.port);
+  const database = values.topology === "cluster" ? 0 : Number(values.database);
+  let cluster: ClusterConfig | null = null;
+  if (values.topology === "cluster") {
+    const nodes = parseSeedNodes(values.cluster_nodes);
+    if (!nodes) return { error: "请填写 1 到 32 个有效且唯一的 Cluster 种子节点；IPv6 使用 [地址]:端口。" };
+    cluster = { nodes, read_from_replicas: values.cluster_read_from_replicas };
+    ({ host, port } = nodes[0]);
+  }
   let ssh: SshConfig | null = null;
   if (values.ssh_enabled) {
-    if (values.tls || values.topology === "sentinel") return { error: "SSH 暂不支持与 TLS 或 Sentinel 组合。" };
+    if (cluster) return { error: "Cluster 暂不支持 SSH 隧道，请关闭 SSH 后连接。" };
     const sshPort = Number(values.ssh_port);
     if (!values.ssh_host.trim() || !values.ssh_username.trim() || !Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) return { error: "请输入有效的 SSH 主机、端口和用户名。" };
+    const saved = !values.clear_ssh_secrets && initial?.ssh?.auth_method === values.ssh_auth_method ? initial.ssh : null;
+    const hasPassword = values.ssh_auth_method === "password" && (Boolean(values.ssh_password) || Boolean(saved?.has_password));
+    const hasKey = values.ssh_auth_method === "private_key" && (Boolean(values.ssh_private_key.trim()) || Boolean(saved?.has_private_key));
+    const hasIdentity = values.ssh_auth_method === "private_key" && (Boolean(values.ssh_identity_file.trim()) || Boolean(saved?.has_identity_file));
+    if (values.ssh_auth_method === "password" && !hasPassword) return { error: "请输入 SSH 密码。" };
+    if (values.ssh_auth_method === "private_key" && !hasKey && !hasIdentity) return { error: "请输入 SSH 私钥内容或私钥文件路径。" };
     ssh = {
       host: values.ssh_host.trim(), port: sshPort, username: values.ssh_username.trim(),
-      auth_method: initial?.ssh?.auth_method ?? "agent",
-      has_password: initial?.ssh?.has_password ?? false,
-      has_private_key: initial?.ssh?.has_private_key ?? false,
-      has_passphrase: initial?.ssh?.has_passphrase ?? false,
-      has_identity_file: Boolean(values.ssh_identity_file.trim()) || Boolean(initial?.ssh?.has_identity_file),
-      has_known_hosts_file: Boolean(values.ssh_known_hosts_file.trim()) || Boolean(initial?.ssh?.has_known_hosts_file),
+      auth_method: values.ssh_auth_method,
+      has_password: hasPassword,
+      has_private_key: hasKey,
+      has_passphrase: values.ssh_auth_method === "private_key" && (Boolean(values.ssh_passphrase) || Boolean(saved?.has_passphrase)),
+      has_identity_file: hasIdentity,
+      has_known_hosts_file: Boolean(values.ssh_known_hosts_file.trim()) || Boolean(initial?.ssh?.has_known_hosts_file && !values.clear_ssh_secrets),
     };
   }
   let sentinel: SentinelConfig | null = null;
@@ -131,7 +146,8 @@ function buildConnectionInput(
       profile: {
         ...(ssh || initial?.ssh ? { ssh } : {}),
         ...(sentinel || initial?.sentinel ? { sentinel } : {}),
-        id: initial?.id ?? crypto.randomUUID(),
+        ...(cluster || initial?.cluster ? { cluster } : {}),
+        id: profileId,
         name,
         host,
         port,
@@ -152,9 +168,12 @@ function buildConnectionInput(
           Boolean(initial?.has_client_certificate && !values.clear_client_certificate),
       },
       password,
-      clear_ssh_secrets: false,
+      clear_ssh_secrets: values.clear_ssh_secrets,
       ...(ssh ? {
-        ssh_identity_file: values.ssh_identity_file.trim() || null,
+        ssh_password: ssh.auth_method === "password" ? values.ssh_password || null : null,
+        ssh_private_key: ssh.auth_method === "private_key" ? values.ssh_private_key.trim() || null : null,
+        ssh_passphrase: ssh.auth_method === "private_key" ? values.ssh_passphrase || null : null,
+        ssh_identity_file: ssh.auth_method === "private_key" ? values.ssh_identity_file.trim() || null : null,
         ssh_known_hosts_file: values.ssh_known_hosts_file.trim() || null,
       } : {}),
       ...(sentinel ? { sentinel_password: values.sentinel_password || null } : {}),
@@ -176,6 +195,7 @@ export function ConnectionForm({
   onTestingChange,
   onSavingChange,
 }: ConnectionFormProps) {
+  const [profileId] = useState(() => initial?.id ?? crypto.randomUUID());
   const [values, setValues] = useState<ConnectionFormValues>(() =>
     formValuesFromProfile(initial),
   );
@@ -185,7 +205,10 @@ export function ConnectionForm({
   const [saving, setSaving] = useState(false);
 
   const updateValue = (field: keyof ConnectionFormValues, value: string) => {
-    setValues((current) => ({ ...current, [field]: value }));
+    setValues((current) => ({ ...current, [field]: value,
+      ...(field === "topology" && value === "cluster" ? { database: "0", ssh_enabled: false } : {}),
+      ...(field === "ssh_auth_method" ? { ssh_password: "", ssh_private_key: "", ssh_identity_file: "", ssh_passphrase: "" } : {}),
+    }));
     setError(null);
     setTestStatus(null);
   };
@@ -201,13 +224,9 @@ export function ConnectionForm({
       return;
     }
 
-    const validation = buildConnectionInput(values, initial);
+    const validation = buildConnectionInput(values, profileId, initial);
     if (!validation.input) {
       setError(validation.error ?? "连接配置无效。");
-      return;
-    }
-    if (initial?.has_password && !values.password) {
-      setError("请输入密码后再测试连接。");
       return;
     }
 
@@ -231,7 +250,7 @@ export function ConnectionForm({
       return;
     }
 
-    const validation = buildConnectionInput(values, initial);
+    const validation = buildConnectionInput(values, profileId, initial);
     if (!validation.input) {
       setError(validation.error ?? "连接配置无效。");
       return;
@@ -294,6 +313,7 @@ export function ConnectionForm({
             <select value={values.topology} onChange={(event) => updateValue("topology", event.target.value)} disabled={busy}>
               <option value="standalone">Standalone</option>
               <option value="sentinel">Sentinel</option>
+              <option value="cluster">Cluster</option>
             </select>
           </label>
           <label className="field">
@@ -352,9 +372,9 @@ export function ConnectionForm({
               inputMode="numeric"
               min={0}
               max={15}
-              value={values.database}
+              value={values.topology === "cluster" ? "0" : values.database}
               onChange={(event) => updateValue("database", event.target.value)}
-              disabled={busy}
+              disabled={busy || values.topology === "cluster"}
               required
             />
           </label>
@@ -373,18 +393,35 @@ export function ConnectionForm({
         </div>
 
         <section className="connection-tls-panel" aria-label="SSH 配置">
-          <label className="checkbox-field"><input type="checkbox" checked={values.ssh_enabled} onChange={(event) => updateBoolean("ssh_enabled", event.target.checked)} disabled={busy} /><span>启用 SSH 隧道</span></label>
+          <label className="checkbox-field"><input type="checkbox" checked={values.ssh_enabled} onChange={(event) => updateBoolean("ssh_enabled", event.target.checked)} disabled={busy || values.topology === "cluster"} /><span>启用 SSH 隧道</span></label>
+          {values.topology === "cluster" && <p className="field-hint">Cluster 暂不支持 SSH 隧道；请使用可直达各节点的网络。</p>}
           {values.ssh_enabled && <>
-            <p>使用 macOS/Linux 系统 OpenSSH 和 ssh-agent，或提供私钥文件绝对路径。请先通过可信渠道核验主机密钥并写入 known_hosts；应用不会自动信任未知主机。仅支持 Standalone 非 TLS 连接，暂不支持 Windows。</p>
+            <p>支持 Standalone / Sentinel 与 TLS 组合。请先通过可信渠道核验主机密钥并写入 known_hosts；应用不会自动信任未知主机。切换认证方式会清除其他方式的凭据。</p>
             <div className="form-grid">
               <label className="field"><span>SSH 主机</span><input value={values.ssh_host} onChange={(event) => updateValue("ssh_host", event.target.value)} disabled={busy} /></label>
               <label className="field"><span>SSH 端口</span><input type="number" min={1} max={65535} value={values.ssh_port} onChange={(event) => updateValue("ssh_port", event.target.value)} disabled={busy} /></label>
               <label className="field"><span>SSH 用户名</span><input autoComplete="username" value={values.ssh_username} onChange={(event) => updateValue("ssh_username", event.target.value)} disabled={busy} /></label>
-              <label className="field"><span>SSH 私钥文件路径</span><input value={values.ssh_identity_file} onChange={(event) => updateValue("ssh_identity_file", event.target.value)} placeholder="可选，留空使用 ssh-agent" disabled={busy} /></label>
+              <label className="field"><span>SSH 认证方式</span><select value={values.ssh_auth_method} onChange={(event) => updateValue("ssh_auth_method", event.target.value)} disabled={busy}><option value="agent">Agent</option><option value="password">Password</option><option value="private_key">Private Key</option></select></label>
+              {values.ssh_auth_method === "password" && <label className="field"><span>SSH 密码</span><input type="password" autoComplete="new-password" value={values.ssh_password} onChange={(event) => updateValue("ssh_password", event.target.value)} disabled={busy} placeholder="已保存时留空保留" /></label>}
+              {values.ssh_auth_method === "private_key" && <>
+                <label className="field"><span>SSH 私钥文件路径</span><input value={values.ssh_identity_file} onChange={(event) => updateValue("ssh_identity_file", event.target.value)} placeholder="绝对路径，与私钥内容二选一" disabled={busy} /></label>
+                <label className="field"><span>SSH 私钥内容</span><textarea value={values.ssh_private_key} onChange={(event) => updateValue("ssh_private_key", event.target.value)} disabled={busy} rows={3} autoComplete="off" /></label>
+                <label className="field"><span>SSH 私钥口令</span><input type="password" autoComplete="new-password" value={values.ssh_passphrase} onChange={(event) => updateValue("ssh_passphrase", event.target.value)} disabled={busy} /></label>
+              </>}
               <label className="field"><span>SSH 已知主机文件路径</span><input value={values.ssh_known_hosts_file} onChange={(event) => updateValue("ssh_known_hosts_file", event.target.value)} placeholder="可选，默认 ~/.ssh/known_hosts" disabled={busy} /></label>
             </div>
+            {initial?.ssh && <>
+              <p className="field-hint">{values.clear_ssh_secrets ? "已选择清除旧材料，可填写替换材料。" : "已保存材料仅显示状态，留空保留当前认证方式的材料。"}</p>
+              {!values.clear_ssh_secrets && <p className="field-hint">{initial.ssh.auth_method === values.ssh_auth_method && [initial.ssh.has_password && "密码已保存", initial.ssh.has_private_key && "私钥已保存", initial.ssh.has_identity_file && "私钥路径已保存", initial.ssh.has_passphrase && "私钥口令已保存"].filter(Boolean).join(" · ")}{initial.ssh.has_known_hosts_file ? " · 已知主机路径已保存" : ""}</p>}
+              <label className="checkbox-field"><input type="checkbox" checked={values.clear_ssh_secrets} onChange={(event) => updateBoolean("clear_ssh_secrets", event.target.checked)} disabled={busy} /><span>清除已保存的 SSH 凭据和路径</span></label>
+            </>}
           </>}
         </section>
+        {values.topology === "cluster" && <section className="connection-tls-panel" aria-label="Cluster 配置">
+          <h3>Cluster</h3><p>数据库固定为 DB 0。种子用于发现完整拓扑，每行一个节点。</p>
+          <label className="field"><span>Cluster 种子节点</span><textarea value={values.cluster_nodes} onChange={(event) => updateValue("cluster_nodes", event.target.value)} disabled={busy} rows={4} /></label>
+          <label className="checkbox-field"><input type="checkbox" checked={values.cluster_read_from_replicas} onChange={(event) => updateBoolean("cluster_read_from_replicas", event.target.checked)} disabled={busy} /><span>允许从副本读取</span></label>
+        </section>}
         {values.topology === "sentinel" && <section className="connection-tls-panel" aria-label="Sentinel 配置">
           <h3>Sentinel</h3>
           <p>重新连接时发现当前主节点；主从切换后请重新连接，正在运行的会话不会自动迁移。</p>

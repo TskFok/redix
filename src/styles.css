@@ -3596,6 +3596,22 @@ code {
   }
 }
 
+.topology-page { min-width: 0; max-width: 100%; }
+.topology-table-wrap { min-width: 0; max-width: 100%; overflow-x: auto; }
+.topology-table { min-width: 1700px; }
+.topology-table th, .topology-table td { max-width: 260px; overflow-wrap: anywhere; }
+.topology-dial-address { display: block; }
+.connection-address, .workspace-context, .app-version,
+.connection-tls-panel p, .database-panel summary { overflow-wrap: anywhere; }
+.connection-card-heading > div { min-width: 0; }
+.connection-form textarea, .connection-form select { max-width: 100%; }
+@media (max-width: 760px) {
+  .app-navigation { flex: 1 1 0; min-width: 0; }
+  .app-brand { flex-shrink: 0; }
+  .connection-card-heading { flex-wrap: wrap; }
+  .connection-status { flex-shrink: 0; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

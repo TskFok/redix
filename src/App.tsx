@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 
 import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
+import { connectionAddress } from "./features/connections/connectionState";
+import TopologyPage from "./features/topology/TopologyPage";
 import DatabaseAnalysisPage from "./features/database-analysis/DatabaseAnalysisPage";
 import DatabasePage from "./features/database/DatabasePage";
 import ObservabilityPage from "./features/observability/ObservabilityPage";
@@ -59,6 +61,7 @@ const navigationItems: NavigationItem[] = [
     icon: "database",
   },
   { id: "cli", label: "CLI", description: "持久命令会话", icon: "workbench" },
+  { id: "topology", label: "Cluster 拓扑", description: "节点与槽位", icon: "database" },
   {
     id: "database-analysis",
     label: "数据库分析",
@@ -237,7 +240,7 @@ export default function App() {
 
         <nav aria-label="主导航" className="app-navigation">
           <p className="app-navigation-label">工作区</p>
-          {navigationItems.map((item) => {
+          {navigationItems.filter((item) => item.id !== "topology" || activeProfile?.cluster).map((item) => {
             const isAvailable = canAccessLocalResources(item.id) || canAccessWorkspace;
             const isActive = currentSection.id === item.id;
             return (
@@ -290,7 +293,7 @@ export default function App() {
             </span>
             <span className="app-version">
               {activeProfile
-                ? `${activeProfile.name} · ${activeProfile.host}:${activeProfile.port}`
+                ? `${activeProfile.name} · ${connectionAddress(activeProfile)}`
                 : "选择一个 Redis 实例开始"}
             </span>
           </div>
@@ -302,7 +305,7 @@ export default function App() {
           ) : null}
           <p className="workspace-context" aria-live="polite">
             {activeProfile
-              ? `当前连接：${activeProfile.name} · ${activeProfile.host}:${activeProfile.port}`
+              ? `当前连接：${activeProfile.name} · ${connectionAddress(activeProfile)}`
               : "请先连接 Redis 后使用工作区。"}
           </p>
           {activeProfile && activeSection === "browser" ? (
@@ -325,6 +328,8 @@ export default function App() {
               connectionId={activeProfile.id}
               activeDatabase={activeProfile.database}
               onProfileChanged={handleProfileChanged}
+              isCluster={Boolean(activeProfile.cluster)}
+              onOpenTopology={() => setActiveSection("topology")}
             />
           ) : null}
           {activeProfile && activeSection === "cli" ? (
@@ -337,8 +342,9 @@ export default function App() {
             />
           ) : null}
           {activeProfile && activeSection === "observability" ? (
-            <ObservabilityPage connectionId={activeProfile.id} />
+            <ObservabilityPage connectionId={activeProfile.id} isCluster={Boolean(activeProfile.cluster)} />
           ) : null}
+          {activeProfile?.cluster && activeSection === "topology" ? <TopologyPage connectionId={activeProfile.id} /> : null}
           {activeSection === "query-library" ? (
             <QueryLibraryPage
               onFill={(command) => {

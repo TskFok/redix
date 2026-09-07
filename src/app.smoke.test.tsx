@@ -76,6 +76,8 @@ vi.mock("./lib/tauri", () => ({
   deleteQueryLibraryItem: deleteQueryLibraryItemMock,
   saveCommandHistory: saveCommandHistoryMock,
   selectDatabase: selectDatabaseMock,
+  getClusterTopology: vi.fn().mockResolvedValue({ summary: { state: "ok", slots_assigned: 16384, slots_ok: 16384, slots_pfail: 0, slots_fail: 0, current_epoch: 1, size: 0, known_nodes: 0 }, nodes: [], failures: [] }),
+  refreshClusterTopology: vi.fn(),
   deleteConnection: vi.fn(),
   saveConnection: vi.fn(),
   testConnection: vi.fn(),
@@ -106,6 +108,16 @@ const localProfile = {
   has_ca_certificate: false,
   has_client_certificate: false,
 };
+
+it("只为 Cluster 提供拓扑导航且全局上下文展示全部种子", async () => {
+  listConnectionsMock.mockResolvedValue([{ ...localProfile, cluster: { nodes: [{ host: "redis-a", port: 7000 }, { host: "redis-b", port: 7001 }], read_from_replicas: false } }]);
+  render(<App />);
+  expect(screen.queryByRole("button", { name: "Cluster 拓扑" })).not.toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Cluster 拓扑" }));
+  expect(await screen.findByText("暂无拓扑节点")).toBeInTheDocument();
+  expect(screen.getByText(/当前连接：/)).toHaveTextContent("redis-a:7000、redis-b:7001");
+});
 
 beforeEach(() => {
   vi.clearAllMocks();

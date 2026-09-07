@@ -32,6 +32,16 @@ const getInstanceDetailsMock = vi.mocked(getInstanceDetails);
 const getDatabaseOverviewMock = vi.mocked(getDatabaseOverview);
 const selectDatabaseMock = vi.mocked(selectDatabase);
 
+it("Cluster 仅取 DB0 聚合并提供拓扑入口", async () => {
+  getDatabaseOverviewMock.mockResolvedValue([{ database: 0, key_count: 42, expires: 2, avg_ttl_ms: null }]);
+  const open = vi.fn();
+  render(<DatabasePage connectionId="cluster" activeDatabase={0} isCluster onOpenTopology={open} onProfileChanged={vi.fn()} />);
+  expect(await screen.findByText("42")).toBeInTheDocument();
+  expect(getInstanceDetailsMock).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "查看 Cluster 拓扑" }));
+  expect(open).toHaveBeenCalledOnce();
+});
+
 const profile: ConnectionProfile = {
   id: "local",
   name: "本地 Redis",

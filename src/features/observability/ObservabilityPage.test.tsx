@@ -54,6 +54,14 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 const listeners = new Map<string, (event: { payload: unknown }) => void>();
 
+it("Cluster 明确限制观察会话而不启动单节点订阅", async () => {
+  render(<ObservabilityPage connectionId="cluster" isCluster />);
+  expect(screen.getByRole("tab", { name: /Pub\/Sub/ })).toBeDisabled();
+  expect(screen.getByRole("tab", { name: /Profiler/ })).toBeDisabled();
+  expect(screen.getByText(/Cluster 暂不支持 Pub\/Sub 和 Profiler/)).toBeInTheDocument();
+  expect(startPubSubMock).not.toHaveBeenCalled();
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   listeners.clear();

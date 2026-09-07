@@ -1,4 +1,5 @@
 import type { ConnectionProfile } from "../../lib/types";
+import { connectionAddress } from "./connectionState";
 
 interface ConnectionListProps {
   profiles: ConnectionProfile[];
@@ -52,7 +53,7 @@ export function ConnectionList({
                 <h2>{profile.name}</h2>
                 <p className="connection-address">
                   <code>
-                    {profile.sentinel ? `Sentinel · ${profile.sentinel.master_name}` : `${profile.host}:${profile.port}`}
+                    {connectionAddress(profile)}
                   </code>
                 </p>
                 {profile.ssh && <p className="connection-address">SSH · {profile.ssh.host}:{profile.ssh.port}</p>}

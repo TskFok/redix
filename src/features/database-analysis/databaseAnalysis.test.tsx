@@ -48,6 +48,24 @@ afterEach(() => {
 });
 
 describe("DatabaseAnalysisPage", () => {
+  it("旧报告缺少节点字段时安全显示单份结果", async () => {
+    const legacy = { ...report };
+    delete (legacy as Partial<DatabaseAnalysisReport>).node_results;
+    delete (legacy as Partial<DatabaseAnalysisReport>).failed_nodes;
+    analyzeDatabaseMock.mockResolvedValue(legacy);
+    render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
+    expect(await screen.findByText("总键数")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+  it("Cluster 部分分析明确失败及节点范围并可展开节点报告", async () => {
+    analyzeDatabaseMock.mockResolvedValue({ ...report, failed_nodes: [{ node_id: "node-b", code: "CONNECTION_FAILED" }], node_results: [{ node_id: "node-a", endpoint: { host: "::1", port: 7000 }, report }] });
+    render(<DatabaseAnalysisPage connectionId="cluster" activeDatabase={0} />);
+    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("1 个主节点分析失败");
+    expect(screen.getByText(/node-a.*\[::1\]:7000/)).toBeInTheDocument();
+    expect(screen.getByText(/仅汇总成功主节点/)).toBeInTheDocument();
+  });
   it("提交默认参数并展示分析摘要和 Top Key", async () => {
     analyzeDatabaseMock.mockResolvedValue(report);
     render(<DatabaseAnalysisPage connectionId="local" activeDatabase={0} />);

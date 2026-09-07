@@ -23,12 +23,16 @@ interface DatabasePageProps {
   connectionId: string;
   activeDatabase: number;
   onProfileChanged: (profile: ConnectionProfile) => void;
+  isCluster?: boolean;
+  onOpenTopology?: () => void;
 }
 
 export function DatabasePage({
   connectionId,
   activeDatabase,
   onProfileChanged,
+  isCluster = false,
+  onOpenTopology,
 }: DatabasePageProps) {
   const [state, setState] = useState<DatabasePageState>(() => ({
     ...initialDatabasePageState,
@@ -56,7 +60,7 @@ export function DatabasePage({
     }));
 
     const overview = Promise.allSettled([
-      getInstanceDetails(connectionId),
+      isCluster ? Promise.resolve(null) : getInstanceDetails(connectionId),
       getDatabaseOverview(connectionId),
     ]);
 
@@ -89,7 +93,7 @@ export function DatabasePage({
     return () => {
       requestRef.current += 1;
     };
-  }, [connectionId, reloadToken]);
+  }, [connectionId, reloadToken, isCluster]);
 
   const handleSelectDatabase = async (database: number) => {
     if (state.switching || database === activeDatabase) {
@@ -135,7 +139,7 @@ export function DatabasePage({
           <p className="eyebrow">DATABASE OVERVIEW</p>
           <h2 id="database-page-title">数据库概览</h2>
           <p className="page-description">
-            查看当前 Standalone Redis 实例的只读指标和数据库键空间，不执行全库扫描。
+            {isCluster ? "DB 0 键数和过期键由全部主节点聚合；节点或字段不可用时显示不可用。" : "查看当前 Redis 实例的只读指标和数据库键空间，不执行全库扫描。"}
           </p>
         </div>
         <button
@@ -159,7 +163,8 @@ export function DatabasePage({
         </p>
       ) : null}
 
-      <div className="database-metric-grid" aria-label="实例指标">
+      {isCluster && <section className="database-panel"><p>Cluster 仅支持 DB 0，逐节点实例详情请在拓扑查看。</p><button type="button" className="button button-secondary" onClick={onOpenTopology}>查看 Cluster 拓扑</button></section>}
+      {!isCluster && <><div className="database-metric-grid" aria-label="实例指标">
         <MetricCard
           label="服务器版本"
           value={formatMetric(state.details?.overview.server_version)}
@@ -293,6 +298,7 @@ export function DatabasePage({
         )}
       </section>
 
+      </>}
       <section className="database-panel" aria-labelledby="database-list-title">
         <div className="database-panel-heading">
           <div>
@@ -353,7 +359,7 @@ export function DatabasePage({
         )}
       </section>
 
-      <section className="database-panel" aria-labelledby="module-list-title">
+      {!isCluster && <section className="database-panel" aria-labelledby="module-list-title">
         <div className="database-panel-heading">
           <div>
             <p className="eyebrow">MODULES</p>
@@ -372,7 +378,7 @@ export function DatabasePage({
         ) : (
           <p className="empty-state-compact">未检测到模块或模块信息不可用。</p>
         )}
-      </section>
+      </section>}
     </section>
   );
 }

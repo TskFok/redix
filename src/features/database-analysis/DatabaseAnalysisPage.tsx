@@ -186,6 +186,8 @@ function ExpirationGroups({ groups, totalKeys }: { groups: ExpirationGroup[]; to
 function AnalysisResults({ report }: { report: DatabaseAnalysisReport }) {
   return (
     <>
+      {(report.failed_nodes?.length ?? 0) > 0 && <p role="alert" className="inline-error">{report.failed_nodes.length} 个主节点分析失败，当前为部分结果。重新分析可重试。</p>}
+      {(report.node_results?.length ?? 0) > 0 && <section className="database-panel" aria-label="节点分析范围"><p>仅汇总成功主节点的分析结果；可展开查看各节点范围。</p>{report.node_results.map((node) => <details key={node.node_id}><summary>{node.node_id} · {node.endpoint.host.includes(":") ? `[${node.endpoint.host}]` : node.endpoint.host}:{node.endpoint.port} · 已处理 {node.report.progress.processed} 个键{node.report.progress.truncated ? " · 已截断" : ""}</summary><AnalysisResults report={{ ...node.report, node_results: [], failed_nodes: [] }} /></details>)}</section>}
       {report.progress.truncated ? (
         <p className="inline-error" role="status">
           结果已达到扫描上限，可能不完整

@@ -129,7 +129,7 @@ describe("Redis 连接管理页面", () => {
     expect(await screen.findByText("Sentinel · primary")).toBeInTheDocument();
   });
 
-  it("SSH 路径仅进入 secret input 并保留当前组合门控", async () => {
+  it("SSH 私钥路径仅进入 secret input 并允许 TLS", async () => {
     saveConnectionMock.mockImplementation(async (input: SaveConnectionInput) => input.profile);
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
     await openNewConnectionForm();
@@ -137,20 +137,97 @@ describe("Redis 连接管理页面", () => {
     fireEvent.click(screen.getByLabelText("启用 SSH 隧道"));
     fireEvent.change(screen.getByLabelText("SSH 主机"), { target: { value: "bastion.example" } });
     fireEvent.change(screen.getByLabelText("SSH 用户名"), { target: { value: "operator" } });
+    fireEvent.change(screen.getByLabelText("SSH 认证方式"), { target: { value: "private_key" } });
     fireEvent.change(screen.getByLabelText("SSH 私钥文件路径"), { target: { value: "/Users/operator/.ssh/id_ed25519" } });
     expect(screen.getByText(/known_hosts/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("启用 TLS"));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("SSH 暂不支持与 TLS 或 Sentinel 组合");
-    expect(saveConnectionMock).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByLabelText("启用 TLS"));
-    fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(saveConnectionMock).toHaveBeenCalled());
-    expect(saveConnectionMock.mock.calls[0][0].profile.ssh).toMatchObject({ host: "bastion.example", port: 22, username: "operator", auth_method: "agent", has_identity_file: true });
+    expect(saveConnectionMock.mock.calls[0][0].profile.ssh).toMatchObject({ host: "bastion.example", port: 22, username: "operator", auth_method: "private_key", has_identity_file: true });
     expect(saveConnectionMock.mock.calls[0][0].ssh_identity_file).toBe("/Users/operator/.ssh/id_ed25519");
     expect(saveConnectionMock.mock.calls[0][0].profile.ssh).not.toHaveProperty("identity_file");
     expect(saveConnectionMock.mock.calls[0][0].profile.ssh).not.toHaveProperty("known_hosts_file");
     expect(await screen.findByText("SSH · bastion.example:22")).toBeInTheDocument();
+  });
+
+  it("Cluster 校验唯一种子并固定 DB0，测试和保存使用相同材料", async () => {
+    let generated = 0;
+    vi.mocked(crypto.randomUUID).mockImplementation(() => `connection-${++generated}` as `${string}-${string}-${string}-${string}-${string}`);
+    saveConnectionMock.mockImplementation(async (input: SaveConnectionInput) => input.profile);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm(); fillStandaloneForm();
+    fireEvent.change(screen.getByLabelText("数据库"), { target: { value: "9" } });
+    fireEvent.change(screen.getByLabelText("连接拓扑"), { target: { value: "cluster" } });
+    expect(screen.getByLabelText("数据库")).toHaveValue(0);
+    expect(screen.getByLabelText("启用 SSH 隧道")).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Cluster 种子节点"), { target: { value: "[::1]:7000\n[::1]:7000" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("唯一");
+    fireEvent.change(screen.getByLabelText("Cluster 种子节点"), { target: { value: "[::1]:7000\nredis-b:7001" } });
+    fireEvent.click(screen.getByLabelText("允许从副本读取"));
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await screen.findByText(/连接成功/);
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(saveConnectionMock).toHaveBeenCalledTimes(1));
+    expect(saveConnectionMock.mock.calls[0][0]).toEqual(testConnectionMock.mock.calls[0][0]);
+    expect(saveConnectionMock.mock.calls[0][0].profile).toMatchObject({ host: "::1", port: 7000, database: 0, cluster: { nodes: [{ host: "::1", port: 7000 }, { host: "redis-b", port: 7001 }], read_from_replicas: true } });
+    expect(screen.getByText(/Cluster · 2 个种子/)).toHaveTextContent("redis-b:7001");
+  });
+
+  it("Sentinel SSH 密码与 Redis/Sentinel 凭据独立，支持双 TLS", async () => {
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm(); fillStandaloneForm();
+    fireEvent.change(screen.getByLabelText("连接拓扑"), { target: { value: "sentinel" } });
+    fireEvent.change(screen.getByLabelText("Sentinel 主节点名称"), { target: { value: "primary" } });
+    fireEvent.change(screen.getByLabelText("Sentinel 密码"), { target: { value: "sentinel-secret" } });
+    fireEvent.change(screen.getByLabelText("密码"), { target: { value: "redis-secret" } });
+    fireEvent.click(screen.getByLabelText("启用 SSH 隧道"));
+    fireEvent.change(screen.getByLabelText("SSH 主机"), { target: { value: "jump" } });
+    fireEvent.change(screen.getByLabelText("SSH 用户名"), { target: { value: "user" } });
+    fireEvent.change(screen.getByLabelText("SSH 认证方式"), { target: { value: "password" } });
+    fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "ssh-secret" } });
+    fireEvent.click(screen.getByLabelText("启用 TLS")); fireEvent.click(screen.getByLabelText("Sentinel 启用 TLS"));
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await screen.findByText(/连接成功/);
+    expect(testConnectionMock.mock.calls[0][0]).toMatchObject({ password: "redis-secret", sentinel_password: "sentinel-secret", ssh_password: "ssh-secret", profile: { tls: true, sentinel: { tls: true }, ssh: { auth_method: "password" } } });
+  });
+
+  it("Private Key 清除旧路径后必须补新私钥，PEM 与口令不进入 profile", async () => {
+    listConnectionsMock.mockResolvedValue([{ ...localProfile, ssh: { host: "jump", port: 22, username: "user", auth_method: "private_key", has_password: false, has_private_key: false, has_identity_file: true, has_passphrase: true, has_known_hosts_file: false } }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 本地 Redis" }));
+    expect(screen.getByLabelText("SSH 私钥文件路径")).toHaveValue("");
+    expect(screen.getByLabelText("SSH 私钥口令")).toHaveValue("");
+    fireEvent.click(screen.getByLabelText("清除已保存的 SSH 凭据和路径"));
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("请输入 SSH 私钥");
+    const pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-key\n-----END OPENSSH PRIVATE KEY-----";
+    fireEvent.change(screen.getByLabelText("SSH 私钥内容"), { target: { value: pem } });
+    fireEvent.change(screen.getByLabelText("SSH 私钥口令"), { target: { value: " passphrase " } });
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(saveConnectionMock).toHaveBeenCalled());
+    expect(saveConnectionMock.mock.calls[0][0]).toMatchObject({ clear_ssh_secrets: true, ssh_private_key: pem, ssh_passphrase: " passphrase ", profile: { ssh: { has_private_key: true, has_identity_file: false, has_passphrase: true } } });
+    expect(JSON.stringify(saveConnectionMock.mock.calls[0][0].profile)).not.toContain("secret-key");
+  });
+
+  it("清除 SSH 保存材料后旧标记不满足密码，允许输入替换并清理模式材料", async () => {
+    listConnectionsMock.mockResolvedValue([{ ...localProfile, ssh: { host: "jump", port: 22, username: "user", auth_method: "password", has_password: true, has_private_key: false, has_identity_file: false, has_passphrase: false, has_known_hosts_file: true } }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "编辑 本地 Redis" }));
+    expect(screen.getByLabelText("SSH 密码")).toHaveValue("");
+    expect(screen.getByLabelText("SSH 已知主机文件路径")).toHaveValue("");
+    fireEvent.click(screen.getByLabelText("清除已保存的 SSH 凭据和路径"));
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("SSH 密码");
+    fireEvent.change(screen.getByLabelText("SSH 密码"), { target: { value: "replacement" } });
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await screen.findByText(/连接成功/);
+    expect(testConnectionMock.mock.calls[0][0]).toMatchObject({ clear_ssh_secrets: true, ssh_password: "replacement", profile: { ssh: { has_known_hosts_file: false } } });
+    fireEvent.change(screen.getByLabelText("SSH 认证方式"), { target: { value: "agent" } });
+    expect(screen.queryByLabelText("SSH 私钥文件路径")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(testConnectionMock).toHaveBeenCalledTimes(2));
+    expect(testConnectionMock.mock.calls[1][0]).toMatchObject({ ssh_password: null, profile: { ssh: { auth_method: "agent", has_password: false } } });
   });
 
   it("导出连接时调用 typed IPC 并显示成功反馈", async () => {
@@ -492,7 +569,7 @@ describe("Redis 连接管理页面", () => {
     expect(screen.queryByRole("heading", { name: "新增连接" })).not.toBeInTheDocument();
   });
 
-  it("编辑已有认证连接空密码测试时提示输入密码", async () => {
+  it("编辑已有认证连接空密码测试时保留已保存凭据", async () => {
     const securedProfile: ConnectionProfile = {
       ...localProfile,
       id: "secured-test",
@@ -505,10 +582,8 @@ describe("Redis 连接管理页面", () => {
     fireEvent.click(screen.getByRole("button", { name: "编辑 受保护测试 Redis" }));
     fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "请输入密码后再测试连接",
-    );
-    expect(testConnectionMock).not.toHaveBeenCalled();
+    expect(await screen.findByText(/连接成功/)).toBeInTheDocument();
+    expect(testConnectionMock).toHaveBeenCalledWith(expect.objectContaining({ password: null, profile: expect.objectContaining({ has_password: true }) }));
   });
 
   it("连接错误不会渲染密码、原始命令或 URI", async () => {

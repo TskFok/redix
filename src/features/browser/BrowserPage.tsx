@@ -377,6 +377,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
           {state.error}
         </p>
       ) : null}
+      {state.nodeFailures.length > 0 && <div className="feedback feedback-error" role="alert"><p>{state.nodeFailures.length} 个节点扫描失败，当前键列表为部分结果。</p><button type="button" className="button button-secondary" disabled={listBusy} onClick={state.hasMore ? handleLoadMore : handleRefresh}>{state.hasMore ? "继续扫描并重试" : "重新扫描并重试"}</button></div>}
 
       <div className="browser-actions" aria-label="Browser 操作">
         <button
