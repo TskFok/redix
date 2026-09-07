@@ -555,6 +555,12 @@ mod tests {
     use crate::persistence::{ConnectionSecrets, ProfileRepository, SecretStore};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    fn absolute_test_path(name: &str) -> String {
+        let path = std::env::temp_dir().join(name);
+        assert!(path.is_absolute());
+        path.to_string_lossy().into_owned()
+    }
+
     async fn spawn_cli_redis(label: &'static str) -> (u16, Arc<std::sync::atomic::AtomicUsize>) {
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
@@ -915,11 +921,12 @@ mod tests {
     #[tokio::test]
     async fn ssh_save_request_persists_secrets_and_derives_flags_without_exposing_paths() {
         let (state, profiles, secrets) = state_with(vec![], None);
+        let known_hosts = absolute_test_path("redix-known-hosts");
         let input = ssh_request(
             "password",
             serde_json::json!({
                 "ssh_password": "  password with whitespace  ",
-                "ssh_known_hosts_file": "/private/ssh/known_hosts"
+                "ssh_known_hosts_file": known_hosts.clone()
             }),
         );
         let saved = save_connection_inner(&state, input).await.unwrap();
@@ -930,17 +937,17 @@ mod tests {
         );
         assert_eq!(
             stored.ssh_known_hosts_file.as_deref(),
-            Some("/private/ssh/known_hosts")
+            Some(known_hosts.as_str())
         );
         assert!(saved.ssh.as_ref().unwrap().has_password);
         assert!(saved.ssh.as_ref().unwrap().has_known_hosts_file);
         assert!(!serde_json::to_string(&profiles.load().unwrap())
             .unwrap()
-            .contains("/private/ssh"));
+            .contains(&known_hosts));
         assert!(
             !serde_json::to_string(&export_connections_inner(&state).await.unwrap())
                 .unwrap()
-                .contains("/private/ssh")
+                .contains(&known_hosts)
         );
     }
 
@@ -953,7 +960,7 @@ mod tests {
             ssh.has_password = true;
             ssh.has_private_key = true;
             ssh.has_identity_file = true;
-            ssh.legacy_identity_file = Some("/private/untrusted-profile-key".into());
+            ssh.legacy_identity_file = Some(absolute_test_path("untrusted-profile-key"));
             assert!(matches!(
                 save_connection_inner(&state, input).await,
                 Err(AppError::InvalidConnection)
@@ -965,11 +972,14 @@ mod tests {
 
     #[tokio::test]
     async fn ssh_save_rejects_unsafe_paths_and_oversized_payloads() {
+        let absolute_identity = absolute_test_path("redix-key");
+        let absolute_hosts = absolute_test_path("redix-hosts");
+        let oversized_absolute = absolute_test_path(&"x".repeat(8192));
         for fields in [
             serde_json::json!({"ssh_identity_file": "relative/key"}),
-            serde_json::json!({"ssh_identity_file": "/private/key\tother"}),
-            serde_json::json!({"ssh_known_hosts_file": "/private/hosts\u{7f}"}),
-            serde_json::json!({"ssh_known_hosts_file": format!("/{}", "x".repeat(8192))}),
+            serde_json::json!({"ssh_identity_file": format!("{absolute_identity}\tother")}),
+            serde_json::json!({"ssh_known_hosts_file": format!("{absolute_hosts}\u{7f}")}),
+            serde_json::json!({"ssh_known_hosts_file": oversized_absolute}),
             serde_json::json!({"ssh_private_key": "x".repeat(1024 * 1024 + 1)}),
             serde_json::json!({"ssh_password": "x".repeat(1024 * 1024 + 1)}),
         ] {
@@ -985,12 +995,15 @@ mod tests {
     #[tokio::test]
     async fn ssh_credentials_survive_omission_but_clear_replace_and_mode_switch_are_explicit() {
         let (state, _, store) = state_with(vec![], None);
+        let identity = absolute_test_path("redix-key");
+        let known_hosts = absolute_test_path("redix-known-hosts");
+        let replacement_identity = absolute_test_path("redix-replacement-key");
         let first = ssh_request(
             "private_key",
             serde_json::json!({
                 "ssh_private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n-----END OPENSSH PRIVATE KEY-----",
-                "ssh_passphrase": "  phrase  ", "ssh_identity_file": "/private/ssh/key",
-                "ssh_known_hosts_file": "/private/ssh/known_hosts", "password": "redis-password"
+                "ssh_passphrase": "  phrase  ", "ssh_identity_file": identity,
+                "ssh_known_hosts_file": known_hosts, "password": "redis-password"
             }),
         );
         let saved = save_connection_inner(&state, first).await.unwrap();
@@ -1011,7 +1024,7 @@ mod tests {
         let mut replacement = ssh_request(
             "private_key",
             serde_json::json!({
-                "clear_ssh_secrets": true, "ssh_identity_file": "/private/ssh/replacement"
+                "clear_ssh_secrets": true, "ssh_identity_file": replacement_identity.clone()
             }),
         );
         replacement.profile.has_password = true;
@@ -1022,7 +1035,7 @@ mod tests {
         assert!(stored.ssh_known_hosts_file.is_none());
         assert_eq!(
             stored.ssh_identity_file.as_deref(),
-            Some("/private/ssh/replacement")
+            Some(replacement_identity.as_str())
         );
         assert_eq!(stored.password.as_deref(), Some("redis-password"));
 
@@ -1047,8 +1060,8 @@ mod tests {
                     ssh_password: Some("password".into()),
                     ssh_private_key: Some("key".into()),
                     ssh_passphrase: Some("phrase".into()),
-                    ssh_identity_file: Some("/private/key".into()),
-                    ssh_known_hosts_file: Some("/private/known_hosts".into()),
+                    ssh_identity_file: Some(absolute_test_path("disabled-key")),
+                    ssh_known_hosts_file: Some(absolute_test_path("disabled-known-hosts")),
                     ..Default::default()
                 },
             )
@@ -1068,12 +1081,13 @@ mod tests {
     #[tokio::test]
     async fn ssh_failed_profile_write_restores_all_previous_secrets() {
         let (state, profiles, secrets) = state_with(vec![], None);
+        let known_hosts = absolute_test_path("rollback-known-hosts");
         save_connection_inner(
             &state,
             ssh_request(
                 "password",
                 serde_json::json!({
-                    "ssh_password": "old", "ssh_known_hosts_file": "/private/ssh/hosts"
+                    "ssh_password": "old", "ssh_known_hosts_file": known_hosts
                 }),
             ),
         )
@@ -1173,9 +1187,10 @@ mod tests {
     #[tokio::test]
     async fn ssh_switching_modes_discards_unselected_material_without_clearing_other_credentials() {
         let (state, _, store) = state_with(vec![], None);
+        let identity = absolute_test_path("switch-mode-key");
         let mut input = ssh_request(
             "private_key",
-            serde_json::json!({"ssh_identity_file": "/private/key"}),
+            serde_json::json!({"ssh_identity_file": identity}),
         );
         input.profile.has_password = true;
         input.profile.tls = true;
@@ -1202,7 +1217,7 @@ mod tests {
         let mut agent = save_input(saved, None);
         agent.profile.ssh.as_mut().unwrap().auth_method = SshAuthMethod::Agent;
         agent.ssh_password = Some("ignored".into());
-        agent.ssh_identity_file = Some("/private/ignored".into());
+        agent.ssh_identity_file = Some(absolute_test_path("ignored-agent-key"));
         agent.ssh_private_key = Some("ignored".into());
         let saved = save_connection_inner(&state, agent).await.unwrap();
         let ssh = saved.ssh.unwrap();
@@ -1249,11 +1264,12 @@ mod tests {
     #[tokio::test]
     async fn ssh_retained_secret_paths_are_validated_before_save() {
         let (state, profiles, secrets) = state_with(vec![], None);
+        let invalid_identity = format!("{}\tother", absolute_test_path("retained-key"));
         secrets
             .write(
                 "ssh-test",
                 &ConnectionSecrets {
-                    ssh_identity_file: Some("/private/key\tother".into()),
+                    ssh_identity_file: Some(invalid_identity),
                     ..Default::default()
                 },
             )

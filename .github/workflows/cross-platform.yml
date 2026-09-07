@@ -1,0 +1,59 @@
+name: 跨平台验证
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装 Ubuntu 构建与 Redis 依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev redis-server redis-tools
+
+      - name: 安装 macOS Redis 依赖
+        if: runner.os == 'macOS'
+        run: brew install redis
+
+      - run: npm ci
+      - run: npm run test:frontend
+      - run: npm run test:rust
+      - run: npm run build
+
+      - name: 验证隔离 Cluster launcher 安全合同
+        run: python -B -m unittest scripts/test_local_cluster_test.py -v
+
+      - name: 运行本地 Redis 流程
+        if: runner.os != 'Windows'
+        run: npm run test:redis:local
+
+      - name: 运行真实三主节点 Cluster 流程
+        if: runner.os != 'Windows'
+        run: npm run test:redis:cluster
+
+      - name: 说明 Windows 集成边界
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Write-Output 'Windows runner 未安装 redis-server/redis-cli，因此显式跳过本地 Redis 与 Cluster 网络集成；其余 Rust、前端、Web 和 native no-bundle 构建仍执行。'
+
+      - run: npm run check:non-cloud
+      - run: npm run tauri:build -- --no-bundle

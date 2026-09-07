@@ -30,4 +30,38 @@ describe("非 Cloud 范围检查", () => {
       "cloud database discovery",
     ]);
   });
+
+  it("拦截 RDI、Copilot、遥测分析与远程插件的精确入口或依赖", () => {
+    expect(
+      scanFiles([
+        "src/rdi/pipeline; Redis Data Integration",
+        "Redis Copilot; copilot/service",
+        '"@segment/analytics-next"; "@sentry/react"',
+        "analytics/send-event; telemetry/event",
+        "remote-plugin/runtime; plugin-marketplace/client",
+      ]),
+    ).toEqual([
+      "rdi entry",
+      "redis data integration",
+      "copilot entry",
+      "segment analytics dependency",
+      "sentry telemetry dependency",
+      "analytics event endpoint",
+      "telemetry entry",
+      "remote plugin entry",
+      "plugin marketplace entry",
+    ]);
+  });
+
+  it("不误伤通用 AI、数据库分析、统计值或本地内建模块", () => {
+    expect(
+      scanFiles([
+        "AI value decoder",
+        "database analysis and primary statistics",
+        "grid pipeline and cardinality",
+        "local built-in plugin metadata",
+        "analytics summary shown from Redis INFO",
+      ]),
+    ).toEqual([]);
+  });
 });

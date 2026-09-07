@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "test:redis:local": "python3 scripts/test-local-redis.py"
+    "test:redis:local": "python3 scripts/test-local-redis.py",
+    "test:redis:cluster": "python3 -B -m unittest scripts/test_local_cluster_test.py -v && python3 -B scripts/test-local-cluster.py"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",

@@ -56,9 +56,15 @@ const listeners = new Map<string, (event: { payload: unknown }) => void>();
 
 it("Cluster 明确限制观察会话而不启动单节点订阅", async () => {
   render(<ObservabilityPage connectionId="cluster" isCluster />);
+  expect(screen.getByRole("tab", { name: /Slow Log/ })).toBeDisabled();
   expect(screen.getByRole("tab", { name: /Pub\/Sub/ })).toBeDisabled();
   expect(screen.getByRole("tab", { name: /Profiler/ })).toBeDisabled();
-  expect(screen.getByText(/Cluster 暂不支持 Pub\/Sub 和 Profiler/)).toBeInTheDocument();
+  expect(screen.getByText(/Cluster Slow Log 节点作用域尚未支持/)).toBeInTheDocument();
+  await waitFor(() => {
+    expect(getSlowLogConfigMock).not.toHaveBeenCalled();
+    expect(getSlowLogsMock).not.toHaveBeenCalled();
+    expect(publishPubSubMock).not.toHaveBeenCalled();
+  });
   expect(startPubSubMock).not.toHaveBeenCalled();
 });
 

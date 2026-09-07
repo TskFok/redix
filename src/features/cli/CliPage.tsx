@@ -3,14 +3,14 @@ import { closeCliSession, executeCliCommand, openCliSession, type CliSessionInpu
 import { appendCliTranscript, cliError, type CliTranscriptEntry } from "./cliState";
 import "./cli.css";
 
-interface CliPageProps { connectionId: string; database: number }
+interface CliPageProps { connectionId: string; database: number; isCluster?: boolean }
 
-export default function CliPage({ connectionId, database }: CliPageProps) {
+export default function CliPage({ connectionId, database, isCluster = false }: CliPageProps) {
   const [version, setVersion] = useState(0);
-  return <CliSessionView key={`${connectionId}:${database}:${version}`} connectionId={connectionId} database={database} onRestart={() => setVersion((current) => current + 1)} />;
+  return <CliSessionView key={`${connectionId}:${database}:${isCluster}:${version}`} connectionId={connectionId} database={database} isCluster={isCluster} onRestart={() => setVersion((current) => current + 1)} />;
 }
 
-function CliSessionView({ connectionId, database, onRestart }: CliPageProps & { onRestart: () => void }) {
+function CliSessionView({ connectionId, database, isCluster = false, onRestart }: CliPageProps & { onRestart: () => void }) {
   const sessionRef = useRef<CliSessionInput | null>(null);
   const [status, setStatus] = useState<"opening" | "ready" | "closed">("opening");
   const [command, setCommand] = useState("");
@@ -84,7 +84,9 @@ function CliSessionView({ connectionId, database, onRestart }: CliPageProps & { 
   return <section className="cli-page" aria-label="独立 CLI 工作区">
     <div className="page-heading">
       <div><p className="eyebrow">PERSISTENT REDIS SESSION</p><h2>CLI</h2>
-        <p className="page-description">独立持久连接 · 初始 DB{database} · MULTI/EXEC、WATCH 和 SELECT 状态仅在当前 CLI 会话保留。</p>
+        <p className="page-description">{isCluster
+          ? "Cluster 普通命令按键槽路由；不支持 MULTI/EXEC、WATCH、SELECT 等连接状态命令。"
+          : `独立持久连接 · 初始 DB${database} · MULTI/EXEC、WATCH 和 SELECT 状态仅在当前 CLI 会话保留。`}</p>
       </div>
       <div className="cli-actions">
         <button type="button" className="button button-quiet" disabled={entries.length === 0} onClick={() => setEntries([])}>清空终端</button>
@@ -92,8 +94,8 @@ function CliSessionView({ connectionId, database, onRestart }: CliPageProps & { 
           : <button type="button" className="button button-danger" onClick={() => void close()}>关闭 CLI</button>}
       </div>
     </div>
-    <p className="panel-hint cli-note">不自动保存命令或输出；内容可能含敏感数据。最多保留 200 条 / 2 MiB，单次输出上限 256 KiB。离开页面会关闭会话并丢弃未提交事务。</p>
-    <p className="panel-hint cli-note">每条命令最多等待 5 秒；超时会丢弃连接且不会自动重试。订阅与 MONITOR 请使用运维观察。</p>
+    <p className="panel-hint cli-note">不自动保存命令或输出；内容可能含敏感数据。最多保留 200 条 / 2 MiB，单次输出上限 256 KiB。{isCluster ? "离开页面会关闭当前路由会话。" : "离开页面会关闭会话并丢弃未提交事务。"}</p>
+    <p className="panel-hint cli-note">每条命令最多等待 5 秒；超时会丢弃连接且不会自动重试。{isCluster ? "订阅与 MONITOR 在 Cluster 中不支持。" : "订阅与 MONITOR 请使用运维观察。"}</p>
     {error ? <p role="alert" className="feedback feedback-error">{error}</p> : null}
     <div className="cli-terminal" role="log" aria-label="CLI 输出" aria-live="polite">
       {entries.length === 0 ? <p>Redis CLI · {status === "opening" ? "连接中…" : status === "closed" ? "会话已关闭" : "连接就绪"}</p> : null}

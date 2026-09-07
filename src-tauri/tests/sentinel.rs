@@ -106,8 +106,10 @@ fn sentinel_export_import_preserves_topology_and_ignores_embedded_secrets() {
 
 #[test]
 fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_combinations() {
+    let identity_file = std::env::temp_dir().join("redix-sentinel-identity");
+    assert!(identity_file.is_absolute());
     let mut value = serde_json::to_value(support::valid_profile()).unwrap();
-    value["ssh"] = serde_json::json!({"host":"bastion.example", "port":22, "username":"operator", "identity_file":"/tmp/redix-id"});
+    value["ssh"] = serde_json::json!({"host":"bastion.example", "port":22, "username":"operator", "identity_file":identity_file.clone()});
     let profile: ConnectionProfile = serde_json::from_value(value.clone()).unwrap();
     assert_eq!(
         serde_json::to_value(&profile).unwrap()["ssh"]["host"],
@@ -118,7 +120,9 @@ fn ssh_configuration_round_trips_and_rejects_option_injection_and_unsupported_co
     assert!(export["connections"][0]["ssh"]["has_identity_file"]
         .as_bool()
         .unwrap());
-    assert!(export.to_string().contains("/tmp/redix-id") == false);
+    assert!(!export
+        .to_string()
+        .contains(&identity_file.to_string_lossy().into_owned()));
     let mut imported = export;
     imported["connections"][0]["ssh"]["private_key"] =
         serde_json::json!("private-key-must-not-import");

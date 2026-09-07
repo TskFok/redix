@@ -1,6 +1,6 @@
 # Redix
 
-Redix 是一个面向自管理 Redis 的桌面客户端，使用 Rust + Tauri + React 构建。当前版本提供连接管理（含导入导出、Standalone TCP/TLS、Sentinel 与受限 SSH）、Browser 键浏览与编辑、RedisJSON 根文档与路径级操作、RedisSearch 索引管理与有限查询、Redis Array/Vector Set 模块数据操作、Stream Consumer Group 观察、数据库/实例概览、Query Library、本地设置、Slow Log、Pub/Sub、基础 Profiler，以及 Workbench 和独立 CLI 会话。
+Redix 是一个面向自管理 Redis 的桌面客户端，使用 Rust + Tauri + React 构建。当前版本提供连接管理（含导入导出、Standalone、Sentinel、Cluster 与 SSH/TLS 组合）、Browser 键浏览与编辑、RedisJSON 根文档与路径级操作、RedisSearch 索引管理与有限查询、Redis Array/Vector Set 模块数据操作、Stream Consumer Group 观察、数据库/实例概览、Query Library、本地设置、Slow Log、Pub/Sub、基础 Profiler，以及 Workbench 和 CLI。
 
 ## 前置条件
 
@@ -29,6 +29,7 @@ npm run check:non-cloud
 npm run test:frontend
 npm run test:rust
 npm run test:redis:local # 需要 redis-server；自动创建并清理隔离实例
+npm run test:redis:cluster # 需要 redis-server 与 redis-cli；自动创建并清理隔离三主节点
 npm run build
 npm run tauri:build
 ```
@@ -45,11 +46,13 @@ Workbench 支持本地内置命令目录、命令前缀提示、多行批量执�
 
 Database 工作区提供服务器版本、运行模式、连接数、内存、命令量、命中率和已加载模块等只读概览，并展示数据库键空间统计；实例详情按 INFO 分组展示客户端、内存、统计、持久化与复制指标，并提供 commandstats 命令统计。数据库切换成功后才更新当前连接配置。Database Analysis 是显式触发的只读工具：仅在用户点击“开始分析”后，以 `SCAN` 加固定批次 pipeline 汇总当前数据库；默认最多处理 100000 个键，也不会在连接后自动开始分析。结果默认不落盘；用户可在键名敏感提示后显式保存到版本化本机历史，按连接和数据库隔离，支持查看、删除及相同参数的观察值比较。Query Library 使用应用数据目录中的版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench，AUTH、HELLO、ACL、CONFIG 命令族不会保存。设置使用 `settings.json` 持久化主题、结果格式、Browser 扫描数量和批量命令错误策略。
 
-运维观察工作区提供 Slow Log 的读取、清空和 `slowlog-*` 配置，独立 Pub/Sub channel/pattern 订阅、发布和实时消息流，以及基于独立 `MONITOR` socket 的 Profiler 实时命令流。Pub/Sub 每个连接只保留一个可取消会话，前端最多缓存 5000 条消息；Profiler 前端最多缓存 10000 条事件；关闭连接、切换数据库或卸载页面时会清理后台任务。Profiler 启动前会提示 MONITOR 可能带来的性能影响，不自动保存日志文件或历史记录。支持筛选、暂停显示及显式导出：Profiler LOG、Pub/Sub JSON、Slow Log CSV/JSON。暂停只冻结显示，后台仍接收并保留有界缓存；导出包含当前筛选快照，可能带有敏感命令参数。
+运维观察工作区在 Standalone/Sentinel 上提供 Slow Log 的读取、清空和 `slowlog-*` 配置，独立 Pub/Sub channel/pattern 订阅、发布和实时消息流，以及基于独立 `MONITOR` socket 的 Profiler 实时命令流。Cluster 的 typed Slow Log、Pub/Sub 和 Profiler 均在网络操作前稳定拒绝，因为当前 DTO/会话没有明确节点作用域；命令工作台仍可显式执行原生命令，但路由范围由 Redis 驱动决定，不承诺全拓扑语义。Pub/Sub 每个连接只保留一个可取消会话，前端最多缓存 5000 条消息；Profiler 前端最多缓存 10000 条事件；关闭连接、切换数据库或卸载页面时会清理后台任务。Profiler 启动前会提示 MONITOR 可能带来的性能影响，不自动保存日志文件或历史记录。支持筛选、暂停显示及显式导出：Profiler LOG、Pub/Sub JSON、Slow Log CSV/JSON。暂停只冻结显示，后台仍接收并保留有界缓存；导出包含当前筛选快照，可能带有敏感命令参数。
 
 ## 当前边界
 
-本版本支持 Standalone（TCP/TLS）、Sentinel 主节点连接和受限 SSH 隧道。Redis Cloud 明确排除；Cluster 路由与节点 fan-out、Stream 实时消费/XAUTOCLAIM、更多模块专用可视化和其他 RedisInsight 产品细节仍未全量对齐。没有引入云登录、云账户、云数据库发现、云 SDK、SQL 或远程插件运行时；Azure、RDI、AI/Copilot、Telemetry 当前同样未实现。
+本版本支持 Standalone、Sentinel 和 Cluster DB 0。Cluster 已支持普通命令的 slot 路由、跨 primary 的完整 `SCAN`、16384 slot 拓扑摘要及 primary-only Database Analysis；Cluster+SSH、Cluster Pub/Sub、Cluster Profiler 和 typed Cluster Slow Log 明确不支持。拓扑 DTO 目前也没有 RedisInsight 目标中的每节点 version/mode/totalkeys 等额外指标，不能称为全量等价。SSH 由内置 `ssh2` transport 提供 Agent、Password、内存私钥或本机私钥文件认证；Standalone/Sentinel 可与 TLS 组合，Cluster+SSH 禁用。普通连接导出不包含密码、证书正文、SSH 私钥、口令或 SSH 本机路径。
+
+Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics、远程插件与插件市场永久排除；没有云登录、云账户、云数据库发现、云 SDK 或 SQL。当前只收口六批路线中的连接与拓扑第一批，Browser 解码器、后台任务和其他矩阵差异仍在后续批次。
 
 除已列出的 RedisJSON、RedisSearch、Array、Vector Set 和 Stream 能力外，其他模块专用数据编辑器、Monaco/插件运行时尚未实现；不能将这些差异视作已对齐。
 
@@ -59,9 +62,9 @@ Database 工作区提供服务器版本、运行模式、连接数、内存、�
 - Workbench 支持离线模块命令帮助、当前光标行补全、`#`/`//` 注释行、嵌套结果树/表格，以及按连接删除单条或清空历史。敏感命令继续不写历史，包括被引号包围或转义的命令名。
 - Search 可显式开启文档字段结果；默认键名模式兼容旧行为。支持 RESP2/RESP3 回复和过期文档空内容；字段、文档、深度、单页和总响应均有限额，超限返回固定错误。
 - Sentinel 配置种子节点、master name 和独立认证，支持失败种子回退及主节点 ROLE 校验；重新连接或切库时重新发现。正在运行的会话不会无缝迁移到新的主节点。Sentinel 密码只存系统钥匙串，普通导出不含密码。
-- SSH 使用 macOS/Linux 的系统 OpenSSH、ssh-agent 或本地 identity file；必须预先验证主机指纹并写入 known_hosts，也可指定已有 known_hosts 文件。严格拒绝未知/变化的主机密钥，禁用交互式密码，不自动信任。认证后通过私有控制 socket 确认转发成功，端口占用时失败；超时、取消、关闭或替换会话时回收进程。首版仅支持 Standalone 非 TLS，不支持 Windows 或 SSH 与 TLS/Sentinel 组合。
+- SSH 使用跨平台 `ssh2` transport，支持 Agent、Password、内存 PrivateKey 和本机 identity file；必须用 known_hosts 严格验证主机指纹，未知或变化的主机密钥失败。支持 Standalone/Sentinel 与 TLS 组合，并保留原目标 host 作为 TLS SNI；Cluster+SSH 禁用。本轮只在 macOS 跑过自动化测试，不能据 CI 配置宣称 Windows/Linux 或真实 sshd 已通过。
 - 大集合和 Stream 详情直接进入分页端点；Hash/List/Set/Sorted Set 原位编辑保留未加载数据与 TTL，键消失或类型变化时拒绝写入；Stream 读写保留 Consumer Group 和 TTL。
 - Search 增加受限聚合查询面板，不接受任意聚合管道；Database Analysis 增加显式本机历史和相同扫描参数比较，报告可能包含键名且不自动保存。
-- 独立 CLI 通过专用持久 socket 保留多轮 MULTI/EXEC、WATCH 和 SELECT 状态，不影响 Browser 的数据库。关闭、离开页面或主连接切库会丢弃会话及未提交事务；每条命令超时 5 秒后断开且不重试。最多 16 个会话，命令 16 KiB，单次展示输出 256 KiB，前端最多 200 条/2 MiB；不自动保存命令或输出。推送订阅、MONITOR、复制协议及关闭回复的命令由专用功能处理或拒绝。
+- Standalone/Sentinel CLI 通过专用持久 socket 保留多轮 MULTI/EXEC、WATCH 和 SELECT 状态，不影响 Browser 的数据库。Cluster CLI 使用共享路由池，只支持普通无会话状态命令；事务、数据库选择、认证/协议切换、订阅、复制、连接模式和 `SCRIPT DEBUG` 等 socket 状态命令会在发送前稳定拒绝，Workbench 的 single/batch 采用相同门控。关闭、离开页面或主连接切库会清理 CLI；每条命令超时 5 秒后断开且不重试。
 
 完整对比与尚未覆盖的能力见 [功能差异矩阵](docs/redisinsight-feature-matrix.md)。这不是与 RedisInsight 的全量等价实现。

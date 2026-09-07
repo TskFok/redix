@@ -87,6 +87,15 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
   }, []);
 
   useEffect(() => {
+    if (isCluster) {
+      requestRef.current += 1;
+      setSlowLogConfig(null);
+      setSlowLogs([]);
+      setSlowLogLoading(false);
+      setError(null);
+      return;
+    }
+
     let disposed = false;
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
@@ -124,7 +133,7 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
       disposed = true;
       requestRef.current += 1;
     };
-  }, [connectionId, slowLogCount]);
+  }, [connectionId, isCluster, slowLogCount]);
 
   useEffect(() => {
     let disposed = false;
@@ -423,7 +432,7 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
         <span className="observability-scope">当前连接 · {connectionId}</span>
       </div>
 
-      {isCluster && <p className="observability-warning">Cluster 暂不支持 Pub/Sub 和 Profiler；它们需要明确的节点观察范围。Slow Log 当前由路由节点返回，不代表全部节点。</p>}
+      {isCluster && <p className="observability-warning">Cluster Slow Log 节点作用域尚未支持；Pub/Sub 和 Profiler 同样不可用。可在命令工作台显式执行原生命令，其路由范围由驱动决定。</p>}
       <div className="observability-tabs" role="tablist" aria-label="运维观察模块">
         <button
           type="button"
@@ -431,6 +440,7 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
           aria-selected={tab === "slowlog"}
           className={`observability-tab${tab === "slowlog" ? " observability-tab-active" : ""}`}
           onClick={() => setTab("slowlog")}
+          disabled={isCluster}
         >
           Slow Log
           <small>慢命令记录</small>
@@ -465,7 +475,9 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
         </p>
       ) : null}
 
-      {tab === "slowlog" ? (
+      {isCluster ? (
+        <p className="empty-state">Cluster 观察功能需要明确的节点作用域，当前尚未开放。</p>
+      ) : tab === "slowlog" ? (
         <SlowLogPanel
           config={slowLogConfig}
           count={slowLogCount}

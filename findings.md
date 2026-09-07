@@ -406,6 +406,14 @@
 - 全量 Rust/前端/构建/非 Cloud/格式/差异检查均通过。当前没有 `REDIX_TEST_REDIS_TLS_URL` 或证书环境变量，因此真实 TLS Redis 集成保持未执行，不把无网络 client 构造测试等同于网络验收。
 - 残余产品限制：不支持独立 `tlsServername`、证书文件路径、SSH、Sentinel、Cluster、Cloud 和 SQL；后续若需要这些能力应单独设计底层连接与安全边界。
 
+## 2026-09-07 Task 10 初始核对
+
+- 当前基线为 `main`/`30b1ec9`，工作区初始干净；`scripts/test-local-cluster.py`、`src-tauri/tests/cluster_integration.rs` 和 `.github/workflows/cross-platform.yml` 均尚不存在。
+- `RoutedClient::Cluster` 保存已建立的 `redis::cluster_async::ClusterConnection`，`connection()` 通过 clone 返回共享底层路由池；CLI 仍接受 MULTI/WATCH/EXEC，不能沿用 Standalone“专用持久 socket”声明，须以真实隔离 Cluster 取得证据。
+- Cluster SCAN 已按 primary 节点 fan-out 并使用 opaque `ScanCursor::Cluster`/`has_more`；拓扑和分析已有 production API，本任务用真实三主节点验证，不扩展现有 DTO。
+- `scripts/check-non-cloud-scope.mjs` 当前只覆盖 Cloud/Azure；Task10 需以精确入口词/依赖补充 RDI、Copilot、Telemetry/Analytics、远程插件排除，避免使用泛化 `AI` 短词误伤。
+- Windows 的成功路径 fixture 不能使用 `/private/...` 或 `/secret/...`；测试应从平台临时目录构造原生绝对路径，同时保留相对路径拒绝覆盖，生产校验不变。
+
 ## 2026-08-24 当前会话补充勘察
 
 - 当前仓库为 `/Users/ushopal/workspace/myself/redix` 的 `main` 分支，工作区干净；参考仓库 `/Users/ushopal/workspace/myself/RedisInsight` 也处于 `main`，本轮默认继续在当前分支工作，不创建分支。
@@ -537,3 +545,13 @@
 - Cluster crate 不公开可复用的“逐节点连接”集合。跨 primary SCAN、节点 INFO 和分析需要单独的 `ClusterNodeConnectionFactory`，从 active handle 一次性捕获认证/TLS material，再按 announced endpoint 有界并发连接；禁止在节点循环读取 keyring/持久化，也不把不可达节点替换为无关 seed。
 - 自定义 SSH+TLS Profiler 不依赖 crate-private `Monitor::new`：计划统一为 `MonitorLineStream`，Direct 分支包装公开 Monitor stream，自定义分支执行有界 AUTH/SELECT/MONITOR 握手并只接收有大小上限的 RESP simple-string 行；Pub/Sub 直接使用公开 `PubSub::new`。
 - 批次 1 详细计划最终拆为 10 个可提交 TDD 任务；总路线图保留六批依赖门槛，避免在连接/任务/解码 DTO 尚未稳定时提前固化后续批次签名。
+
+## 2026-09-07 连接与拓扑 Task 10 验收发现
+
+- 隔离三主节点实证 9 个测试键分布到三个 primary；`RedisService` 的 SET/GET、opaque cursor 完整 SCAN、16384 slot 拓扑摘要、primary-only Database Analysis 均通过，跨 slot `RENAME` 返回真实 `CROSSSLOT`。SCAN 回归设有明确页数上限，游标不收敛会失败而非无限等待。
+- `redis 1.5` 的 cloneable `ClusterConnection` 共享底层路由池。修复前 CLI 发送 `MULTI` 后，service GET 在其中一个 primary 得到 `QUEUED`，证明共享连接会被 socket 状态污染；因此 Cluster CLI 与 Workbench single/batch 现在共同在发送前拒绝事务、认证/协议切换、SELECT、订阅、复制、连接模式和 `SCRIPT DEBUG` 等状态命令。修复后的三 primary GET 均保持 baseline，普通 CLI SET/GET 正常。
+- 实测驱动对 `SLOWLOG GET/LEN/RESET` 与 `CONFIG SET` 使用 AllNodes，而 `CONFIG GET` 随机路由；现有 SlowLog DTO 又没有节点 ID，无法给出稳定节点作用域。因此 Cluster typed SlowLog get/config/update/reset 与 publish PubSub 统一返回 `UNSUPPORTED_FEATURE`，回归逐节点确认配置和日志计数在拒绝前后不变。
+- launcher 使用随机六端口、三个 loopback owned child、`INFO server` PID 核验和清除继承测试地址；临时目录作用域内先终止 child 再清目录，Redis 配置对含空格目录做引用/转义。沙箱禁止本地监听时必须提升权限执行，不改用用户 Redis。
+- SSH/auth/commands 的成功测试路径已改为 `temp_dir()` 生成的平台原生绝对路径，并保留相对路径与控制字符拒绝；生产 `Path::is_absolute` 校验未弱化。本机只验证 macOS，三平台 workflow 尚未由 CI 实际运行。
+- 范围扫描新增 RDI、Copilot、Telemetry/Analytics 与远程插件的精确入口/依赖规则和正反例，避免用泛化 `AI` 字样误伤本地分析文本；文档目录仍不参与生产扫描。
+- 当前拓扑 DTO 没有目标中的节点 version/mode/totalkeys 等额外字段；Cluster typed SlowLog/PubSub/Profiler 与 Cluster+SSH 仍是明确缺口。连接与拓扑只是六批路线的第一批，Browser 解码器、后台任务等后续批次未完成。

@@ -124,7 +124,7 @@
 
 ## Session: 2026-08-18 — Task 12 Browser 能力扩展实现
 
-- **Status:** in_progress
+- **Status:** complete
 - 用户确认先补齐 Browser 新增/重命名/批量删除/元数据刷新以及基础 Stream/JSON。
 - 已读取当前 Browser 组件、Tauri bridge、Rust Redis service、集成测试和 RedisInsight 对应模块。
 - 已写入设计文档：docs/superpowers/specs/2026-08-18-browser-capability-expansion-design.md。
@@ -193,6 +193,21 @@
 - **Status:** complete
 - `a0484ea` 已关闭剩余两个高优先级问题：根路径 delete 在 `affected = 0` 且 `ttl_ms = -2` 时触发 `onDeleted`；capability cache 写回与 generation bump 通过锁序列化，避免旧 probe 污染新 session。
 - 专门代码复审 verdict 为 Ready，未发现新的 Critical/Important/Minor breakage；Redis Stack live 流程仍因 `REDIX_TEST_REDIS_STACK_URL` 未配置而显式 skipped。
+
+## Session: 2026-09-07 — 连接与拓扑 Task 10
+
+- **Status:** in_progress
+- 已读取 Task10 brief、SDD progress 的 Task10/最终 named risk 条目，以及 implementer/TDD/验证模板。
+- 已确认当前分支 `main`、基线 `30b1ec9`、工作区初始干净；不创建分支、不派子代理。
+- 已确认 launcher/真实 Cluster 集成/三平台 workflow 尚未创建；开始按 RED→GREEN 顺序实现。
+- 已完成 launcher 的 6 项安全单测：随机六端口、loopback 配置、PID 所有权、环境清理、失败/中断先停 child 再清临时目录、空格路径转义均覆盖。
+- 已完成真实三主节点 Cluster：9 键跨三个 primary、service SET/GET、opaque cursor 完整有界 SCAN、16384 slots、primary-only analysis 与真实 `CROSSSLOT` 均通过；缺少 launcher 环境变量的 ignored 用例会明确失败且不连接用户地址。
+- CLI 污染探针确认共享 `ClusterConnection` clone 会让 `MULTI` 污染 service GET；已在 CLI 和 Workbench single/batch 发送前统一拒绝 Cluster socket 状态命令。真实回归确认拒绝后所有 primary 保持 baseline，普通 CLI SET/GET 正常。
+- 驱动 SlowLog 路由探针显示 GET/RESET 与 CONFIG SET 涉及 AllNodes、CONFIG GET 随机；按节点作用域合同将 Cluster typed SlowLog 四端点和 publish PubSub 统一门控，逐节点副作用回归通过，UI 不再自动请求。
+- SSH/auth/commands 测试夹具改为平台原生绝对路径且保留相对路径拒绝；三平台 CI workflow 已配置，但尚未在 GitHub CI 或 Windows/Linux 本机运行。
+- 非 Cloud 扫描已精确覆盖 RDI、Copilot、Telemetry/Analytics 与远程插件并通过正反例；README、范围与差异矩阵已更新为当前第一批边界。
+- 最终完整证据：frontend 35 文件 297 项通过；Rust 362 项通过、29 项默认 ignored；本地 Redis 7 个真实流程通过、另 3 个 Stack 流程 early-skip；Cluster launcher 6 项单测和 2 个真实流程通过；Web build、范围扫描、格式、diff 与 macOS 离线 native no-bundle 构建均通过。
+- 未运行 GitHub CI、Windows/Linux 原生测试、真实 sshd、真实 TLS/mTLS、Redis Stack 或 native UI E2E；CI 配置和 skip 均未记为实际通过。完整证据见 `.superpowers/sdd/2026-09-01-connection-topology/task-10-report.md`。
 
 ## Session: 2026-08-24 — Task 13 第一批非 Cloud 能力交付
 

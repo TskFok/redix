@@ -16,6 +16,33 @@ const EXCLUDED_ENTRY_PATTERNS = [
     "cloud database discovery",
     /\bcloud\s+database\s+discovery\b/gi,
   ],
+  [
+    "rdi entry",
+    /\brdi(?:[-_/](?:pipeline|instances?|statistics|client|api))\b/gi,
+  ],
+  ["redis data integration", /\bredis\s+data\s+integration\b/gi],
+  [
+    "copilot entry",
+    /\b(?:redis[-_/ ]+)?copilot(?:[-_/](?:service|client|api|panel))?\b/gi,
+  ],
+  [
+    "segment analytics dependency",
+    /@(?:types\/segment-analytics|segment\/analytics(?:-next)?)\b/gi,
+  ],
+  [
+    "sentry telemetry dependency",
+    /@sentry\/(?:browser|react|core|tauri)\b/gi,
+  ],
+  ["analytics event endpoint", /\banalytics\/send-(?:event|page)\b/gi],
+  ["telemetry entry", /\btelemetry[-_/](?:event|service|client|sdk)\b/gi],
+  [
+    "remote plugin entry",
+    /\bremote[-_/]plugin(?:[-_/](?:runtime|client|service))?\b/gi,
+  ],
+  [
+    "plugin marketplace entry",
+    /\bplugin[-_/]marketplace(?:[-_/](?:runtime|client|service))?\b/gi,
+  ],
 ];
 
 const PRODUCT_PATHS = ["src", "src-tauri/src", "package.json"];

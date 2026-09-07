@@ -763,6 +763,12 @@ mod tests {
         .unwrap()
     }
 
+    fn absolute_test_path(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(name);
+        assert!(path.is_absolute());
+        path
+    }
+
     fn endpoint(host: &str, port: u16) -> ConnectionEndpoint {
         ConnectionEndpoint {
             host: host.into(),
@@ -889,7 +895,11 @@ mod tests {
             ssh_password: Some("password-secret".into()),
             ssh_private_key: Some("inline-private-key".into()),
             ssh_passphrase: Some("key-passphrase".into()),
-            ssh_identity_file: Some("/secret/identity".into()),
+            ssh_identity_file: Some(
+                absolute_test_path("unused-identity")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             ..Default::default()
         };
         assert_eq!(
@@ -914,15 +924,16 @@ mod tests {
 
     #[test]
     fn private_key_file_is_used_only_when_inline_key_is_absent() {
+        let identity = absolute_test_path("redix-identity");
         let secrets = ConnectionSecrets {
-            ssh_identity_file: Some("/secret/identity".into()),
+            ssh_identity_file: Some(identity.to_string_lossy().into_owned()),
             ssh_passphrase: Some("key-passphrase".into()),
             ..Default::default()
         };
         assert_eq!(
             select_auth(&ssh_config(SshAuthMethod::PrivateKey), &secrets),
             Ok(AuthSelection::PrivateKeyFile {
-                identity_file: Path::new("/secret/identity"),
+                identity_file: identity.as_path(),
                 passphrase: Some("key-passphrase"),
             })
         );
@@ -933,7 +944,11 @@ mod tests {
         let mut config = ssh_config(SshAuthMethod::Agent);
         config.has_identity_file = true;
         let secrets = ConnectionSecrets {
-            ssh_identity_file: Some("/secret/migrated-identity".into()),
+            ssh_identity_file: Some(
+                absolute_test_path("migrated-identity")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
             ssh_passphrase: Some("key-passphrase".into()),
             ..Default::default()
         };
@@ -960,28 +975,33 @@ mod tests {
 
     #[test]
     fn secret_paths_precede_defaults_and_legacy_profile_paths_are_ignored() {
+        let legacy_identity = absolute_test_path("legacy-identity");
+        let legacy_known_hosts = absolute_test_path("legacy-known-hosts");
+        let identity = absolute_test_path("secret-identity");
+        let known_hosts = absolute_test_path("secret-known-hosts");
+        let home = absolute_test_path("home");
         let mut config = ssh_config(SshAuthMethod::PrivateKey);
-        config.legacy_identity_file = Some("/profile/identity".into());
-        config.legacy_known_hosts_file = Some("/profile/known_hosts".into());
+        config.legacy_identity_file = Some(legacy_identity.to_string_lossy().into_owned());
+        config.legacy_known_hosts_file = Some(legacy_known_hosts.to_string_lossy().into_owned());
         let secrets = ConnectionSecrets {
-            ssh_identity_file: Some("/secret/identity".into()),
-            ssh_known_hosts_file: Some("/secret/known_hosts".into()),
+            ssh_identity_file: Some(identity.to_string_lossy().into_owned()),
+            ssh_known_hosts_file: Some(known_hosts.to_string_lossy().into_owned()),
             ..Default::default()
         };
         assert_eq!(
             select_auth(&config, &secrets),
             Ok(AuthSelection::PrivateKeyFile {
-                identity_file: Path::new("/secret/identity"),
+                identity_file: identity.as_path(),
                 passphrase: None,
             })
         );
         assert_eq!(
-            select_known_hosts_path(&secrets, Some(Path::new("/home/user"))),
-            Ok(PathBuf::from("/secret/known_hosts"))
+            select_known_hosts_path(&secrets, Some(home.as_path())),
+            Ok(known_hosts)
         );
         assert_eq!(
-            select_known_hosts_path(&ConnectionSecrets::default(), Some(Path::new("/home/user"))),
-            Ok(PathBuf::from("/home/user/.ssh/known_hosts"))
+            select_known_hosts_path(&ConnectionSecrets::default(), Some(home.as_path())),
+            Ok(home.join(".ssh").join("known_hosts"))
         );
         assert_eq!(
             select_known_hosts_path(&ConnectionSecrets::default(), None),
@@ -991,10 +1011,15 @@ mod tests {
 
     #[test]
     fn relative_or_control_character_secret_paths_fail_closed() {
-        for path in ["relative/key", "/secret/key\nother"] {
+        let home = absolute_test_path("home");
+        let invalid_absolute = format!(
+            "{}\nother",
+            absolute_test_path("invalid-key").to_string_lossy()
+        );
+        for path in ["relative/key".to_owned(), invalid_absolute] {
             let secrets = ConnectionSecrets {
-                ssh_identity_file: Some(path.into()),
-                ssh_known_hosts_file: Some(path.into()),
+                ssh_identity_file: Some(path.clone()),
+                ssh_known_hosts_file: Some(path),
                 ..Default::default()
             };
             assert_eq!(
@@ -1002,7 +1027,7 @@ mod tests {
                 Err(AppError::SshTunnelFailed)
             );
             assert_eq!(
-                select_known_hosts_path(&secrets, Some(Path::new("/home/user"))),
+                select_known_hosts_path(&secrets, Some(home.as_path())),
                 Err(AppError::SshTunnelFailed)
             );
         }

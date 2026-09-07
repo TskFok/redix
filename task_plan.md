@@ -631,3 +631,15 @@ complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust doma
 |---|---:|---|
 | 检查可用 SSH crate 时，zsh 对不存在的 `russh-*` glob 报 `no matches found` | 1 | 已确认缓存仅发现 `ssh2 0.9.5`；后续使用解析出的精确目录或 `rg --files`，不再传入未匹配 glob |
 | 首次暂存规划文档时桌面沙箱禁止创建 `.git/index.lock` | 1 | 按权限流程仅对明确的 `git add` 目标提权，暂存成功；未扩大文件范围 |
+
+### Task 10：隔离 Cluster、三平台 CI、范围文档与完整验收（2026-09-07）
+
+- [x] 先写真实 Cluster 集成测试并验证缺少 launcher 环境变量时明确失败，不连接用户 Redis
+- [x] 先写 launcher 安全单元测试，再实现随机六端口、三子进程、INFO PID 核验、环境清理和仅清理自身资源
+- [x] 在隔离 Cluster 实证键跨 primary、RedisService 读写、完整 opaque SCAN、16384 slots、primary-only analysis、真实 CROSS_SLOT 与 CLI 状态命令语义
+- [x] 修正受影响 SSH/auth/commands 测试为平台原生绝对路径，保持生产绝对路径校验并覆盖相对路径拒绝
+- [x] 先补非 Cloud 扫描器 RED 正反例，再精确排除 RDI、Copilot、Telemetry/Analytics 与远程插件入口/依赖
+- [x] 增加 macOS/Windows/Ubuntu CI 配置，只记录实际本地证据，不把配置或 skip 记为平台通过
+- [x] 同步 README、scope、matrix 与根 planning 文件；运行 focused 和完整一次验收矩阵
+- [x] 自审差异、写 Task10 报告并用简体中文提交必要文件
+- **Status:** complete（基线 `30b1ec9`，当前 `main`；仅第一批连接与拓扑收口，后续五批仍待实施）

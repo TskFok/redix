@@ -12,6 +12,14 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
+it("Cluster CLI 说明普通键槽路由并明确禁用连接状态命令", async () => {
+  render(<CliPage connectionId="cluster" database={0} isCluster />);
+
+  expect(await screen.findByText(/Cluster 普通命令按键槽路由/)).toBeInTheDocument();
+  expect(screen.getByText(/不支持 MULTI\/EXEC、WATCH、SELECT/)).toBeInTheDocument();
+  expect(screen.getByText(/订阅与 MONITOR 在 Cluster 中不支持/)).toBeInTheDocument();
+});
+
 it("嵌套 RESP 结果格式化膨胀后受单项输出限制且不会清空旧历史", async () => {
   let nested: unknown = Array.from({ length: 20_000 }, () => 1);
   for (let index = 0; index < 60; index += 1) nested = [nested];

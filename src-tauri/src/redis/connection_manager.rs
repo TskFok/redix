@@ -573,6 +573,19 @@ impl RedisService {
         Ok(self.active_snapshot(connection_id).await?.0.target)
     }
 
+    async fn ensure_node_scoped_feature_supported(
+        &self,
+        connection_id: &str,
+    ) -> Result<(), AppError> {
+        if matches!(
+            self.connection_target(connection_id).await?,
+            ConnectionTarget::Cluster(_)
+        ) {
+            return Err(AppError::UnsupportedFeature);
+        }
+        Ok(())
+    }
+
     pub async fn routed_connection(
         &self,
         connection_id: &str,
@@ -1157,6 +1170,8 @@ impl RedisOperations for RedisService {
 
     async fn get_slow_logs(&self, input: GetSlowLogsInput) -> Result<Vec<SlowLogEntry>, AppError> {
         input.validate()?;
+        self.ensure_node_scoped_feature_supported(&input.connection_id)
+            .await?;
         let mut connection = self.connection(&input.connection_id).await?;
         let count = if input.count == -1 {
             let config = get_slow_log_config_with_connection(&mut connection).await?;
@@ -1175,6 +1190,8 @@ impl RedisOperations for RedisService {
 
     async fn clear_slow_logs(&self, connection_id: &str) -> Result<(), AppError> {
         validate_connection_id(connection_id)?;
+        self.ensure_node_scoped_feature_supported(connection_id)
+            .await?;
         let mut connection = self.connection(connection_id).await?;
         ::redis::cmd("SLOWLOG")
             .arg("RESET")
@@ -1186,6 +1203,8 @@ impl RedisOperations for RedisService {
 
     async fn get_slow_log_config(&self, connection_id: &str) -> Result<SlowLogConfig, AppError> {
         validate_connection_id(connection_id)?;
+        self.ensure_node_scoped_feature_supported(connection_id)
+            .await?;
         let mut connection = self.connection(connection_id).await?;
         get_slow_log_config_with_connection(&mut connection).await
     }
@@ -1195,6 +1214,8 @@ impl RedisOperations for RedisService {
         input: UpdateSlowLogConfigInput,
     ) -> Result<SlowLogConfig, AppError> {
         input.validate()?;
+        self.ensure_node_scoped_feature_supported(&input.connection_id)
+            .await?;
         let mut connection = self.connection(&input.connection_id).await?;
         if let Some(value) = input.slowlog_max_len {
             ::redis::cmd("CONFIG")
@@ -1219,6 +1240,8 @@ impl RedisOperations for RedisService {
 
     async fn publish_pub_sub(&self, input: PublishPubSubInput) -> Result<u64, AppError> {
         input.validate()?;
+        self.ensure_node_scoped_feature_supported(&input.connection_id)
+            .await?;
         let mut connection = self.connection(&input.connection_id).await?;
         let receivers = ::redis::cmd("PUBLISH")
             .arg(&input.channel)
@@ -2456,6 +2479,7 @@ async fn execute_tokenized_command(
     input: &str,
 ) -> Result<CommandResult, AppError> {
     let arguments = tokenize_command(input)?;
+    connection.validate_user_command(&arguments)?;
     let mut command = ::redis::cmd(&arguments[0]);
     command.arg(&arguments[1..]);
     let value: Value = command

@@ -98,6 +98,7 @@ impl CliManager {
             return Err(AppError::ConnectionFailed);
         }
         let connection = socket.as_mut().ok_or(AppError::ConnectionFailed)?;
+        connection.validate_user_command(&args)?;
         let mut command = redis::cmd(&args[0]);
         command.arg(&args[1..]);
         let response = tokio::select! {

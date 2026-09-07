@@ -129,6 +129,60 @@ impl RoutedConnection {
             Self::Cluster(_) => {}
         }
     }
+
+    pub(crate) fn validate_user_command(&self, arguments: &[String]) -> Result<(), AppError> {
+        if matches!(self, Self::Cluster(_)) {
+            validate_cluster_user_command(arguments)?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_cluster_user_command(arguments: &[String]) -> Result<(), AppError> {
+    let name = arguments
+        .first()
+        .map(|value| value.to_ascii_uppercase())
+        .ok_or(AppError::InvalidInput)?;
+    let subcommand = arguments
+        .get(1)
+        .map(|value| value.to_ascii_uppercase())
+        .unwrap_or_default();
+    let blocked = matches!(
+        name.as_str(),
+        "MULTI"
+            | "EXEC"
+            | "DISCARD"
+            | "WATCH"
+            | "UNWATCH"
+            | "AUTH"
+            | "HELLO"
+            | "SELECT"
+            | "QUIT"
+            | "RESET"
+            | "READONLY"
+            | "READWRITE"
+            | "ASKING"
+            | "SUBSCRIBE"
+            | "PSUBSCRIBE"
+            | "SSUBSCRIBE"
+            | "UNSUBSCRIBE"
+            | "PUNSUBSCRIBE"
+            | "SUNSUBSCRIBE"
+            | "MONITOR"
+            | "SYNC"
+            | "PSYNC"
+            | "REPLCONF"
+    ) || (name == "CLIENT"
+        && matches!(
+            subcommand.as_str(),
+            "REPLY" | "TRACKING" | "CACHING" | "SETNAME" | "SETINFO" | "NO-EVICT" | "NO-TOUCH"
+        ))
+        || (name == "SCRIPT" && subcommand == "DEBUG");
+    if blocked {
+        Err(AppError::UnsupportedFeature)
+    } else {
+        Ok(())
+    }
 }
 
 impl ConnectionLike for RoutedConnection {
@@ -206,5 +260,62 @@ mod tests {
         }
 
         let _ = compile_task5_call;
+    }
+
+    #[test]
+    fn cluster_user_commands_reject_socket_state_without_blocking_read_only_client_commands() {
+        for raw in [
+            "multi",
+            "'EXEC'",
+            "Discard",
+            "WATCH key",
+            "UNWATCH",
+            "AUTH password",
+            "HELLO 3",
+            "SELECT 0",
+            "QUIT",
+            "RESET",
+            "READONLY",
+            "READWRITE",
+            "ASKING",
+            "SUBSCRIBE topic",
+            "PSUBSCRIBE *",
+            "SSUBSCRIBE topic",
+            "UNSUBSCRIBE topic",
+            "PUNSUBSCRIBE *",
+            "SUNSUBSCRIBE topic",
+            "MONITOR",
+            "SYNC",
+            "PSYNC ? -1",
+            "REPLCONF ACK 1",
+            "CLIENT REPLY OFF",
+            "CLIENT TRACKING ON",
+            "CLIENT CACHING YES",
+            "CLIENT SETNAME redix",
+            "CLIENT SETINFO LIB-NAME redix",
+            "CLIENT NO-EVICT ON",
+            "CLIENT NO-TOUCH ON",
+            "SCRIPT DEBUG YES",
+        ] {
+            let args = crate::redis::tokenize_command(raw).unwrap();
+            assert_eq!(
+                validate_cluster_user_command(&args),
+                Err(AppError::UnsupportedFeature),
+                "{raw}"
+            );
+        }
+
+        for raw in [
+            "GET key",
+            "SET key value",
+            "CLIENT ID",
+            "CLIENT INFO",
+            "CLIENT LIST",
+            "CLIENT GETNAME",
+            "SCRIPT EXISTS deadbeef",
+        ] {
+            let args = crate::redis::tokenize_command(raw).unwrap();
+            assert!(validate_cluster_user_command(&args).is_ok(), "{raw}");
+        }
     }
 }

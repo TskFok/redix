@@ -4,8 +4,9 @@
 
 ## 允许项
 
-- 自管理 Redis Standalone TCP/TLS、Sentinel 主节点发现/重连和受限 OpenSSH 隧道连接；SSH 仅支持 macOS/Linux 的 Standalone 非 TLS，严格 known_hosts，使用 ssh-agent/identity file，无交互密码；认证后的私有控制 socket 确认转发成功。
-- 连接配置导入导出；普通导出只包含可迁移 profile 元数据，不包含密码、CA PEM、客户端证书或私钥。
+- 自管理 Redis Standalone、Sentinel 与 Cluster DB 0；Cluster 支持普通命令 slot 路由、跨 primary 的完整 `SCAN`、拓扑摘要和 primary-only Database Analysis。
+- `ssh2` transport 使用严格 known_hosts，支持 Agent、Password、内存 PrivateKey 和本机 identity file；Standalone/Sentinel 可与 TLS 组合并保留原目标 SNI。Cluster+SSH 禁用。
+- 连接配置导入导出；普通导出只包含可迁移 profile 元数据，不包含密码、CA PEM、客户端证书、SSH 私钥/口令或 SSH 本机路径。
 - 使用系统钥匙串保存本地连接密码；前端 DTO 和连接列表不暴露密码。
 - Standalone TLS 的启用/关闭、服务端证书校验、自定义 CA 和 mTLS；TLS 材料继续保存在本机安全存储，不写普通 JSON 文档。
 - Browser 使用 `SCAN`、`MATCH`、`COUNT` 分页列出键，并读取键类型、TTL 和值。
@@ -19,22 +20,21 @@
 - RedisSearch / Query 第一批本地能力：在检测到 Search 2.0+ 时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引管理、受限的 `FT.SEARCH ... LIMIT` 分页查询（默认 NOCONTENT，可选择返回文档字段）和 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 分页，以及 Browser Hash/JSON 键详情中的索引关联摘要；输入、索引数量、结果数量和响应大小均有固定上限，查询文本不持久化。模块缺失或版本不满足时仅 Search / Query 工作区局部降级。
 - Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
 - Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
-- 独立 CLI 使用专用持久 socket，保留 MULTI/EXEC、WATCH 和 SELECT 状态；与 Browser 隔离，离开页面、关闭主连接或切库时清理。每条命令 5 秒超时、无自动重试，最多 16 会话、16 KiB 命令、256 KiB 单次展示输出与 200 条/2 MiB 前端记录；不持久化命令或输出。
+- Standalone/Sentinel CLI 使用专用持久 socket，保留 MULTI/EXEC、WATCH 和 SELECT 状态；Cluster CLI 只允许普通路由命令，事务、认证/协议切换、数据库选择、订阅、复制、连接模式和 `SCRIPT DEBUG` 等会话状态命令在网络发送前返回 `UNSUPPORTED_FEATURE`。Workbench single/batch 使用相同的 Cluster 门控。
 - Database 工作区读取本地实例与数据库键空间概览，并支持安全的数据库切换；指标不可用时按字段降级，不暴露 Redis 原始错误。
 - Instance 详情按 INFO 分组展示客户端、内存、统计、持久化、复制指标及 commandstats；全部为当前连接的只读请求。
-- Database Analysis 仅支持当前本地 Standalone 数据库的显式触发扫描：使用 `SCAN` 与固定批次 pipeline 汇总键空间、内存和过期时间；默认上限为 100000 个键，不会因连接或进入页面自动开始。报告默认不落盘，用户可在键名敏感提示后显式保存到版本化本机 JSON；历史按连接和数据库隔离，每库最多 20 条、全局最多 50 条，支持查看、删除和相同参数观察值比较。
+- Database Analysis 是显式触发的有界 `SCAN`/pipeline 汇总；Cluster 仅汇总 primary 节点并报告失败节点，Standalone/Sentinel 保持当前数据库语义。报告默认不落盘，用户可在键名敏感提示后显式保存到版本化本机 JSON；历史按连接和数据库隔离，每库最多 20 条、全局最多 50 条。
 - Query Library 使用版本化 `query-library.json` 保存普通 Redis 命令，支持新增、编辑、删除、搜索和回填 Workbench；敏感命令不保存。
 - 设置使用版本化 `settings.json` 保存主题、结果格式、Browser 扫描数量和批量命令遇错策略，Rust 与前端均执行范围校验。
-- Slow Log 支持读取、清空和 `slowlog-max-len`/`slowlog-log-slower-than` 配置；Redis 回复解析兼容 RESP2 数组和 RESP3 Map。
-- Pub/Sub 支持 Standalone channel/pattern 订阅、发布、停止和实时 Tauri 事件；每个连接最多一个订阅会话，前端最多保留 5000 条消息，并在关闭/切库/卸载时清理任务。
-- Profiler 支持 Standalone 独立 `MONITOR` socket、启动/停止、实时命令事件和前端展示；每个连接最多一个会话，前端最多保留 10000 条事件，并在关闭/切库/卸载时清理任务；启动前显示性能风险提示。
+- Slow Log 在 Standalone/Sentinel 支持读取、清空和配置；Cluster typed 四端点在网络操作前拒绝，避免把驱动的随机/全节点回复误称为明确节点作用域。
+- Pub/Sub 与 Profiler 在 Standalone/Sentinel 使用独立可取消 socket/transport；Cluster 的 typed 订阅、发布和 Profiler 明确拒绝。命令工作台原生命令仅遵循驱动路由，不提供跨节点保证。
 - React/Tauri 本地 UI、前端测试、Rust 单元测试和本地构建工具链。
 
 ## 排除项与尚未覆盖能力
 
-- Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry 及其他云托管 Redis 产品。
+- Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics 及其他云托管 Redis 产品。
 - 云登录、云账户、云 SDK、云 API、云端点和云数据库发现。
-- 尚未实现 Cluster、跨节点拓扑 fan-out、Sentinel 无缝故障转移、SSH 密码认证及 SSH+TLS/Sentinel 组合；云资源管理仍不属于产品入口。
+- 尚未实现 Cluster+SSH、Cluster typed Slow Log/PubSub/Profiler、Sentinel 无缝故障迁移，以及拓扑 DTO 中每节点 version/mode/totalkeys 等目标额外指标。
 - 尚未实现的 Redis 模块专用数据类型、模块查询、模块可视化和模块编辑器（RedisJSON 根文档/路径第一批、RedisSearch / Query、Array、Vector Set 与 Stream 基础能力除外）。
 - Stream 实时消费、阻塞式 `XREADGROUP`、`XAUTOCLAIM`、高级 Claim FORCE/IDLE/RETRYCOUNT 选项、Profiler 自动历史持久化和拓扑 fan-out。
 - Monaco、远程插件、远程插件运行时、云端命令目录和 SQL。
@@ -68,13 +68,16 @@ git diff --check
 
 ```bash
 npm run test:redis:local
+npm run test:redis:cluster
 cargo test --manifest-path src-tauri/Cargo.toml --test cli --test sentinel -- --ignored --nocapture --test-threads=1
 cargo test --manifest-path src-tauri/Cargo.toml --lib redis::ssh::tests -- --ignored --nocapture --test-threads=1
 ```
 
-`test:redis:local` 同时覆盖普通 Redis 基础流程、大集合分页与原位写入、Stream 分页与增量消息操作；每个新增专项测试都会校验临时实例 PID，避免写入用户已有 Redis。
+`test:redis:local` 覆盖普通 Redis 的 7 个实际流程，另有 3 个 Redis Stack 流程在缺少环境变量时只记录 early-skip。`test:redis:cluster` 先运行 launcher 安全单测，再随机保留三组 client/cluster-bus 端口，启动三个仅 loopback 的 owned Redis 子进程；`CLUSTER CREATE` 前后均用 `INFO` 校验 PID，且只清理自身子进程和临时目录，不继承用户的 `REDIX_TEST_REDIS*` 地址。
 
-CLI/Sentinel 需要 `redis-server`；SSH 需要 `ssh`、`sshd`、`ssh-keygen`，可通过 `REDIX_TEST_SSHD_BIN` 指定测试用 sshd 路径。SSH 本机验证不代表已通过 Linux/Windows 原生端到端测试。
+CLI/Sentinel 需要 `redis-server`。真实 SSH fixture 位于 `src-tauri/tests/ssh.rs`，使用外部隔离 SSH/Redis 服务的 `REDIX_TEST_SSH_HOST`、`REDIX_TEST_SSH_PORT`、`REDIX_TEST_SSH_USERNAME`、`REDIX_TEST_SSH_KNOWN_HOSTS`、Redis host/port 及所选认证字段；本轮未运行真实 sshd fixture。SSH 单元测试不代表已通过 Linux/Windows 原生端到端测试。
+
+`.github/workflows/cross-platform.yml` 配置 macOS、Windows、Ubuntu 的前端、Rust、Web 与 native no-bundle 构建；macOS/Linux 安装 Redis 后执行隔离网络流程，Windows 显式跳过缺少 Redis 可执行文件的流程。CI 配置不等于 CI 已运行，本轮本机结果只代表 macOS。
 
 ### Redis Stack 集成补充
 

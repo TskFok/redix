@@ -333,7 +333,7 @@ export default function App() {
             />
           ) : null}
           {activeProfile && activeSection === "cli" ? (
-            <CliPage connectionId={activeProfile.id} database={activeProfile.database} />
+            <CliPage connectionId={activeProfile.id} database={activeProfile.database} isCluster={Boolean(activeProfile.cluster)} />
           ) : null}
           {activeProfile && activeSection === "database-analysis" ? (
             <DatabaseAnalysisPage
