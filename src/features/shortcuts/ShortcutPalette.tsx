@@ -111,8 +111,12 @@ export default function ShortcutPalette({ actions }: { actions: ShortcutAction[]
   return <>
     <button ref={trigger} type="button" className="button button-quiet shortcuts-trigger"
       aria-label="快捷键与操作" aria-haspopup="dialog" aria-expanded={opened}
-      aria-keyshortcuts="Control+k Meta+k" onClick={open}>
-      快捷键与操作 <kbd>Ctrl/Cmd+K</kbd>
+      aria-keyshortcuts="Control+k Meta+k" title="快捷键与操作 (Ctrl/Cmd+K)" onClick={open}>
+      <svg className="shortcuts-trigger-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <rect x="3" y="6" width="18" height="12" rx="2" />
+        <path d="M7 10h1m3 0h1m3 0h2M7 14h1m3 0h6" />
+      </svg>
+      <span className="shortcuts-trigger-label">快捷键与操作</span> <kbd>Ctrl/Cmd+K</kbd>
     </button>
     {opened && <div className="shortcuts-backdrop" onMouseDown={(event) => {
       if (event.target === event.currentTarget) { event.preventDefault(); close(); }

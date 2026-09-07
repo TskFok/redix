@@ -90,20 +90,6 @@ const navigationItems: NavigationItem[] = [
   },
 ];
 
-const sectionDescriptions: Record<AppSection, string> = {
-  connections: "保存并管理本地 Redis 实例",
-  browser: "使用 SCAN 浏览键和值",
-  "search-query": "管理 RedisSearch 索引并查询键",
-  workbench: "直接执行 Redis 命令并查看返回值",
-  cli: "独立持久连接与事务会话",
-  database: "查看实例指标和数据库键空间",
-  "database-analysis": "显式扫描并汇总键空间与内存",
-  observability: "查看 Slow Log、Pub/Sub 和 Profiler",
-  topology: "查看 Cluster 节点、槽位和运行状态",
-  "query-library": "保存命令并回填 Workbench",
-  settings: "调整主题和工作区偏好",
-};
-
 const navigationShortcuts: Partial<Record<AppSection, ShortcutAction["shortcut"]>> = {
   connections: { key: "1", label: "Ctrl/Cmd+1" },
   browser: { key: "2", label: "Ctrl/Cmd+2" },
@@ -320,6 +306,10 @@ export default function App() {
           })}
         </nav>
 
+        <div className="app-sidebar-actions">
+          <ShortcutPalette actions={shortcutActions} />
+        </div>
+
         <div className="app-sidebar-footer">
           <span className="app-status-dot" aria-hidden="true" />
           <span>本地模式</span>
@@ -328,30 +318,6 @@ export default function App() {
       </aside>
 
       <section className="app-main">
-        <header className="app-header">
-          <div className="app-header-title">
-            <p className="app-kicker">REDIX / LOCAL DATA TOOL</p>
-            <p className="app-header-name">{currentSection.label}</p>
-            <p>{sectionDescriptions[currentSection.id]}</p>
-          </div>
-          <div className="app-header-context">
-            <ShortcutPalette actions={shortcutActions} />
-            <span
-              className={`connection-indicator${
-                activeProfile ? " connection-indicator-active" : ""
-              }`}
-            >
-              <span className="connection-indicator-dot" aria-hidden="true" />
-              {activeProfile ? "已连接" : "未连接"}
-            </span>
-            <span className="app-version">
-              {activeProfile
-                ? `${activeProfile.name} · ${connectionAddress(activeProfile)}`
-                : "选择一个 Redis 实例开始"}
-            </span>
-          </div>
-        </header>
-
         <section ref={workspace} className="workspace" aria-label="当前工作区">
           {showConnectionPage ? (
             <ConnectionPage onOpenConnection={handleOpenConnection} />
