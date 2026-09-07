@@ -187,6 +187,18 @@ fn is_safe_endpoint_host(host: &str) -> bool {
 pub struct SaveConnectionInput {
     pub profile: ConnectionProfile,
     #[serde(default)]
+    pub ssh_password: Option<String>,
+    #[serde(default)]
+    pub ssh_private_key: Option<String>,
+    #[serde(default)]
+    pub ssh_passphrase: Option<String>,
+    #[serde(default)]
+    pub ssh_identity_file: Option<String>,
+    #[serde(default)]
+    pub ssh_known_hosts_file: Option<String>,
+    #[serde(default)]
+    pub clear_ssh_secrets: bool,
+    #[serde(default)]
     pub password: Option<String>,
     #[serde(default)]
     pub sentinel_password: Option<String>,

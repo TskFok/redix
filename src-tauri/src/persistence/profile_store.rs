@@ -32,6 +32,14 @@ pub fn migrate_legacy_ssh_paths(
         let Some(ssh) = profile.ssh.as_mut() else {
             continue;
         };
+        // Older releases encoded identity-file authentication as Agent + a badge.
+        // Make the method explicit before removing that transport compatibility rule.
+        if ssh.auth_method == crate::domain::SshAuthMethod::Agent
+            && (ssh.has_identity_file || ssh.legacy_identity_file.is_some())
+        {
+            ssh.auth_method = crate::domain::SshAuthMethod::PrivateKey;
+            changed = true;
+        }
         let Some(identity_file) = ssh.legacy_identity_file.clone() else {
             if ssh.legacy_known_hosts_file.is_none() {
                 continue;

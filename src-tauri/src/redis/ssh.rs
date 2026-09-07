@@ -76,17 +76,6 @@ fn select_auth<'a>(
     secrets: &'a ConnectionSecrets,
 ) -> Result<AuthSelection<'a>, AppError> {
     match config.auth_method {
-        SshAuthMethod::Agent if config.has_identity_file => {
-            let identity_file = secrets
-                .ssh_identity_file
-                .as_deref()
-                .filter(|value| valid_secret_path(Path::new(value)))
-                .ok_or(AppError::SshTunnelFailed)?;
-            Ok(AuthSelection::PrivateKeyFile {
-                identity_file: Path::new(identity_file),
-                passphrase: secrets.ssh_passphrase.as_deref(),
-            })
-        }
         SshAuthMethod::Agent => Ok(AuthSelection::Agent),
         SshAuthMethod::Password => secrets
             .ssh_password
@@ -940,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_agent_config_with_migrated_identity_keeps_identity_file_authentication() {
+    fn explicit_agent_auth_ignores_leftover_identity_material() {
         let mut config = ssh_config(SshAuthMethod::Agent);
         config.has_identity_file = true;
         let secrets = ConnectionSecrets {
@@ -948,13 +937,7 @@ mod tests {
             ssh_passphrase: Some("key-passphrase".into()),
             ..Default::default()
         };
-        assert_eq!(
-            select_auth(&config, &secrets),
-            Ok(AuthSelection::PrivateKeyFile {
-                identity_file: Path::new("/secret/migrated-identity"),
-                passphrase: Some("key-passphrase"),
-            })
-        );
+        assert_eq!(select_auth(&config, &secrets), Ok(AuthSelection::Agent));
     }
 
     #[test]

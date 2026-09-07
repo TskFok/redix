@@ -2,7 +2,7 @@ use crate::{
     domain::{
         validate_certificate_pem, validate_private_key_pem, ConnectionExportDocument,
         ConnectionImportFailure, ConnectionInfo, ConnectionProfile, ImportConnectionsInput,
-        ImportConnectionsResult, SaveConnectionInput, TestConnectionInput,
+        ImportConnectionsResult, SaveConnectionInput, SshAuthMethod, TestConnectionInput,
     },
     error::AppError,
     persistence::ConnectionSecrets,
@@ -239,6 +239,7 @@ fn resolve_secrets(
     old_secret: Option<&ConnectionSecrets>,
 ) -> Result<Option<ConnectionSecrets>, AppError> {
     let mut secrets = old_secret.cloned().unwrap_or_default();
+    resolve_ssh_secrets(profile, input, &mut secrets)?;
 
     if let Some(sentinel) = profile.sentinel.as_mut() {
         match input.sentinel_password.as_deref() {
@@ -364,6 +365,110 @@ fn resolve_secrets(
     }
 }
 
+fn resolve_ssh_secrets(
+    profile: &mut ConnectionProfile,
+    input: &SaveConnectionInput,
+    secrets: &mut ConnectionSecrets,
+) -> Result<(), AppError> {
+    validate_ssh_material(
+        [
+            &input.ssh_password,
+            &input.ssh_private_key,
+            &input.ssh_passphrase,
+        ],
+        [&input.ssh_identity_file, &input.ssh_known_hosts_file],
+    )?;
+    if input.clear_ssh_secrets || profile.ssh.is_none() {
+        secrets.ssh_password = None;
+        secrets.ssh_private_key = None;
+        secrets.ssh_passphrase = None;
+        secrets.ssh_identity_file = None;
+        secrets.ssh_known_hosts_file = None;
+    }
+    let Some(ssh) = profile.ssh.as_mut() else {
+        return Ok(());
+    };
+    // Local paths supplied in a profile are never an alternative to SecretStore.
+    ssh.legacy_identity_file = None;
+    ssh.legacy_known_hosts_file = None;
+    if let Some(path) = &input.ssh_known_hosts_file {
+        secrets.ssh_known_hosts_file = Some(path.clone());
+    }
+    match ssh.auth_method {
+        SshAuthMethod::Agent => {
+            secrets.ssh_password = None;
+            secrets.ssh_private_key = None;
+            secrets.ssh_identity_file = None;
+            secrets.ssh_passphrase = None;
+        }
+        SshAuthMethod::Password => {
+            secrets.ssh_private_key = None;
+            secrets.ssh_identity_file = None;
+            secrets.ssh_passphrase = None;
+            if let Some(password) = &input.ssh_password {
+                secrets.ssh_password = Some(password.clone());
+            }
+            if secrets.ssh_password.as_deref().is_none_or(str::is_empty) {
+                return Err(AppError::InvalidConnection);
+            }
+        }
+        SshAuthMethod::PrivateKey => {
+            secrets.ssh_password = None;
+            if let Some(key) = &input.ssh_private_key {
+                // ssh2 accepts OpenSSH, PEM and encrypted keys. TLS key validation
+                // is intentionally not used; ssh2 validates the selected key at authentication.
+                secrets.ssh_private_key = Some(key.clone());
+            }
+            if let Some(path) = &input.ssh_identity_file {
+                secrets.ssh_identity_file = Some(path.clone());
+            }
+            if let Some(passphrase) = &input.ssh_passphrase {
+                secrets.ssh_passphrase = Some(passphrase.clone());
+            }
+            if secrets.ssh_private_key.as_deref().is_none_or(str::is_empty)
+                && secrets.ssh_identity_file.is_none()
+            {
+                return Err(AppError::InvalidConnection);
+            }
+        }
+    }
+    validate_ssh_material(
+        [
+            &secrets.ssh_password,
+            &secrets.ssh_private_key,
+            &secrets.ssh_passphrase,
+        ],
+        [&secrets.ssh_identity_file, &secrets.ssh_known_hosts_file],
+    )?;
+    ssh.has_password = secrets.ssh_password.is_some();
+    ssh.has_private_key = secrets.ssh_private_key.is_some();
+    ssh.has_passphrase = secrets.ssh_passphrase.is_some();
+    ssh.has_identity_file = secrets.ssh_identity_file.is_some();
+    ssh.has_known_hosts_file = secrets.ssh_known_hosts_file.is_some();
+    Ok(())
+}
+
+fn validate_ssh_material(
+    payloads: [&Option<String>; 3],
+    paths: [&Option<String>; 2],
+) -> Result<(), AppError> {
+    const MAX_SSH_SECRET_BYTES: usize = 1024 * 1024;
+    for value in payloads.into_iter().flatten() {
+        if value.is_empty() || value.len() > MAX_SSH_SECRET_BYTES || value.contains('\0') {
+            return Err(AppError::InvalidInput);
+        }
+    }
+    for path in paths.into_iter().flatten() {
+        if path.len() > 4096
+            || !std::path::Path::new(path).is_absolute()
+            || path.chars().any(char::is_control)
+        {
+            return Err(AppError::InvalidInput);
+        }
+    }
+    Ok(())
+}
+
 fn restore_profile_and_secret(
     state: &AppState,
     profiles: &[ConnectionProfile],
@@ -399,6 +504,7 @@ pub async fn test_connection(
         None
     };
     let mut profile = input.profile.clone();
+    profile.validate()?;
     let secrets = resolve_secrets(&mut profile, &input, old_profile, old_secret.as_ref())?
         .unwrap_or_default();
     drop(transaction);
@@ -775,6 +881,12 @@ mod tests {
 
     fn save_input(profile: ConnectionProfile, password: Option<&str>) -> SaveConnectionInput {
         SaveConnectionInput {
+            ssh_password: None,
+            ssh_private_key: None,
+            ssh_passphrase: None,
+            ssh_identity_file: None,
+            ssh_known_hosts_file: None,
+            clear_ssh_secrets: false,
             sentinel_password: None,
             profile,
             password: password.map(str::to_owned),
@@ -784,6 +896,373 @@ mod tests {
             clear_ca_certificate: false,
             clear_client_certificate: false,
         }
+    }
+
+    fn ssh_request(auth: &str, fields: serde_json::Value) -> SaveConnectionInput {
+        let mut request = serde_json::json!({
+            "profile": profile("ssh-test", "SSH", false),
+        });
+        request["profile"]["ssh"] = serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "alice",
+            "auth_method": auth,
+        });
+        for (key, value) in fields.as_object().unwrap() {
+            request[key] = value.clone();
+        }
+        serde_json::from_value(request).unwrap()
+    }
+
+    #[tokio::test]
+    async fn ssh_save_request_persists_secrets_and_derives_flags_without_exposing_paths() {
+        let (state, profiles, secrets) = state_with(vec![], None);
+        let input = ssh_request(
+            "password",
+            serde_json::json!({
+                "ssh_password": "  password with whitespace  ",
+                "ssh_known_hosts_file": "/private/ssh/known_hosts"
+            }),
+        );
+        let saved = save_connection_inner(&state, input).await.unwrap();
+        let stored = secrets.read("ssh-test").unwrap().unwrap();
+        assert_eq!(
+            stored.ssh_password.as_deref(),
+            Some("  password with whitespace  ")
+        );
+        assert_eq!(
+            stored.ssh_known_hosts_file.as_deref(),
+            Some("/private/ssh/known_hosts")
+        );
+        assert!(saved.ssh.as_ref().unwrap().has_password);
+        assert!(saved.ssh.as_ref().unwrap().has_known_hosts_file);
+        assert!(!serde_json::to_string(&profiles.load().unwrap())
+            .unwrap()
+            .contains("/private/ssh"));
+        assert!(
+            !serde_json::to_string(&export_connections_inner(&state).await.unwrap())
+                .unwrap()
+                .contains("/private/ssh")
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_missing_auth_material_and_forged_flags_are_rejected() {
+        for auth in ["password", "private_key"] {
+            let (state, profiles, secrets) = state_with(vec![], None);
+            let mut input = ssh_request(auth, serde_json::json!({}));
+            let ssh = input.profile.ssh.as_mut().unwrap();
+            ssh.has_password = true;
+            ssh.has_private_key = true;
+            ssh.has_identity_file = true;
+            ssh.legacy_identity_file = Some("/private/untrusted-profile-key".into());
+            assert!(matches!(
+                save_connection_inner(&state, input).await,
+                Err(AppError::InvalidConnection)
+            ));
+            assert!(profiles.load().unwrap().is_empty());
+            assert!(secrets.read("ssh-test").unwrap().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn ssh_save_rejects_unsafe_paths_and_oversized_payloads() {
+        for fields in [
+            serde_json::json!({"ssh_identity_file": "relative/key"}),
+            serde_json::json!({"ssh_identity_file": "/private/key\tother"}),
+            serde_json::json!({"ssh_known_hosts_file": "/private/hosts\u{7f}"}),
+            serde_json::json!({"ssh_known_hosts_file": format!("/{}", "x".repeat(8192))}),
+            serde_json::json!({"ssh_private_key": "x".repeat(1024 * 1024 + 1)}),
+            serde_json::json!({"ssh_password": "x".repeat(1024 * 1024 + 1)}),
+        ] {
+            let (state, profiles, _) = state_with(vec![], None);
+            assert!(matches!(
+                save_connection_inner(&state, ssh_request("agent", fields)).await,
+                Err(AppError::InvalidInput)
+            ));
+            assert!(profiles.load().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn ssh_credentials_survive_omission_but_clear_replace_and_mode_switch_are_explicit() {
+        let (state, _, store) = state_with(vec![], None);
+        let first = ssh_request(
+            "private_key",
+            serde_json::json!({
+                "ssh_private_key": "-----BEGIN OPENSSH PRIVATE KEY-----\nfixture\n-----END OPENSSH PRIVATE KEY-----",
+                "ssh_passphrase": "  phrase  ", "ssh_identity_file": "/private/ssh/key",
+                "ssh_known_hosts_file": "/private/ssh/known_hosts", "password": "redis-password"
+            }),
+        );
+        let saved = save_connection_inner(&state, first).await.unwrap();
+        let original = store.read("ssh-test").unwrap().unwrap();
+        assert_eq!(original.ssh_passphrase.as_deref(), Some("  phrase  "));
+        assert!(original
+            .ssh_private_key
+            .as_deref()
+            .unwrap()
+            .contains("OPENSSH"));
+
+        let mut omitted = save_input(saved.clone(), None);
+        omitted.profile.ssh.as_mut().unwrap().has_private_key = false;
+        omitted.profile.ssh.as_mut().unwrap().has_identity_file = false;
+        save_connection_inner(&state, omitted).await.unwrap();
+        assert_eq!(store.read("ssh-test").unwrap().unwrap(), original);
+
+        let mut replacement = ssh_request(
+            "private_key",
+            serde_json::json!({
+                "clear_ssh_secrets": true, "ssh_identity_file": "/private/ssh/replacement"
+            }),
+        );
+        replacement.profile.has_password = true;
+        let replaced = save_connection_inner(&state, replacement).await.unwrap();
+        let stored = store.read("ssh-test").unwrap().unwrap();
+        assert!(stored.ssh_private_key.is_none());
+        assert!(stored.ssh_passphrase.is_none());
+        assert!(stored.ssh_known_hosts_file.is_none());
+        assert_eq!(
+            stored.ssh_identity_file.as_deref(),
+            Some("/private/ssh/replacement")
+        );
+        assert_eq!(stored.password.as_deref(), Some("redis-password"));
+
+        let mut agent = save_input(replaced, None);
+        agent.profile.ssh.as_mut().unwrap().auth_method = SshAuthMethod::Agent;
+        let agent = save_connection_inner(&state, agent).await.unwrap();
+        assert!(!agent.ssh.as_ref().unwrap().has_identity_file);
+        assert!(store
+            .read("ssh-test")
+            .unwrap()
+            .unwrap()
+            .ssh_identity_file
+            .is_none());
+
+        let mut disabled = save_input(saved, None);
+        disabled.profile.ssh = None;
+        store
+            .write(
+                "ssh-test",
+                &ConnectionSecrets {
+                    password: Some("redis-password".into()),
+                    ssh_password: Some("password".into()),
+                    ssh_private_key: Some("key".into()),
+                    ssh_passphrase: Some("phrase".into()),
+                    ssh_identity_file: Some("/private/key".into()),
+                    ssh_known_hosts_file: Some("/private/known_hosts".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        save_connection_inner(&state, disabled).await.unwrap();
+        let stored = store.read("ssh-test").unwrap().unwrap();
+        assert_eq!(stored.password.as_deref(), Some("redis-password"));
+        assert!(
+            stored.ssh_password.is_none()
+                && stored.ssh_private_key.is_none()
+                && stored.ssh_passphrase.is_none()
+                && stored.ssh_identity_file.is_none()
+                && stored.ssh_known_hosts_file.is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_failed_profile_write_restores_all_previous_secrets() {
+        let (state, profiles, secrets) = state_with(vec![], None);
+        save_connection_inner(
+            &state,
+            ssh_request(
+                "password",
+                serde_json::json!({
+                    "ssh_password": "old", "ssh_known_hosts_file": "/private/ssh/hosts"
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+        let old_profiles = profiles.load().unwrap();
+        let old_secrets = secrets.read("ssh-test").unwrap();
+        profiles.fail_next_saves(&[true, false]);
+        let result = save_connection_inner(
+            &state,
+            ssh_request(
+                "password",
+                serde_json::json!({
+                    "clear_ssh_secrets": true, "ssh_password": "new"
+                }),
+            ),
+        )
+        .await;
+        assert!(matches!(result, Err(AppError::PersistenceFailed)));
+        assert_eq!(profiles.load().unwrap(), old_profiles);
+        assert_eq!(secrets.read("ssh-test").unwrap(), old_secrets);
+    }
+
+    #[test]
+    fn ssh_test_ipc_resolves_new_material_and_never_persists_it() {
+        use tauri::Manager;
+        let (state, profiles, secrets) = state_with(vec![], None);
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .invoke_handler(tauri::generate_handler![save_connection, test_connection])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let invoke = |cmd: &str, input: &SaveConnectionInput| {
+            tauri::test::get_ipc_response(
+                &webview,
+                tauri::webview::InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: "tauri://localhost".parse().unwrap(),
+                    body: serde_json::json!({"input": input}).into(),
+                    headers: Default::default(),
+                    invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+                },
+            )
+        };
+        let initial = ssh_request("password", serde_json::json!({"ssh_password": "original"}));
+        invoke("save_connection", &initial).unwrap();
+        let original_profiles = profiles.load().unwrap();
+        let original_secrets = secrets.read("ssh-test").unwrap();
+
+        let cleared = ssh_request("password", serde_json::json!({"clear_ssh_secrets": true}));
+        assert_eq!(
+            invoke("test_connection", &cleared).unwrap_err()["code"],
+            "INVALID_CONNECTION"
+        );
+
+        // A local non-SSH peer makes service entry observable without an external SSH daemon.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accepted = Arc::new(AtomicBool::new(false));
+        let did_accept = accepted.clone();
+        let peer = std::thread::spawn(move || {
+            let (socket, _) = listener.accept().unwrap();
+            did_accept.store(true, Ordering::SeqCst);
+            socket.shutdown(std::net::Shutdown::Both).unwrap();
+        });
+        let mut replacement = ssh_request(
+            "password",
+            serde_json::json!({
+                "clear_ssh_secrets": true, "ssh_password": "replacement"
+            }),
+        );
+        let ssh = replacement.profile.ssh.as_mut().unwrap();
+        ssh.host = "127.0.0.1".into();
+        ssh.port = port;
+        assert_eq!(
+            invoke("test_connection", &replacement).unwrap_err()["code"],
+            "SSH_TUNNEL_FAILED"
+        );
+        peer.join().unwrap();
+        assert!(accepted.load(Ordering::SeqCst));
+        assert_eq!(profiles.load().unwrap(), original_profiles);
+        assert_eq!(secrets.read("ssh-test").unwrap(), original_secrets);
+        assert!(
+            app.state::<AppState>().profiles.load().unwrap()[0]
+                .ssh
+                .as_ref()
+                .unwrap()
+                .has_password
+        );
+    }
+
+    #[tokio::test]
+    async fn ssh_switching_modes_discards_unselected_material_without_clearing_other_credentials() {
+        let (state, _, store) = state_with(vec![], None);
+        let mut input = ssh_request(
+            "private_key",
+            serde_json::json!({"ssh_identity_file": "/private/key"}),
+        );
+        input.profile.has_password = true;
+        input.profile.tls = true;
+        input.profile.has_ca_certificate = true;
+        input.profile.ca_certificate_name = Some("CA".into());
+        store
+            .write(
+                "ssh-test",
+                &ConnectionSecrets {
+                    password: Some("redis".into()),
+                    ca_certificate: Some("CA".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        // Existing Redis/TLS metadata retain their own established save contract.
+        state.profiles.save(&[input.profile.clone()]).unwrap();
+        let saved = save_connection_inner(&state, input).await.unwrap();
+        let mut password = save_input(saved, None);
+        password.profile.ssh.as_mut().unwrap().auth_method = SshAuthMethod::Password;
+        password.ssh_password = Some("ssh".into());
+        let saved = save_connection_inner(&state, password).await.unwrap();
+        assert!(!saved.ssh.as_ref().unwrap().has_identity_file);
+        let mut agent = save_input(saved, None);
+        agent.profile.ssh.as_mut().unwrap().auth_method = SshAuthMethod::Agent;
+        agent.ssh_password = Some("ignored".into());
+        agent.ssh_identity_file = Some("/private/ignored".into());
+        agent.ssh_private_key = Some("ignored".into());
+        let saved = save_connection_inner(&state, agent).await.unwrap();
+        let ssh = saved.ssh.unwrap();
+        assert!(!ssh.has_password && !ssh.has_private_key && !ssh.has_identity_file);
+        let retained = store.read("ssh-test").unwrap().unwrap();
+        assert_eq!(retained.password.as_deref(), Some("redis"));
+        assert_eq!(retained.ca_certificate.as_deref(), Some("CA"));
+    }
+
+    #[tokio::test]
+    async fn ssh_failed_secret_write_restores_previous_material_and_clear_without_replacement_is_atomic(
+    ) {
+        let (state, profiles, secrets) = state_with(vec![], None);
+        save_connection_inner(
+            &state,
+            ssh_request("password", serde_json::json!({"ssh_password": "old"})),
+        )
+        .await
+        .unwrap();
+        let old_profiles = profiles.load().unwrap();
+        let old_secrets = secrets.read("ssh-test").unwrap();
+        secrets.fail_next_write_after_mutation();
+        assert!(matches!(
+            save_connection_inner(
+                &state,
+                ssh_request("password", serde_json::json!({"ssh_password": "new"}))
+            )
+            .await,
+            Err(AppError::PersistenceFailed)
+        ));
+        assert_eq!(profiles.load().unwrap(), old_profiles);
+        assert_eq!(secrets.read("ssh-test").unwrap(), old_secrets);
+        assert!(matches!(
+            save_connection_inner(
+                &state,
+                ssh_request("password", serde_json::json!({"clear_ssh_secrets": true}))
+            )
+            .await,
+            Err(AppError::InvalidConnection)
+        ));
+        assert_eq!(secrets.read("ssh-test").unwrap(), old_secrets);
+    }
+
+    #[tokio::test]
+    async fn ssh_retained_secret_paths_are_validated_before_save() {
+        let (state, profiles, secrets) = state_with(vec![], None);
+        secrets
+            .write(
+                "ssh-test",
+                &ConnectionSecrets {
+                    ssh_identity_file: Some("/private/key\tother".into()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            save_connection_inner(&state, ssh_request("private_key", serde_json::json!({}))).await,
+            Err(AppError::InvalidInput)
+        ));
+        assert!(profiles.load().unwrap().is_empty());
     }
 
     #[tokio::test]

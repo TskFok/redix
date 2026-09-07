@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::{domain::ClusterTopology, error::AppError, redis::RedisOperations, AppState};
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn get_cluster_topology(
     state: State<'_, AppState>,
     connection_id: String,
@@ -10,7 +10,7 @@ pub async fn get_cluster_topology(
     state.redis.get_cluster_topology(&connection_id).await
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn refresh_cluster_topology(
     state: State<'_, AppState>,
     connection_id: String,

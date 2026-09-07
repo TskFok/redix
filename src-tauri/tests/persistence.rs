@@ -430,6 +430,10 @@ fn legacy_ssh_paths_copy_to_secrets_before_profiles_are_rewritten() {
     let ssh = migrated[0].ssh.as_ref().unwrap();
     assert!(ssh.has_identity_file);
     assert!(ssh.has_known_hosts_file);
+    assert_eq!(
+        ssh.auth_method,
+        redix_lib::domain::SshAuthMethod::PrivateKey
+    );
     assert!(!serde_json::to_string(ssh).unwrap().contains("/private/"));
     let stored = secrets.read("local").unwrap().unwrap();
     assert_eq!(stored.ssh_identity_file.as_deref(), Some("/private/key"));
@@ -471,6 +475,44 @@ fn legacy_ssh_migration_does_not_rewrite_profiles_when_secret_copy_fails() {
         Err(AppError::PersistenceFailed)
     );
     assert_eq!(repository.load().unwrap(), vec![profile]);
+}
+
+#[test]
+fn already_copied_legacy_identity_auth_is_made_explicit_without_reading_profile_paths() {
+    let mut profile = valid_profile();
+    profile.ssh = Some(
+        serde_json::from_value(serde_json::json!({
+            "host": "bastion.example", "port": 22, "username": "operator",
+            "auth_method": "agent", "has_identity_file": true
+        }))
+        .unwrap(),
+    );
+    let repository = InMemoryProfileRepository::new(vec![profile]);
+    let secrets = InMemorySecretStore::default();
+    secrets
+        .write(
+            "local",
+            &ConnectionSecrets {
+                ssh_identity_file: Some("/private/key".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    migrate_legacy_ssh_paths(&repository, &secrets).unwrap();
+    let migrated = repository.load().unwrap();
+    assert_eq!(
+        migrated[0].ssh.as_ref().unwrap().auth_method,
+        redix_lib::domain::SshAuthMethod::PrivateKey
+    );
+    assert_eq!(
+        secrets
+            .read("local")
+            .unwrap()
+            .unwrap()
+            .ssh_identity_file
+            .as_deref(),
+        Some("/private/key")
+    );
 }
 
 #[test]

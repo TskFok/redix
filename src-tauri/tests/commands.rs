@@ -264,6 +264,40 @@ fn observability_commands_reach_redis_service_and_validate_inputs() {
 }
 
 #[test]
+fn topology_commands_accept_snake_case_connection_id_and_reach_service() {
+    let app = tauri::test::mock_builder()
+        .manage(AppState::new(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+        ))
+        .invoke_handler(tauri::generate_handler![
+            topology::get_cluster_topology,
+            topology::refresh_cluster_topology
+        ])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    for cmd in ["get_cluster_topology", "refresh_cluster_topology"] {
+        let error = tauri::test::get_ipc_response(
+            &webview,
+            tauri::webview::InvokeRequest {
+                cmd: cmd.into(),
+                callback: tauri::ipc::CallbackFn(0),
+                error: tauri::ipc::CallbackFn(1),
+                url: "tauri://localhost".parse().unwrap(),
+                body: serde_json::json!({"connection_id": "missing"}).into(),
+                headers: Default::default(),
+                invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+            },
+        )
+        .expect_err("missing active connection must return a service error");
+        assert_eq!(error["code"], "CONNECTION_FAILED", "{cmd}: {error}");
+    }
+}
+
+#[test]
 fn command_history_commands_isolate_connections_and_filter_sensitive_entries() {
     let directory = tempfile::tempdir().expect("history directory must be created");
     let app = tauri::test::mock_builder()
