@@ -1,5 +1,6 @@
 import BulkTaskPanel from "./features/tasks/BulkTaskPanel";
 import { useEffect, useRef, useState } from "react";
+import { version as appVersion } from "../package.json";
 
 import BrowserPage from "./features/browser/BrowserPage";
 import ConnectionPage from "./features/connections/ConnectionPage";
@@ -313,7 +314,7 @@ export default function App() {
         <div className="app-sidebar-footer">
           <span className="app-status-dot" aria-hidden="true" />
           <span>本地模式</span>
-          <small>v0.1.0 MVP</small>
+          <small>v{appVersion} MVP</small>
         </div>
       </aside>
 

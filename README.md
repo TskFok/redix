@@ -26,6 +26,7 @@ npm run tauri:dev
 
 ```bash
 npm run check:non-cloud
+npm run test:release
 npm run test:frontend
 npm run test:rust
 npm run test:redis:local # 需要 redis-server；自动创建并清理隔离实例
@@ -36,6 +37,23 @@ npm run tauri build
 ```
 
 原有的 `npm run tauri:build` 仍可使用。
+
+## 发布与清理
+
+```bash
+npm run release # 默认递增 patch，例如 0.1.0 → 0.1.1
+npm run release -- 0.2.0 # 发布指定的更高稳定版本
+npm run release -- --current # 强制重打并推送当前版本标签
+npm run clean # 清理构建产物与 Vite 缓存，保留已安装依赖
+```
+
+发布前必须保持工作区干净，且当前分支与 `origin` 上的同名分支完全同步。`release` 会检查各版本源一致性，运行发布脚本测试、前端测试、Rust 测试与构建检查；通过后同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和 `src-tauri/Cargo.lock`，以中文提交版本变更，推送当前分支与 `vX.Y.Z` 标签。`--current` 保持版本号不变，强制将当前版本的本地和远程标签指向当前提交，适用于重新触发发布。
+
+标签推送会触发 GitHub Actions，再次校验标签与五个版本文件一致，构建 macOS arm64/x64、Windows 和 Linux 安装包，发布至 GitHub Releases 并自动生成发布说明。
+
+`clean` 仅删除 `node_modules/.vite`、`dist` 和 `src-tauri/target`，不会删除 `node_modules` 中已安装的依赖；清理后可直接重新运行开发或构建命令。
+
+## 实现说明
 
 `check:non-cloud` 只扫描产品源码目录和 `package.json`，不扫描 README、设计文档或范围说明。它用于阻止非本地产品入口意外进入代码和菜单文案。
 

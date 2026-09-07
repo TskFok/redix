@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "release": "node scripts/release.mjs",
+    "clean": "node scripts/clean.mjs",
+    "test:release": "node --test scripts/release.node-test.mjs",
     "test": "vitest run",
     "test:frontend": "vitest run",
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
