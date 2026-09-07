@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import KeyList from "./KeyList";
@@ -28,8 +28,27 @@ function Harness({ keys = ["user", "user:1", "user:2", "cache:one"], pattern = "
 }
 
 describe("键树浏览", () => {
+  it("首次展示自动按前缀分类，同层目录优先并按名称排序", () => {
+    render(<Harness keys={["zebra", "user:2", "cache:z", "alpha", "user:1", "cache:a", "user:profile:name"]} />);
+
+    const tree = screen.getByRole("list", { name: "Redis 键树" });
+    expect(within(tree).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
+      "展开前缀 cache:", "展开前缀 user:", "alpha", "zebra",
+    ]);
+    expect(screen.getByRole("button", { name: "展开前缀 user:" })).toHaveTextContent("3");
+    fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
+    const users = screen.getByRole("list", { name: "前缀 user: 的键" });
+    expect(within(users).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
+      "展开前缀 user:profile:", "user:1", "user:2",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:profile:" }));
+    fireEvent.click(screen.getByRole("button", { name: "user:profile:name" }));
+    expect(screen.getByLabelText("已打开的键")).toHaveTextContent("user:profile:name");
+  });
+
   it("在平铺和层级之间切换保留准确键名与批量选择，前缀本身也是独立键", () => {
     render(<Harness />);
+    fireEvent.click(screen.getByRole("button", { name: "平铺" }));
     fireEvent.click(screen.getByRole("checkbox", { name: "选择键 user:1" }));
     fireEvent.click(screen.getByRole("button", { name: "树形" }));
     expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
@@ -65,8 +84,12 @@ describe("键树浏览", () => {
     fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
     fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
     expect(loads).toBe(1);
-    rerender(<Harness {...props} keys={["user:1", "user:3"]} />);
+    rerender(<Harness {...props} keys={["user", "user:1", "user:2", "cache:one", "user:3", "account:one"]} />);
     expect(screen.getByRole("button", { name: "user:3" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "折叠前缀 user:" })).toHaveTextContent("3");
+    expect(screen.getAllByRole("button", { name: /(?:展开|折叠)前缀/ }).map((button) => button.getAttribute("aria-label"))).toEqual([
+      "展开前缀 account:", "展开前缀 cache:", "折叠前缀 user:",
+    ]);
     fireEvent.change(screen.getByLabelText("键过滤"), { target: { value: "cache:*" } });
     expect(patterns).toEqual(["cache:*"]);
     rerender(<Harness {...props} pattern="cache:*" keys={["cache:one"]} />);

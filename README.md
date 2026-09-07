@@ -32,8 +32,10 @@ npm run test:redis:local # 需要 redis-server；自动创建并清理隔离实�
 npm run test:redis:cluster # 需要 redis-server 与 redis-cli；自动创建并清理隔离三主节点
 npm run test:redis:stack # 需要本机 Docker 与预先下载的 redis:8.4.5；隔离模块测试
 npm run build
-npm run tauri:build
+npm run tauri build
 ```
+
+原有的 `npm run tauri:build` 仍可使用。
 
 `check:non-cloud` 只扫描产品源码目录和 `package.json`，不扫描 README、设计文档或范围说明。它用于阻止非本地产品入口意外进入代码和菜单文案。
 

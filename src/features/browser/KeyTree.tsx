@@ -50,6 +50,7 @@ interface KeyFolder {
 
 function buildFolders(keys: KeySummary[], separator: string): KeyFolder {
   const root: KeyFolder = { segment: "", prefix: "", folders: new Map(), leaves: [], count: keys.length };
+  const folders = [root];
   for (const summary of keys) {
     const segments = separator ? summary.key.split(separator) : [summary.key];
     let folder = root;
@@ -61,11 +62,17 @@ function buildFolders(keys: KeySummary[], separator: string): KeyFolder {
       if (!next) {
         next = { segment, prefix: `${folder.prefix}${segment}${separator}`, folders: new Map(), leaves: [], count: 0 };
         folder.folders.set(segment, next);
+        folders.push(next);
       }
       next.count += 1;
       folder = next;
     }
     folder.leaves.push({ summary, label: segments.slice(folderDepth).join(separator) || "（空段）" });
+  }
+  // SCAN order is unstable. Sort each level once when the scanned keys change.
+  for (const folder of folders) {
+    folder.folders = new Map([...folder.folders].sort(([left], [right]) => left.localeCompare(right, "en")));
+    folder.leaves.sort((left, right) => left.summary.key.localeCompare(right.summary.key, "en"));
   }
   return root;
 }
@@ -98,7 +105,7 @@ export function KeyTree({ keys, separator = ":", selectedKey, selectedKeys, load
   </>;
 
   return <div className="key-tree-panel">
-    <p className="browser-helper">按 {separator || "完整键名"} 分层，仅展示已扫描的匹配键；展开前缀后可选择具体键。</p>
+    <p className="browser-helper">{separator ? `按 ${separator} 前缀自动分类，目录优先，按名称排序。` : "按完整键名排序。"}数量仅统计已扫描的匹配键。</p>
     <ul className="key-list key-tree" aria-label="Redis 键树">{renderFolder(root, 0)}</ul>
   </div>;
 }

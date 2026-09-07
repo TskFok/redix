@@ -37,7 +37,7 @@ export function KeyList({
   onToggleSelect,
   onLoadMore,
 }: KeyListProps) {
-  const [view, setView] = useState<"flat" | "tree">("flat");
+  const [view, setView] = useState<"flat" | "tree">("tree");
   const [separator, setSeparator] = useState(":");
   return (
     <section className="browser-list-panel" aria-labelledby="key-list-title">

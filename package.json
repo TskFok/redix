@@ -11,6 +11,7 @@
     "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml",
     "check:non-cloud": "node scripts/check-non-cloud-scope.mjs",
     "test:watch": "vitest",
+    "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "test:redis:local": "python3 scripts/test-local-redis.py",
