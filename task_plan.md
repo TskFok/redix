@@ -642,4 +642,12 @@ complete：RedisSearch / Query 第一批已按 Inline Execution 完成 Rust doma
 - [x] 增加 macOS/Windows/Ubuntu CI 配置，只记录实际本地证据，不把配置或 skip 记为平台通过
 - [x] 同步 README、scope、matrix 与根 planning 文件；运行 focused 和完整一次验收矩阵
 - [x] 自审差异、写 Task10 报告并用简体中文提交必要文件
-- **Status:** complete（基线 `30b1ec9`，当前 `main`；仅第一批连接与拓扑收口，后续五批仍待实施）
+- **Status:** Task 10 实施与逐项审查完成（基线 `30b1ec9`，当前 `main`）；整批最终审查仍有下述未决项，不能视为第一批无保留验收通过，后续五批尚未实施。
+
+### 2026-09-07 最终整体审查与修复波
+
+- [x] `bad582a` 修复 typed 节点作用域门控与执行之间的同名重连竞态。
+- [x] `6487ef9` 修复远端 SSH 截止/取消、多 Agent 身份尝试、Windows 路径隐私断言及 Cluster SCAN 返回前代次复核；其余审查项已通过复审，未发现新增破坏。
+- [x] 最终 Rust 374 通过 / 29 ignored、前端 297 通过、Cluster launcher 6 + 实际集成 2 通过、普通 Redis 7 实际通过 / 3 Stack early-skip；Web 与 macOS no-bundle 构建、non-cloud/fmt/diff 通过。
+- [ ] **未决 Important：本地 SSH Agent IPC 可同步阻塞。** 现有依赖无法独立中断该调用，仍可能占用 worker、permit 和 CLI lifecycle 锁；需要单独的隔离/取消架构方案，不能宣称所有 SSH 认证全程有界。
+- 原始 RESP 字节/分配上限、二进制键完整遍历、真实 sshd/TLS/Stack、Windows/Linux 和 native UI 验证边界见 `docs/superpowers/connection-topology-decisions.md`；这些不能被测试通过数替代。

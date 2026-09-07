@@ -508,3 +508,11 @@
 - 批次 1 计划已完成连接合同、Cluster parser/routing、跨平台 SSH、Sentinel over SSH、现有 operation/CLI 路由迁移、多 primary SCAN、拓扑/分析、typed IPC、UI、隔离 Cluster 与三平台 CI 的 10 个 TDD 任务。
 - 计划自审补齐 SSH+TLS 原始 SNI、MultiplexedConnection driver 生命周期、自定义 Pub/Sub/Profiler transport、Sentinel seed/primary 全程 SSH、现有 concrete connection helper 迁移，以及逐节点连接不得在循环读取凭据等边界。
 - 自审通过：详细计划 10 个任务、62 个平衡代码围栏、无 TODO/TBD/占位符，`git diff --check` 通过；等待用户选择 subagent-driven 或当前会话逐项执行。
+
+## 2026-09-07 连接与拓扑最终修复和未决项
+
+- 最新功能修复提交 `6487ef9`；前一修复 `bad582a`，均在当前 `main`，未推送。逐项任务与整批最终修复已完成，不代表全量 RedisInsight 对齐。
+- 独立最终复审：远端 SSH 超时/取消已修，多身份 Agent、Windows JSON 路径断言、Cluster SCAN 最终代次检查均通过，未发现新增破坏。
+- **整批仍有一个 Important 残余风险：本地 Agent IPC 不可可靠中断，卡住可占用 worker/permit/CLI 生命周期锁。** 不将其标为已解决，不删除恢复记录；下一步需先决定并设计本地 Agent 调用隔离与取消方案。
+- 控制器在 `6487ef9` 独立验证 Rust 374 passed / 0 failed / 29 ignored、前端 35 files / 297 tests、真实 Cluster launcher 6 + integration 2、Web build 94 modules、non-cloud/fmt/diff，全部 exit 0。实现方另验证普通 Redis 7 实际流程 / 3 Stack early-skip、macOS offline no-bundle 1m16s。
+- 既有 warning 与一次前端时序超时的最终顺序重跑结果保留报告；没有把真实 sshd、Windows/Linux、TLS/Stack 或桌面 UI 未执行项记为通过。裁决与范围见 `docs/superpowers/connection-topology-decisions.md`。
