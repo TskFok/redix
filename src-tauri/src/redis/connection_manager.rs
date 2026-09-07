@@ -293,6 +293,15 @@ pub struct RedisService {
     profiler: Arc<ProfilerManager>,
     #[cfg(test)]
     test_ssh_transport: Option<super::ssh::SshTransport>,
+    #[cfg(test)]
+    test_node_scoped_snapshot_gate: Option<Arc<NodeScopedSnapshotGate>>,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct NodeScopedSnapshotGate {
+    captured: tokio::sync::Notify,
+    resume: tokio::sync::Notify,
 }
 
 #[derive(Clone)]
@@ -366,12 +375,20 @@ impl RedisService {
             profiler: Arc::new(ProfilerManager::new()),
             #[cfg(test)]
             test_ssh_transport: None,
+            #[cfg(test)]
+            test_node_scoped_snapshot_gate: None,
         }
     }
 
     #[cfg(test)]
     fn with_test_ssh_transport(mut self, transport: super::ssh::SshTransport) -> Self {
         self.test_ssh_transport = Some(transport);
+        self
+    }
+
+    #[cfg(test)]
+    fn with_test_node_scoped_snapshot_gate(mut self, gate: Arc<NodeScopedSnapshotGate>) -> Self {
+        self.test_node_scoped_snapshot_gate = Some(gate);
         self
     }
 
@@ -573,17 +590,20 @@ impl RedisService {
         Ok(self.active_snapshot(connection_id).await?.0.target)
     }
 
-    async fn ensure_node_scoped_feature_supported(
+    async fn node_scoped_connection(
         &self,
         connection_id: &str,
-    ) -> Result<(), AppError> {
-        if matches!(
-            self.connection_target(connection_id).await?,
-            ConnectionTarget::Cluster(_)
-        ) {
+    ) -> Result<RoutedConnection, AppError> {
+        let (snapshot, _) = self.active_snapshot(connection_id).await?;
+        if matches!(snapshot.target, ConnectionTarget::Cluster(_)) {
             return Err(AppError::UnsupportedFeature);
         }
-        Ok(())
+        #[cfg(test)]
+        if let Some(gate) = self.test_node_scoped_snapshot_gate.as_ref() {
+            gate.captured.notify_one();
+            gate.resume.notified().await;
+        }
+        snapshot.client.connection().await
     }
 
     pub async fn routed_connection(
@@ -1170,9 +1190,7 @@ impl RedisOperations for RedisService {
 
     async fn get_slow_logs(&self, input: GetSlowLogsInput) -> Result<Vec<SlowLogEntry>, AppError> {
         input.validate()?;
-        self.ensure_node_scoped_feature_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.node_scoped_connection(&input.connection_id).await?;
         let count = if input.count == -1 {
             let config = get_slow_log_config_with_connection(&mut connection).await?;
             i64::try_from(config.slowlog_max_len).map_err(|_| AppError::CommandFailed)?
@@ -1190,9 +1208,7 @@ impl RedisOperations for RedisService {
 
     async fn clear_slow_logs(&self, connection_id: &str) -> Result<(), AppError> {
         validate_connection_id(connection_id)?;
-        self.ensure_node_scoped_feature_supported(connection_id)
-            .await?;
-        let mut connection = self.connection(connection_id).await?;
+        let mut connection = self.node_scoped_connection(connection_id).await?;
         ::redis::cmd("SLOWLOG")
             .arg("RESET")
             .query_async::<String>(&mut connection)
@@ -1203,9 +1219,7 @@ impl RedisOperations for RedisService {
 
     async fn get_slow_log_config(&self, connection_id: &str) -> Result<SlowLogConfig, AppError> {
         validate_connection_id(connection_id)?;
-        self.ensure_node_scoped_feature_supported(connection_id)
-            .await?;
-        let mut connection = self.connection(connection_id).await?;
+        let mut connection = self.node_scoped_connection(connection_id).await?;
         get_slow_log_config_with_connection(&mut connection).await
     }
 
@@ -1214,9 +1228,7 @@ impl RedisOperations for RedisService {
         input: UpdateSlowLogConfigInput,
     ) -> Result<SlowLogConfig, AppError> {
         input.validate()?;
-        self.ensure_node_scoped_feature_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.node_scoped_connection(&input.connection_id).await?;
         if let Some(value) = input.slowlog_max_len {
             ::redis::cmd("CONFIG")
                 .arg("SET")
@@ -1240,9 +1252,7 @@ impl RedisOperations for RedisService {
 
     async fn publish_pub_sub(&self, input: PublishPubSubInput) -> Result<u64, AppError> {
         input.validate()?;
-        self.ensure_node_scoped_feature_supported(&input.connection_id)
-            .await?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self.node_scoped_connection(&input.connection_id).await?;
         let receivers = ::redis::cmd("PUBLISH")
             .arg(&input.channel)
             .arg(&input.message)
@@ -3525,9 +3535,10 @@ mod tests {
 
     use crate::{
         domain::{
-            ConnectionEndpoint, ConnectionProfile, GetSlowLogsInput, GetStreamConsumerGroupsInput,
-            GetStreamPendingEntriesInput, ModuleCapabilities, ModuleSummary, PublishPubSubInput,
-            SelectDatabaseInput, SentinelConfig, StopProfilerInput,
+            ClusterConfig, ConnectionEndpoint, ConnectionProfile, ConnectionTarget,
+            GetSlowLogsInput, GetStreamConsumerGroupsInput, GetStreamPendingEntriesInput,
+            ModuleCapabilities, ModuleSummary, PublishPubSubInput, SelectDatabaseInput,
+            SentinelConfig, StopProfilerInput,
         },
         error::AppError,
         persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -3535,8 +3546,8 @@ mod tests {
 
     use super::{
         build_client, build_standalone_client, command_result, connection_url,
-        discover_sentinel_client, validate_ttl, RedisClusterScanBackend, RedisOperations,
-        RedisService,
+        discover_sentinel_client, validate_ttl, ConnectionHandle, RedisClusterScanBackend,
+        RedisOperations, RedisService,
     };
 
     struct EmptyProfiles;
@@ -4709,6 +4720,96 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
             .await
             .unwrap_err();
         assert_eq!(error, AppError::ConnectionFailed);
+    }
+
+    #[tokio::test]
+    async fn node_scoped_operation_dials_the_same_snapshot_that_passed_the_cluster_gate() {
+        let (original_address, original_commands, _) =
+            spawn_recording_sentinel_fixture(None, false).await;
+        let (replacement_address, replacement_commands, _) =
+            spawn_recording_sentinel_fixture(None, false).await;
+        let gate = Arc::new(super::NodeScopedSnapshotGate::default());
+        let service = Arc::new(
+            RedisService::new(Arc::new(EmptyProfiles), Arc::new(EmptySecrets))
+                .with_test_node_scoped_snapshot_gate(Arc::clone(&gate)),
+        );
+        let handle = |address: SocketAddr, target: ConnectionTarget| {
+            let mut profile = valid_profile();
+            profile.port = address.port();
+            if let ConnectionTarget::Cluster(cluster) = &target {
+                profile.cluster = Some(cluster.clone());
+            }
+            ConnectionHandle {
+                client: crate::redis::RoutedClient::Standalone(
+                    crate::redis::StandaloneClient::Direct(
+                        ::redis::Client::open(format!("redis://{address}/")).unwrap(),
+                    ),
+                ),
+                profile,
+                target,
+                cluster_node_factory: None,
+                _ssh: None,
+            }
+        };
+        service.active.write().await.insert(
+            "local".into(),
+            handle(original_address, ConnectionTarget::Standalone),
+        );
+
+        let operation_service = Arc::clone(&service);
+        let operation =
+            tokio::spawn(async move { operation_service.clear_slow_logs("local").await });
+        tokio::time::timeout(Duration::from_secs(1), gate.captured.notified())
+            .await
+            .expect("node-scoped operation must pause after its target snapshot");
+        service.active.write().await.insert(
+            "local".into(),
+            handle(
+                replacement_address,
+                ConnectionTarget::Cluster(ClusterConfig {
+                    nodes: vec![ConnectionEndpoint {
+                        host: "127.0.0.1".into(),
+                        port: replacement_address.port(),
+                    }],
+                    read_from_replicas: false,
+                }),
+            ),
+        );
+        gate.resume.notify_one();
+
+        tokio::time::timeout(Duration::from_secs(1), operation)
+            .await
+            .expect("node-scoped operation must finish after the snapshot gate resumes")
+            .unwrap()
+            .unwrap();
+        let forbidden = vec!["SLOWLOG".to_owned(), "RESET".to_owned()];
+        assert_eq!(
+            original_commands
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|command| command == &&forbidden)
+                .count(),
+            1
+        );
+        assert_eq!(
+            replacement_commands
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|command| command == &&forbidden)
+                .count(),
+            0
+        );
+        assert_eq!(
+            service.clear_slow_logs("local").await,
+            Err(AppError::UnsupportedFeature)
+        );
+        assert!(!replacement_commands
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command == &forbidden));
     }
 
     #[tokio::test]
