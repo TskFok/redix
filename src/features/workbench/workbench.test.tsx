@@ -97,7 +97,7 @@ describe("Redis Workbench 工作区", () => {
     saveConnectionMock.mockResolvedValue(localProfile);
     deleteConnectionMock.mockResolvedValue(undefined);
     testConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     getModuleCapabilitiesMock.mockResolvedValue({
       modules: [],
       json_supported: false,

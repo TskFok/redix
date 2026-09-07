@@ -6,12 +6,14 @@ export type Workspace =
   | "database"
   | "database-analysis"
   | "observability"
+  | "topology"
   | "query-library"
   | "settings";
 
 export interface ConnectionProfile {
   ssh?: SshConfig | null;
   sentinel?: SentinelConfig | null;
+  cluster?: ClusterConfig | null;
   id: string;
   name: string;
   host: string;
@@ -29,6 +31,12 @@ export interface ConnectionProfile {
 
 export interface SaveConnectionInput {
   sentinel_password?: string | null;
+  ssh_password?: string | null;
+  ssh_private_key?: string | null;
+  ssh_passphrase?: string | null;
+  ssh_identity_file?: string | null;
+  ssh_known_hosts_file?: string | null;
+  clear_ssh_secrets: boolean;
   profile: ConnectionProfile;
   password: string | null;
   ca_certificate: string | null;
@@ -39,8 +47,9 @@ export interface SaveConnectionInput {
 }
 
 export interface ConnectionExportProfile {
-  ssh?: SshConfig | null;
+  ssh?: SshExportConfig | null;
   sentinel?: Omit<SentinelConfig, "has_password"> | null;
+  cluster?: ClusterConfig | null;
   name: string;
   host: string;
   port: number;
@@ -92,12 +101,74 @@ export interface SentinelConfig {
   tls: boolean;
 }
 
-export interface SshConfig {
+export type SshAuthMethod = "agent" | "password" | "private_key";
+
+export interface SshExportConfig {
   host: string;
   port: number;
   username: string;
-  identity_file: string | null;
-  known_hosts_file: string | null;
+  auth_method: SshAuthMethod;
+  has_password: boolean;
+  has_private_key: boolean;
+  has_passphrase: boolean;
+  has_identity_file: boolean;
+  has_known_hosts_file: boolean;
+}
+
+export type SshConfig = SshExportConfig;
+export type TestConnectionInput = SaveConnectionInput;
+export type ConnectionTargetKind = "standalone" | "sentinel" | "cluster";
+export type NodeScope = "routed" | "primary_nodes" | "all_nodes" | { node: string };
+export type ClusterNodeRole = "primary" | "replica";
+export type ClusterNodeHealth = "online" | "offline" | "loading";
+
+export interface ClusterConfig {
+  nodes: ConnectionEndpoint[];
+  read_from_replicas: boolean;
+}
+
+export interface NodeFailure { node_id: string; code: string }
+export interface SlotRange { start: number; end: number }
+export interface ClusterSummary {
+  state: string;
+  slots_assigned: number;
+  slots_ok: number;
+  slots_pfail: number;
+  slots_fail: number;
+  current_epoch: number;
+  size: number;
+  known_nodes: number;
+}
+
+export interface ClusterNodeMetrics {
+  used_memory_bytes: number | null;
+  ops_per_second: number | null;
+  connections_received: number | null;
+  connected_clients: number | null;
+  commands_processed: number | null;
+  network_in_kbps: number | null;
+  network_out_kbps: number | null;
+  cache_hit_ratio: number | null;
+  replication_offset: number | null;
+  replication_lag: number | null;
+  uptime_seconds: number | null;
+}
+
+export interface ClusterNode {
+  id: string;
+  endpoint: ConnectionEndpoint;
+  connection_endpoint: ConnectionEndpoint | null;
+  role: ClusterNodeRole;
+  health: ClusterNodeHealth;
+  primary_id: string | null;
+  slots: SlotRange[];
+  metrics: ClusterNodeMetrics;
+}
+
+export interface ClusterTopology {
+  summary: ClusterSummary;
+  nodes: ClusterNode[];
+  failures: NodeFailure[];
 }
 
 export interface ModuleSummary {
@@ -336,6 +407,14 @@ export interface DatabaseAnalysisReport {
   top_namespaces_by_keys: NamespaceSummary[];
   top_namespaces_by_memory: NamespaceSummary[];
   expiration_groups: ExpirationGroup[];
+  node_results: NodeAnalysisResult[];
+  failed_nodes: NodeFailure[];
+}
+
+export interface NodeAnalysisResult {
+  node_id: string;
+  endpoint: ConnectionEndpoint;
+  report: DatabaseAnalysisReport;
 }
 
 export interface DatabaseOverview {
@@ -477,18 +556,21 @@ export interface AppSettings {
   continue_on_error: boolean;
 }
 
+export type ScanCursor = number | string;
+
 export interface ScanKeysInput {
   connection_id: string;
-  cursor: number;
+  cursor: ScanCursor;
   pattern: string;
   count: number;
   key_type: string | null;
 }
 
 export interface ScanPage {
-  cursor: number;
+  cursor: ScanCursor;
   keys: KeySummary[];
   has_more: boolean;
+  node_failures: NodeFailure[];
 }
 
 export interface KeySummary {

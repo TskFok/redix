@@ -180,10 +180,11 @@ describe("RedisSearch / Query 页面", () => {
     deleteSearchIndexMock.mockImplementationOnce(() => new Promise<void>((done) => { resolve = done; }));
     render(<SearchPage connectionId="local" />);
     await screen.findByRole("option", { name: "idx:users" });
+    const queryButton = screen.getByRole("button", { name: "查询" });
     fireEvent.click(screen.getByRole("button", { name: "删除当前索引" }));
     expect(screen.getByRole("combobox", { name: "当前索引" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "返回文档内容" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "查询中…" })).toBeDisabled();
+    expect(queryButton).toBeDisabled();
     expect(screen.getByRole("button", { name: "删除当前索引" })).toBeDisabled();
     await act(async () => resolve());
   });

@@ -177,7 +177,7 @@ describe("Redis Browser", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubGlobal("confirm", vi.fn(() => true));
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     getKeyMock.mockResolvedValue(stringDetail);
     getModuleCapabilitiesMock.mockResolvedValue({
       modules: [{ name: "ReJSON", version: "20611" }],
@@ -292,7 +292,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock.mockResolvedValue(stringDetail);
 
@@ -384,7 +384,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
 
     render(<BrowserPage connectionId="local" />);
@@ -410,7 +410,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
 
     render(<BrowserPage connectionId="local" />);
@@ -436,7 +436,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock
       .mockResolvedValueOnce(stringDetail)
@@ -471,17 +471,17 @@ describe("Redis Browser", () => {
       .mockResolvedValueOnce({
         cursor: 42,
         keys: [stringSummary],
-        has_more: true,
+        node_failures: [], has_more: true,
       })
       .mockResolvedValueOnce({
         cursor: 0,
         keys: [{ ...stringSummary, key: "admin:1" }],
-        has_more: false,
+        node_failures: [], has_more: false,
       })
       .mockResolvedValueOnce({
         cursor: 0,
         keys: [{ ...stringSummary, key: "user:2" }],
-        has_more: false,
+        node_failures: [], has_more: false,
       });
 
     render(<BrowserPage connectionId="local" />);
@@ -522,9 +522,9 @@ describe("Redis Browser", () => {
       .mockResolvedValueOnce({
         cursor: 42,
         keys: [stringSummary, { ...stringSummary, key: "hash:1", key_type: "hash" }],
-        has_more: true,
+        node_failures: [], has_more: true,
       })
-      .mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+      .mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
 
     render(<BrowserPage connectionId="local" />);
     expect(await screen.findByText("user:1")).toBeInTheDocument();
@@ -571,7 +571,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
 
     render(<BrowserPage connectionId="local" />);
@@ -597,7 +597,7 @@ describe("Redis Browser", () => {
       ttl_ms: 10_000,
       value: { String: { value: "imported" } },
     };
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     const file = new File([JSON.stringify([entry])], "keys.json", {
       type: "application/json",
     });
@@ -621,7 +621,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
 
     render(<BrowserPage connectionId="local" />);
@@ -645,7 +645,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
 
     render(<BrowserPage connectionId="local" />);
@@ -662,7 +662,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
 
     render(<BrowserPage connectionId="local" />);
@@ -684,7 +684,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock
       .mockResolvedValueOnce(stringDetail)
@@ -714,7 +714,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     setKeyTtlMock.mockResolvedValue(-2);
 
@@ -743,7 +743,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     setKeyMock.mockImplementation(() => save.promise);
 
@@ -825,7 +825,7 @@ describe("Redis Browser", () => {
       { key: "set:1", key_type: "set", ttl_ms: -1, size: 2 },
       { key: "zset:1", key_type: "zset", ttl_ms: -1, size: 2 },
     ];
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: summaries, has_more: false });
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: summaries, node_failures: [], has_more: false });
     getKeyMock.mockImplementation(async ({ key }: { key: string }) => {
       const summary = summaries.find((item) => item.key === key)!;
       const value = summary.key_type === "hash" ? { Hash: { fields: [] } }
@@ -888,7 +888,7 @@ describe("Redis Browser", () => {
         { ...stringSummary, ttl_ms: 3000 },
         { ...stringSummary, key: "user:2", size: 3 },
       ],
-      has_more: false,
+      node_failures: [], has_more: false,
     };
 
     expect(applyScanPage(current, page, true).keys).toEqual([
@@ -949,11 +949,11 @@ describe("Redis Browser", () => {
       key: "new:user",
     };
     scanKeysMock
-      .mockResolvedValueOnce({ cursor: 0, keys: [], has_more: false })
+      .mockResolvedValueOnce({ cursor: 0, keys: [], node_failures: [], has_more: false })
       .mockResolvedValueOnce({
         cursor: 0,
         keys: [{ ...stringSummary, key: "new:user" }],
-        has_more: false,
+        node_failures: [], has_more: false,
       });
     createKeyMock.mockResolvedValue(created);
 
@@ -981,7 +981,7 @@ describe("Redis Browser", () => {
   });
 
   it("新增 Stream 键时生成 Stream DTO", async () => {
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     createKeyMock.mockResolvedValue({
       key: "events",
       key_type: "stream",
@@ -1106,7 +1106,7 @@ describe("Redis Browser", () => {
   });
 
   it("拒绝空键名和后端重复键错误", async () => {
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("没有匹配的键。");
     fireEvent.click(screen.getByRole("button", { name: "新增键" }));
@@ -1126,8 +1126,8 @@ describe("Redis Browser", () => {
       { ...stringSummary, key: "user:2" },
     ];
     scanKeysMock
-      .mockResolvedValueOnce({ cursor: 0, keys: summaries, has_more: false })
-      .mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+      .mockResolvedValueOnce({ cursor: 0, keys: summaries, node_failures: [], has_more: false })
+      .mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     deleteKeysMock.mockResolvedValue(2);
 
     render(<BrowserPage connectionId="local" />);
@@ -1152,7 +1152,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("user:1");
@@ -1173,7 +1173,7 @@ describe("Redis Browser", () => {
 
   it("连接切换后忽略未完成新增键响应", async () => {
     const creation = deferred<typeof stringDetail>();
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     createKeyMock.mockImplementation(() => creation.promise);
 
     const { rerender } = render(<BrowserPage connectionId="local" />);
@@ -1258,7 +1258,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [jsonSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock.mockResolvedValue(jsonDetail);
 
@@ -1290,7 +1290,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [jsonSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock
       .mockResolvedValueOnce(jsonDetail)
@@ -1343,7 +1343,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [jsonSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock.mockResolvedValue(jsonDetail);
 
@@ -1376,7 +1376,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [jsonSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock.mockResolvedValueOnce(jsonDetail);
     deleteJsonPathMock.mockResolvedValue({
@@ -1492,7 +1492,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [jsonSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock
       .mockResolvedValueOnce(jsonDetail)
@@ -1540,7 +1540,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [jsonSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock.mockResolvedValue(jsonDetail);
     getJsonPathMock.mockRejectedValue({
@@ -1752,7 +1752,7 @@ describe("Redis Browser", () => {
     scanKeysMock.mockResolvedValue({
       cursor: 0,
       keys: [stringSummary],
-      has_more: false,
+      node_failures: [], has_more: false,
     });
     getKeyMock.mockResolvedValue(stringDetail);
     renameKeyMock.mockResolvedValue(renamedDetail);

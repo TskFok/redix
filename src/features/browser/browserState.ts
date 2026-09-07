@@ -6,6 +6,8 @@ import type {
   ModuleCapabilities,
   RedisValue,
   ScanPage,
+  ScanCursor,
+  NodeFailure,
 } from "../../lib/types";
 
 export type { JsonValue };
@@ -13,7 +15,8 @@ export type { JsonValue };
 export interface BrowserPageState {
   pattern: string;
   keyType: string;
-  cursor: number;
+  cursor: ScanCursor;
+  nodeFailures: NodeFailure[];
   keys: KeySummary[];
   selectedKey: string | null;
   selectedKeys: string[];
@@ -33,6 +36,7 @@ export const initialBrowserPageState: BrowserPageState = {
   pattern: "*",
   keyType: "",
   cursor: 0,
+  nodeFailures: [],
   keys: [],
   selectedKey: null,
   selectedKeys: [],
@@ -74,6 +78,13 @@ export function applyScanPage(
   const selectedKeys = replace
     ? []
     : current.selectedKeys.filter((key) => keysByName.has(key));
+  // A successful page need not visit every failed node. Keep warnings until a
+  // fresh scan or a complete traversal confirms recovery.
+  const nodeFailures = new Map<string, NodeFailure>();
+  if (!replace && page.has_more) {
+    for (const failure of current.nodeFailures) nodeFailures.set(failure.node_id, failure);
+  }
+  for (const failure of page.node_failures) nodeFailures.set(failure.node_id, failure);
 
   return {
     ...current,
@@ -84,7 +95,8 @@ export function applyScanPage(
     selectedKeys,
     detail: replace ? null : current.detail,
     metadata: replace ? null : current.metadata,
-    hasMore: page.has_more || page.cursor !== 0,
+    hasMore: page.has_more,
+    nodeFailures: [...nodeFailures.values()],
     loading: false,
     error: null,
   };
@@ -264,6 +276,16 @@ export function browserErrorMessage(
     switch (code) {
       case "AUTHENTICATION_FAILED":
         return "Redis 身份验证失败，请检查用户名和密码。";
+      case "CLUSTER_TOPOLOGY_FAILED":
+        return "无法读取 Cluster 拓扑，请检查连接后刷新。";
+      case "CLUSTER_NODE_UNAVAILABLE":
+        return "部分 Cluster 节点不可用，请检查节点连接后重试。";
+      case "PARTIAL_FAILURE":
+        return "部分节点操作失败，当前结果不完整，请重试。";
+      case "CROSS_SLOT":
+        return "这些键位于不同槽位，无法在同一操作中处理。";
+      case "UNSUPPORTED_FEATURE":
+        return "当前连接拓扑暂不支持此功能。";
       case "CONNECTION_FAILED":
         return "Redis 连接已断开，请重新打开连接。";
       case "UNSUPPORTED_DATA_TYPE":

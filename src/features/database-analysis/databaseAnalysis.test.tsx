@@ -13,6 +13,7 @@ vi.mock("./analysisHistoryApi", () => ({ listAnalysisHistory: vi.fn().mockResolv
 const analyzeDatabaseMock = vi.mocked(analyzeDatabase);
 
 const report: DatabaseAnalysisReport = {
+  node_results: [], failed_nodes: [],
   database: 0,
   pattern: "*",
   delimiter: ":",

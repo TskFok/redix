@@ -8,6 +8,8 @@ import {
   appendArrayElements,
   appendJsonArray,
   closeConnection,
+  getClusterTopology,
+  refreshClusterTopology,
   createSearchIndex,
   createArray,
   createKey,
@@ -138,6 +140,7 @@ const profile: ConnectionProfile = {
 };
 
 const connectionInput: SaveConnectionInput = {
+  clear_ssh_secrets: false,
   profile,
   password: null,
   ca_certificate: null,
@@ -154,6 +157,23 @@ beforeEach(() => {
 });
 
 describe("Tauri IPC bridge", () => {
+  it.each([
+    ["get_cluster_topology", getClusterTopology],
+    ["refresh_cluster_topology", refreshClusterTopology],
+  ] as const)("使用 snake_case 连接参数调用 %s", async (command, read) => {
+    const topology = { summary: { state: "ok", slots_assigned: 16384, slots_ok: 16384, slots_pfail: 0, slots_fail: 0, current_epoch: 2, size: 1, known_nodes: 1 }, nodes: [], failures: [{ node_id: "node-a", code: "CLUSTER_NODE_UNAVAILABLE" }] };
+    invokeMock.mockResolvedValue(topology);
+    await expect(read("cluster-1")).resolves.toEqual(topology);
+    expect(invokeMock).toHaveBeenCalledWith(command, { connection_id: "cluster-1" });
+  });
+
+  it("透传 Cluster 不透明扫描游标和部分失败", async () => {
+    const input = { connection_id: "cluster-1", cursor: "cluster:opaque", pattern: "*", count: 100, key_type: null };
+    const result = { cursor: "cluster:retry", keys: [], has_more: true, node_failures: [{ node_id: "node-a", code: "CLUSTER_NODE_UNAVAILABLE" }] };
+    invokeMock.mockResolvedValue(result);
+    await expect(scanKeys(input)).resolves.toEqual(result);
+    expect(invokeMock).toHaveBeenCalledWith("scan_keys", { input });
+  });
   it("把 Array 查询作为 typed input 传给 Tauri", async () => {
     const input = {
       connection_id: "local",
@@ -191,7 +211,7 @@ describe("Tauri IPC bridge", () => {
   });
 
   it("用稳定命令名调用 scan_keys", async () => {
-    const result: ScanPage = { cursor: 0, keys: [], has_more: false };
+    const result: ScanPage = { cursor: 0, keys: [], node_failures: [], has_more: false };
     invokeMock.mockResolvedValue(result);
 
     await expect(
@@ -241,7 +261,7 @@ describe("Tauri IPC bridge", () => {
   });
 
   it("为连接配置导入导出使用 typed IPC 合同", async () => {
-    const document: ConnectionExportDocument = { version: 1, connections: [] };
+    const document: ConnectionExportDocument = { version: 2, connections: [] };
     const result: ImportConnectionsResult = {
       imported: [],
       failed: [],

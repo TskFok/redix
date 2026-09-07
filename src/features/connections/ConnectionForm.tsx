@@ -41,7 +41,15 @@ function buildConnectionInput(
     if (values.tls || values.topology === "sentinel") return { error: "SSH 暂不支持与 TLS 或 Sentinel 组合。" };
     const sshPort = Number(values.ssh_port);
     if (!values.ssh_host.trim() || !values.ssh_username.trim() || !Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) return { error: "请输入有效的 SSH 主机、端口和用户名。" };
-    ssh = { host: values.ssh_host.trim(), port: sshPort, username: values.ssh_username.trim(), identity_file: values.ssh_identity_file.trim() || null, known_hosts_file: values.ssh_known_hosts_file.trim() || null };
+    ssh = {
+      host: values.ssh_host.trim(), port: sshPort, username: values.ssh_username.trim(),
+      auth_method: initial?.ssh?.auth_method ?? "agent",
+      has_password: initial?.ssh?.has_password ?? false,
+      has_private_key: initial?.ssh?.has_private_key ?? false,
+      has_passphrase: initial?.ssh?.has_passphrase ?? false,
+      has_identity_file: Boolean(values.ssh_identity_file.trim()) || Boolean(initial?.ssh?.has_identity_file),
+      has_known_hosts_file: Boolean(values.ssh_known_hosts_file.trim()) || Boolean(initial?.ssh?.has_known_hosts_file),
+    };
   }
   let sentinel: SentinelConfig | null = null;
   if (values.topology === "sentinel") {
@@ -144,6 +152,11 @@ function buildConnectionInput(
           Boolean(initial?.has_client_certificate && !values.clear_client_certificate),
       },
       password,
+      clear_ssh_secrets: false,
+      ...(ssh ? {
+        ssh_identity_file: values.ssh_identity_file.trim() || null,
+        ssh_known_hosts_file: values.ssh_known_hosts_file.trim() || null,
+      } : {}),
       ...(sentinel ? { sentinel_password: values.sentinel_password || null } : {}),
       ca_certificate: caCertificate,
       client_certificate: clientCertificate,

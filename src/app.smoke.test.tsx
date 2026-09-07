@@ -112,7 +112,7 @@ beforeEach(() => {
   listConnectionsMock.mockResolvedValue([]);
   openConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
   closeConnectionMock.mockResolvedValue(undefined);
-  scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], has_more: false });
+  scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
   getModuleCapabilitiesMock.mockResolvedValue({
     modules: [],
     json_supported: false,
@@ -202,6 +202,7 @@ beforeEach(() => {
     top_namespaces_by_keys: [],
     top_namespaces_by_memory: [],
     expiration_groups: [],
+    node_results: [], failed_nodes: [],
     progress: { scanned: 0, processed: 0, truncated: false },
   });
   selectDatabaseMock.mockResolvedValue(localProfile);

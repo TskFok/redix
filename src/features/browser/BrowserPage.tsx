@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { getBrowserKey, getModuleCapabilities, scanKeys } from "../../lib/tauri";
-import type { KeyValue } from "../../lib/types";
+import type { KeyValue, ScanCursor } from "../../lib/types";
 import KeyDetails from "./KeyDetails";
 import KeyList from "./KeyList";
 import AddKey from "./AddKey";
@@ -47,7 +47,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
 
   const scanPage = useCallback(
     async (
-      cursor: number,
+      cursor: ScanCursor,
       requestedPattern: string,
       replace: boolean,
       requestedKeyType: string,
@@ -68,6 +68,8 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
         pattern: requestedPattern,
         keyType: requestedKeyType,
         cursor: replace ? 0 : current.cursor,
+        nodeFailures: replace ? [] : current.nodeFailures,
+        hasMore: replace ? false : current.hasMore,
         keys: replace ? [] : current.keys,
         selectedKey: replace ? null : current.selectedKey,
         selectedKeys: replace ? [] : current.selectedKeys,

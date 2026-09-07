@@ -129,7 +129,7 @@ describe("Redis 连接管理页面", () => {
     expect(await screen.findByText("Sentinel · primary")).toBeInTheDocument();
   });
 
-  it("SSH 仅保存路径元数据并拒绝与 TLS 或 Sentinel 同用", async () => {
+  it("SSH 路径仅进入 secret input 并保留当前组合门控", async () => {
     saveConnectionMock.mockImplementation(async (input: SaveConnectionInput) => input.profile);
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
     await openNewConnectionForm();
@@ -146,12 +146,15 @@ describe("Redis 连接管理页面", () => {
     fireEvent.click(screen.getByLabelText("启用 TLS"));
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(saveConnectionMock).toHaveBeenCalled());
-    expect(saveConnectionMock.mock.calls[0][0].profile.ssh).toMatchObject({ host: "bastion.example", port: 22, username: "operator", identity_file: "/Users/operator/.ssh/id_ed25519" });
+    expect(saveConnectionMock.mock.calls[0][0].profile.ssh).toMatchObject({ host: "bastion.example", port: 22, username: "operator", auth_method: "agent", has_identity_file: true });
+    expect(saveConnectionMock.mock.calls[0][0].ssh_identity_file).toBe("/Users/operator/.ssh/id_ed25519");
+    expect(saveConnectionMock.mock.calls[0][0].profile.ssh).not.toHaveProperty("identity_file");
+    expect(saveConnectionMock.mock.calls[0][0].profile.ssh).not.toHaveProperty("known_hosts_file");
     expect(await screen.findByText("SSH · bastion.example:22")).toBeInTheDocument();
   });
 
   it("导出连接时调用 typed IPC 并显示成功反馈", async () => {
-    exportConnectionsMock.mockResolvedValue({ version: 1, connections: [] });
+    exportConnectionsMock.mockResolvedValue({ version: 2, connections: [] });
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
 
     await screen.findByText("还没有 Redis 连接");
@@ -227,6 +230,7 @@ describe("Redis 连接管理页面", () => {
   it("保存成功后刷新连接列表并按顺序打开对应连接", async () => {
     const calls: string[] = [];
     const saveInput: SaveConnectionInput = {
+      clear_ssh_secrets: false,
       profile: localProfile,
       password: null,
       ca_certificate: null,
@@ -302,6 +306,7 @@ describe("Redis 连接管理页面", () => {
     await waitFor(() => expect(saveConnectionMock).toHaveBeenCalledTimes(1));
     expect(saveConnectionMock).toHaveBeenCalledWith({
       profile: securedProfile,
+      clear_ssh_secrets: false,
       password: null,
       ca_certificate: null,
       client_certificate: null,

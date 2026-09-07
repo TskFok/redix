@@ -6,6 +6,7 @@ import type { DatabaseAnalysisReport } from "../../lib/types";
 
 vi.mock("./analysisHistoryApi", () => ({ listAnalysisHistory: vi.fn(), saveAnalysisHistory: vi.fn(), getAnalysisHistory: vi.fn(), deleteAnalysisHistory: vi.fn() }));
 const report: DatabaseAnalysisReport = {
+  node_results: [], failed_nodes: [],
   database: 0, pattern: "*", delimiter: ":", progress: { scanned: 2, processed: 2, max_keys: 1000, truncated: false },
   total_keys: { total: 2, observed: 2, types: [] }, total_memory: { total: 128, observed: 2, types: [] },
   top_keys_by_length: [], top_keys_by_memory: [], top_namespaces_by_keys: [], top_namespaces_by_memory: [], expiration_groups: [],

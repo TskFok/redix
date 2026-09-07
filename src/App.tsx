@@ -94,6 +94,7 @@ const sectionDescriptions: Record<AppSection, string> = {
   database: "查看实例指标和数据库键空间",
   "database-analysis": "显式扫描并汇总键空间与内存",
   observability: "查看 Slow Log、Pub/Sub 和 Profiler",
+  topology: "查看 Cluster 节点、槽位和运行状态",
   "query-library": "保存命令并回填 Workbench",
   settings: "调整主题和工作区偏好",
 };

@@ -11,6 +11,35 @@ import {
 import type { RedisValue } from "../../lib/types";
 
 describe("Browser 状态 helper", () => {
+  it("保留不透明游标并以 has_more 为完成依据", () => {
+    const next = applyScanPage(initialBrowserPageState, {
+      cursor: "cluster:complete", keys: [], has_more: false, node_failures: [],
+    }, false);
+    expect(next.cursor).toBe("cluster:complete");
+    expect(next.hasMore).toBe(false);
+  });
+
+  it("追加页保留未确认恢复的节点失败，重新扫描时清空旧失败", () => {
+    const failed = applyScanPage(initialBrowserPageState, {
+      cursor: "cluster:retry", keys: [], has_more: true,
+      node_failures: [{ node_id: "node-a", code: "CLUSTER_NODE_UNAVAILABLE" }],
+    }, false);
+    expect(failed.nodeFailures).toEqual([{ node_id: "node-a", code: "CLUSTER_NODE_UNAVAILABLE" }]);
+    expect(failed.hasMore).toBe(true);
+    const next = applyScanPage(failed, {
+      cursor: "cluster:next", keys: [], has_more: true, node_failures: [],
+    }, false);
+    expect(next.nodeFailures).toEqual(failed.nodeFailures);
+    expect(applyScanPage(next, { cursor: "cluster:done", keys: [], has_more: false, node_failures: [] }, false).nodeFailures).toEqual([]);
+    expect(applyScanPage(next, { cursor: 0, keys: [], has_more: false, node_failures: [] }, true).nodeFailures).toEqual([]);
+  });
+
+  it.each(["CLUSTER_TOPOLOGY_FAILED", "CLUSTER_NODE_UNAVAILABLE", "PARTIAL_FAILURE", "CROSS_SLOT"])("为 %s 显示固定提示且不泄露后端原文", (code) => {
+    const message = browserErrorMessage({ code, message: "credential-secret" }, "默认错误");
+    expect(message).not.toBe("默认错误");
+    expect(message).not.toContain("credential-secret");
+    expect(browserErrorMessage({ code: "UNKNOWN", message: "credential-secret" }, "默认错误")).toBe("默认错误");
+  });
   it("按类型过滤扫描摘要并在刷新时清空选择", () => {
     const state = {
       ...initialBrowserPageState,
@@ -20,7 +49,7 @@ describe("Browser 状态 helper", () => {
       state,
       {
         cursor: 0,
-        has_more: false,
+        node_failures: [], has_more: false,
         keys: [
           { key: "user:1", key_type: "string", ttl_ms: -1, size: 1 },
           { key: "user:2", key_type: "hash", ttl_ms: -1, size: 2 },
@@ -45,7 +74,7 @@ describe("Browser 状态 helper", () => {
       state,
       {
         cursor: 0,
-        has_more: false,
+        node_failures: [], has_more: false,
         keys: [{ key: "user:2", key_type: "hash", ttl_ms: -1, size: 2 }],
       },
       false,

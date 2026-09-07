@@ -22,6 +22,7 @@ import type {
   AnalyzeDatabaseInput,
   AppSettings,
   ConnectionInfo,
+  ClusterTopology,
   ConnectionProfile,
   ConnectionExportDocument,
   CreateSearchIndexInput,
@@ -173,6 +174,14 @@ export function closeConnection(connectionId: string): Promise<void> {
 
 export function scanKeys(input: ScanKeysInput): Promise<ScanPage> {
   return call<ScanPage>("scan_keys", { input });
+}
+
+export function getClusterTopology(connectionId: string): Promise<ClusterTopology> {
+  return call<ClusterTopology>("get_cluster_topology", { connection_id: connectionId });
+}
+
+export function refreshClusterTopology(connectionId: string): Promise<ClusterTopology> {
+  return call<ClusterTopology>("refresh_cluster_topology", { connection_id: connectionId });
 }
 
 export function exportKeys(input: ExportKeysInput): Promise<ExportedKey[]> {
