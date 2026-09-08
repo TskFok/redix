@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import {
   closeConnection,
@@ -84,7 +85,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
   }));
   const [formOpen, setFormOpen] = useState(false);
   const [transferBusy, setTransferBusy] = useState(false);
-  const [transferFeedback, setTransferFeedback] = useState<TransferFeedback | null>(null);
+  const [transferFeedback, setTransferFeedback] = useTransientFeedback<TransferFeedback>();
   const [tags, setTags] = useState<ConnectionTags | null>(null);
   const [tagsError, setTagsError] = useState(false);
   const [tagQuery, setTagQuery] = useState("");
@@ -328,7 +329,11 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
           error: null,
         }));
       }
-      setTransferFeedback(transferFeedbackFromResult(result));
+      const feedback = transferFeedbackFromResult(result);
+      setTransferFeedback(
+        feedback,
+        feedback.kind === "warning" || result.ignored_secret_fields > 0 ? null : undefined,
+      );
     } catch (caught) {
       setState((current) => ({
         ...current,

@@ -4,6 +4,7 @@ import { decodeStringValue, encodeStringValue, getStringValue, setStringValue } 
 import { isStructuredFormat } from "./codecFormats";
 import type { StringValue, StringValueSaved, ValueCompression, ValueFormat } from "./valueCodecApi";
 import { browserErrorMessage } from "./browserState";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 export interface StringValueEditorProps {
   connectionId: string;
   keyName: string;
@@ -33,7 +34,7 @@ function StringValueEditorScope({ connectionId, keyName, disabled = false, onBus
   const [saving, setSaving] = useState(false);
   const [hasDecoded, setHasDecoded] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useTransientFeedback();
   const generation = useRef(0);
   const writing = useRef(false);
   const mounted = useRef(false);

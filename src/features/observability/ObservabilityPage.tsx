@@ -1,6 +1,7 @@
 import Select from "../../components/Select";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import {
   clearSlowLogs,
@@ -71,7 +72,7 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
   const [pubSubBusy, setPubSubBusy] = useState(false);
   const [publishChannel, setPublishChannel] = useState("events");
   const [publishMessage, setPublishMessage] = useState("");
-  const [publishFeedback, setPublishFeedback] = useState<string | null>(null);
+  const [publishFeedback, setPublishFeedback] = useTransientFeedback();
   const [profilerSession, setProfilerSession] = useState<ProfilerSession | null>(null);
   const [profilerStatus, setProfilerStatus] = useState("idle");
   const [profilerEvents, setProfilerEvents] = useState<ProfilerEvent[]>([]);

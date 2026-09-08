@@ -1,6 +1,7 @@
 import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 import { addStreamEntry, deleteStreamEntries, getStreamEntries } from "./streamEntriesApi";
 import type { StreamEntriesPage, StreamEntryField } from "./streamEntriesApi";
 import { browserErrorMessage } from "./browserState";
@@ -51,7 +52,7 @@ function StreamEntriesScope({ connectionId, streamKey, disabled = false, onChang
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useTransientFeedback();
   const [refresh, setRefresh] = useState(0);
   const { confirm, confirmationDialog } = useConfirmDialog(
     JSON.stringify([connectionId, streamKey, disabled, loading, query, refresh, selected, entryId, fieldsJson]),

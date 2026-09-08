@@ -18,7 +18,18 @@ describe("String 原始字节解码与保存", () => {
     });
     encode.mockResolvedValue("AAEC"); save.mockResolvedValue({ byte_length: 3, ttl_ms: 4500 });
   });
-  afterEach(cleanup);
+  afterEach(() => { cleanup(); vi.useRealTimers(); });
+  it("保存成功反馈自动消失，已保存的值继续显示", async () => {
+    render(<StringValueEditor connectionId="local" keyName="binary" />);
+    await screen.findByDisplayValue("00 FF 80");
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText("String 值"), { target: { value: "00 01 02" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "保存值" })); });
+    expect(screen.getByRole("status")).toHaveTextContent("值已保存");
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("String 值")).toHaveValue("00 01 02");
+  });
   it("PHP 序列化视图只读，原始字节保留且不发写请求", async () => {
     render(<StringValueEditor connectionId="local" keyName="php" />);
     await screen.findByDisplayValue("00 FF 80");

@@ -99,6 +99,7 @@ describe("Redis 连接管理页面", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -338,10 +339,15 @@ describe("Redis 连接管理页面", () => {
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
 
     await screen.findByText("还没有 Redis 连接");
-    fireEvent.click(screen.getByRole("button", { name: "导出连接" }));
+    vi.useFakeTimers();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "导出连接" }));
+    });
 
-    await waitFor(() => expect(exportConnectionsMock).toHaveBeenCalledTimes(1));
-    expect(await screen.findByRole("status")).toHaveTextContent("连接已导出");
+    expect(exportConnectionsMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("status")).toHaveTextContent("连接已导出");
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.queryByText(/连接已导出/)).not.toBeInTheDocument();
   });
 
   it("导入 JSON 后追加连接并显示部分成功及敏感字段忽略提示", async () => {
@@ -376,6 +382,40 @@ describe("Redis 连接管理页面", () => {
     expect(status).toHaveTextContent("部分导入");
     expect(status).toHaveTextContent("已忽略 1 个敏感字段");
     expect(status).toHaveTextContent("Broken");
+  });
+
+  it("导入时忽略敏感字段的提示持续显示", async () => {
+    importConnectionsMock.mockResolvedValue({
+      imported: [localProfile],
+      failed: [],
+      ignored_secret_fields: 1,
+    });
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("还没有 Redis 连接");
+    vi.useFakeTimers();
+
+    await act(async () => {
+      fireEvent.change(screen.getByLabelText("导入连接文件"), {
+        target: { files: [new File(['{"connections":[]}'], "connections.json", { type: "application/json" })] },
+      });
+    });
+
+    expect(screen.getByRole("status")).toHaveTextContent("已忽略 1 个敏感字段");
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.getByRole("status")).toHaveTextContent("已忽略 1 个敏感字段");
+  });
+
+  it("测试连接成功提示会自动消失", async () => {
+    render(<ConnectionForm initial={localProfile} onSaved={vi.fn()} onCancel={vi.fn()} />);
+    vi.useFakeTimers();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
+    });
+
+    expect(screen.getByText(/连接成功/)).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.queryByText(/连接成功/)).not.toBeInTheDocument();
   });
 
   it("拒绝超过 10 MiB 的连接导入文件", async () => {

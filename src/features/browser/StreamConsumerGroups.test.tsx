@@ -78,6 +78,7 @@ describe("Stream Consumer Groups", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -226,9 +227,11 @@ describe("Pending Claim", () => {
     getPendingMock.mockResolvedValue([pending]); claimMock.mockResolvedValue(["1-0"]);
     vi.stubGlobal("confirm", vi.fn(() => false));
   });
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   it("将选中消息转移到目标消费者并显示实际成功数量", async () => {
+    const claim = deferred<string[]>();
+    claimMock.mockReturnValue(claim.promise);
     render(<StreamConsumerGroups connectionId="local" streamKey="events" />);
     await screen.findByText("1-0");
     fireEvent.click(screen.getByLabelText("选择 Pending 1-0"));
@@ -236,9 +239,41 @@ describe("Pending Claim", () => {
     fireEvent.change(screen.getByLabelText("最小空闲时间（毫秒）"), { target: { value: "1000" } });
     fireEvent.click(screen.getByRole("button", { name: "转移选中 Pending" }));
     fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认转移 Pending" })).getByRole("button", { name: "确认转移" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("已转移 1 / 1 条");
+    await waitFor(() => expect(claimMock).toHaveBeenCalledOnce());
+    vi.useFakeTimers();
+    await act(async () => {
+      claim.resolve(["1-0"]);
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("已转移 1 / 1 条");
+    });
     expect(claimMock).toHaveBeenCalledWith({ connection_id: "local", key: "events", group: "workers",
       consumer: "replacement", min_idle_ms: 1000, entries: ["1-0"] });
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(screen.getByRole("status")).toHaveTextContent("已转移 1 / 1 条");
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("部分 Claim 结果在 3 秒后仍持续显示", async () => {
+    const claim = deferred<string[]>();
+    claimMock.mockReturnValue(claim.promise);
+    render(<StreamConsumerGroups connectionId="local" streamKey="events" />);
+    await screen.findByText("1-0");
+    fireEvent.click(screen.getByLabelText("选择 Pending 1-0"));
+    fireEvent.change(screen.getByLabelText("目标消费者"), { target: { value: "replacement" } });
+    fireEvent.click(screen.getByRole("button", { name: "转移选中 Pending" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认转移 Pending" })).getByRole("button", { name: "确认转移" }));
+    await waitFor(() => expect(claimMock).toHaveBeenCalledOnce());
+    vi.useFakeTimers();
+    await act(async () => {
+      claim.resolve([]);
+    });
+    await vi.waitFor(() => {
+      expect(screen.getByRole("status")).toHaveTextContent("已转移 0 / 1 条");
+    });
+    act(() => { vi.advanceTimersByTime(10_000); });
+    expect(screen.getByRole("status")).toHaveTextContent("已转移 0 / 1 条");
   });
 
   it("Claim 失败保留选中消息和目标，不显示底层错误", async () => {

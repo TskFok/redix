@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent } from "react";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 import { exportQueryPackage, importQueryPackage } from "../../lib/localProductsApi";
 import type { QueryLibraryItem } from "../../lib/types";
 
@@ -8,7 +9,7 @@ export default function QueryPackage({ onImported, disabled = false }: {onImport
   const [busy,setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error,setError] = useState<string | null>(null);
-  const [message,setMessage] = useState<string | null>(null);
+  const [message,setMessage] = useTransientFeedback();
   const run = async (action: () => Promise<void>, fallback: string) => {
     if (busyRef.current || disabled) return;
     busyRef.current = true; setBusy(true); setError(null); setMessage(null);

@@ -112,11 +112,25 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 describe("ObservabilityPage", () => {
+  it("消息发送反馈自动消失，订阅状态继续显示", async () => {
+    render(<ObservabilityPage connectionId="local" />);
+    fireEvent.click(screen.getByRole("tab", { name: /Pub\/Sub/ }));
+    fireEvent.click(screen.getByRole("button", { name: "开始订阅" }));
+    await screen.findByRole("button", { name: "停止订阅" });
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByRole("textbox", { name: "消息" }), { target: { value: "hello" } });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "发送" })); });
+    expect(screen.getByText(/消息已发送/)).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(screen.queryByText(/消息已发送/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "停止订阅" })).toBeEnabled();
+  });
   it("只在显式导出时下载当前筛选的 Profiler 快照", async () => {
     const createObjectURL = vi.fn().mockReturnValue("blob:test");
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL: vi.fn() });

@@ -9,7 +9,7 @@ function deferred<T>() { let resolve!: (value: T) => void; const promise = new P
 describe("Stream 分页与增量编辑", () => {
   // Desktop WebViews may reject native confirm without displaying a dialog.
   beforeEach(() => { vi.resetAllMocks(); vi.stubGlobal("confirm", vi.fn(() => false)); invoke.mockResolvedValue(page("1-0", "1-0")); });
-  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+  afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
   it("前后翻页保留精确游标并从服务端切换倒序", async () => {
     invoke.mockImplementation(async (_command, { input }) => input.reverse ? page("9007199254740993-18446744073709551615") : input.cursor ? page("2-0") : page("1-0", "1-0"));
     render(<StreamEntries connectionId="local" streamKey="events" />);
@@ -61,6 +61,19 @@ describe("Stream 分页与增量编辑", () => {
     expect(invoke.mock.calls.filter(([command]) => command === "add_stream_entry")).toHaveLength(1);
     await act(async () => { write.resolve("3-0"); });
     expect(await screen.findByRole("status")).toHaveTextContent("已添加消息 3-0");
+  });
+  it("操作成功提示在 3 秒后自动消失", async () => {
+    invoke.mockImplementation(async (command) => command === "add_stream_entry" ? "3-0" : page("1-0"));
+    render(<StreamEntries connectionId="local" streamKey="events" />);
+    await screen.findByLabelText("选择消息 1-0");
+    vi.useFakeTimers();
+    fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认添加" }));
+    });
+    expect(screen.getByRole("status")).toHaveTextContent("已添加消息 3-0");
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
   it.each(["add", "delete"])("切换键会取消尚未提交的 %s 确认，返回后旧按钮也不能写入", async (kind) => {
     const { rerender } = render(<StreamEntries connectionId="local" streamKey="events" />);

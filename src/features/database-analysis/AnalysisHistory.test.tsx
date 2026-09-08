@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import AnalysisHistory from "./AnalysisHistory";
 import * as api from "./analysisHistoryApi";
@@ -20,7 +20,10 @@ beforeEach(() => {
   vi.mocked(api.saveAnalysisHistory).mockResolvedValue(summary);
   vi.mocked(api.deleteAnalysisHistory).mockResolvedValue(undefined);
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 const renderReport = (value: DatabaseAnalysisReport) => <p>历史键数 {value.total_keys.total}</p>;
 
 it("只在显式点击后保存，并展示键名隐私提示", async () => {
@@ -31,6 +34,20 @@ it("只在显式点击后保存，并展示键名隐私提示", async () => {
   fireEvent.click(screen.getByRole("button", { name: "保存当前分析" }));
   await screen.findByText("分析报告已保存到本机。");
   expect(api.saveAnalysisHistory).toHaveBeenCalledWith({ connection_id: "one", report });
+});
+
+it("保存成功提示会自动消失", async () => {
+  render(<AnalysisHistory connectionId="one" database={0} report={report} renderReport={renderReport} />);
+  await screen.findByRole("button", { name: "查看历史报告" });
+  vi.useFakeTimers();
+
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "保存当前分析" }));
+  });
+
+  expect(screen.getByText("分析报告已保存到本机。")).toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(3000));
+  expect(screen.queryByText("分析报告已保存到本机。")).not.toBeInTheDocument();
 });
 
 it("仅显式加载本机历史趋势，按扫描范围隔离图表", async () => {
@@ -127,7 +144,12 @@ it("历史部分读取失败明确提示并不绘制不足两点的趋势", asyn
   vi.mocked(api.getAnalysisHistory).mockResolvedValueOnce({ id: "saved", connection_id: "one", saved_at: 1000, report }).mockRejectedValueOnce(new Error("unavailable"));
   render(<AnalysisHistory connectionId="one" database={0} report={report} renderReport={renderReport} />);
   await screen.findAllByRole("button", { name: "查看历史报告" });
-  fireEvent.click(screen.getByRole("button", { name: "加载历史趋势" }));
-  expect(await screen.findByText(/部分历史报告读取失败/)).toBeInTheDocument();
+  vi.useFakeTimers();
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "加载历史趋势" }));
+  });
+  expect(screen.getByText(/部分历史报告读取失败/)).toBeInTheDocument();
   expect(screen.queryByRole("img", { name: "历史已观察键数趋势" })).not.toBeInTheDocument();
+  act(() => vi.advanceTimersByTime(3000));
+  expect(screen.getByText(/部分历史报告读取失败/)).toBeInTheDocument();
 });

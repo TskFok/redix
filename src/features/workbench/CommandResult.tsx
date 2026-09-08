@@ -1,5 +1,5 @@
 import Select from "../../components/Select";
-import { useState } from "react";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import type {
   WorkbenchResultFormat,
@@ -45,7 +45,7 @@ export function CommandResult({
   format = "text",
   onFormatChange,
 }: CommandResultProps) {
-  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useTransientFeedback();
   const formattedResult = result ? formatResult(result.value, format) : null;
   const isLargeResult = Boolean(formattedResult && formattedResult.length > 2000);
   const hasBatchResults = batchResults.length > 0;
@@ -67,7 +67,7 @@ export function CommandResult({
       await navigator.clipboard.writeText(copyValue);
       setCopyStatus("已复制");
     } catch {
-      setCopyStatus("复制失败，请手动复制结果。");
+      setCopyStatus("复制失败，请手动复制结果。", null);
     }
   };
 

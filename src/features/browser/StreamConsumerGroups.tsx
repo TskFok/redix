@@ -2,6 +2,7 @@ import Select from "../../components/Select";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useConfirmDialog } from "../../components/useConfirmDialog";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import {
   acknowledgeStreamPendingEntries,
@@ -41,7 +42,7 @@ export function StreamConsumerGroups({
   const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
   const [claimConsumer, setClaimConsumer] = useState("");
   const [claimIdle, setClaimIdle] = useState("0");
-  const [claimNotice, setClaimNotice] = useState<string | null>(null);
+  const [claimNotice, setClaimNotice] = useTransientFeedback();
   const scopeRef = useRef("");
   scopeRef.current = JSON.stringify([connectionId, streamKey, selectedGroupName]);
   const mutationRef = useRef(0);
@@ -148,7 +149,6 @@ export function StreamConsumerGroups({
     const token = detailsRequestRef.current + 1;
     detailsRequestRef.current = token;
     setSelectedPendingIds([]);
-    setClaimNotice(null);
     if (!selectedGroupName) {
       setConsumers([]);
       setPending([]);
@@ -191,6 +191,7 @@ export function StreamConsumerGroups({
   const selectedGroup = groups.find((group) => group.name === selectedGroupName) ?? null;
 
   const refresh = async () => {
+    setClaimNotice(null);
     await loadGroups();
     if (mountedRef.current) {
       setDetailsRefresh((current) => current + 1);
@@ -326,7 +327,12 @@ export function StreamConsumerGroups({
       if (!isCurrent()) return;
       setSelectedPendingIds([]);
       await refresh();
-      if (isCurrent()) setClaimNotice(`已转移 ${claimed.length} / ${entries.length} 条；不满足空闲条件或已不在 Pending 的消息不会转移。`);
+      if (isCurrent()) {
+        setClaimNotice(
+          `已转移 ${claimed.length} / ${entries.length} 条；不满足空闲条件或已不在 Pending 的消息不会转移。`,
+          claimed.length === entries.length ? undefined : null,
+        );
+      }
     } catch (caught) {
       if (isCurrent()) setError(browserErrorMessage(caught, "转移 Pending 消息失败，请稍后重试。"));
     } finally {

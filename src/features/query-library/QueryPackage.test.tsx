@@ -1,9 +1,28 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import QueryPackage from "./QueryPackage";
 const api=vi.hoisted(()=>({importQueryPackage:vi.fn(),exportQueryPackage:vi.fn()}));
 vi.mock("../../lib/localProductsApi",()=>api);
-afterEach(()=>{cleanup();vi.clearAllMocks();vi.unstubAllGlobals();});
+afterEach(()=>{cleanup();vi.useRealTimers();vi.restoreAllMocks();vi.clearAllMocks();vi.unstubAllGlobals();});
+
+it.each(["导入", "导出"])("查询包%s成功提示自动消失", async (operation) => {
+  vi.useFakeTimers();
+  api.importQueryPackage.mockResolvedValue([]);
+  api.exportQueryPackage.mockResolvedValue({format:"redix-query-library",version:1,items:[]});
+  vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
+  render(<QueryPackage onImported={() => {}} />);
+  await act(async () => {
+    if (operation === "导出") fireEvent.click(screen.getByRole("button", { name: "导出查询包" }));
+    else {
+      const file = new File(["{}"], "queries.json", { type: "application/json" });
+      Object.defineProperty(file, "text", { value: async () => "{}" });
+      fireEvent.change(screen.getByLabelText("导入查询包文件"), { target: { files: [file] } });
+    }
+  });
+  expect(screen.getByRole("status")).toHaveTextContent(`已${operation} 0 条查询`);
+  act(() => { vi.advanceTimersByTime(3000); });
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+});
 
 it("导入成功传回新增查询，错误文件不替换现有查询",async()=>{
   const onImported=vi.fn();

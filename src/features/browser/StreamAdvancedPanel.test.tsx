@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import StreamAdvancedPanel from "./StreamAdvancedPanel";
 
@@ -12,7 +12,7 @@ beforeEach(() => {
   api.updateStreamGroupId.mockResolvedValue(undefined);
   api.claimStreamPendingAdvanced.mockResolvedValue(["1-0"]);
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 it("展开后范围读取、下一页使用排除游标，切换范围重置分页", async () => {
   api.getStreamPendingPage.mockResolvedValueOnce({entries:[entry("1-0")],next_cursor:"1-0",has_more:true});
@@ -58,6 +58,26 @@ it("高级Claim传递TIME、RETRYCOUNT、FORCE，展示影响并只返回成功I
   fireEvent.click(screen.getByRole("button",{name:"执行高级 Claim"}));
   await waitFor(()=>expect(api.claimStreamPendingAdvanced).toHaveBeenCalledWith({connection_id:"local",key:"events",group:"workers",consumer:"new",min_idle_ms:0,entries:["1-0"],idle_ms:null,time_ms:1234,retry_count:7,force:true}));
   expect(await screen.findByText(/已转移 1 \/ 1 条/)).toBeInTheDocument();
+});
+
+it("完整 Claim 成功提示自动消失，部分 Claim 结果持续保留", async () => {
+  render(<StreamAdvancedPanel {...props}/>);
+  fireEvent.click(screen.getByRole("button",{name:"展开 Stream 高级操作"}));
+  await screen.findByRole("checkbox",{name:"高级选择 Pending 1-0"});
+  vi.useFakeTimers();
+  fireEvent.click(screen.getByRole("checkbox",{name:"高级选择 Pending 1-0"}));
+  fireEvent.change(screen.getByLabelText("高级转移目标消费者"),{target:{value:"new"}});
+  await act(async () => { fireEvent.click(screen.getByRole("button",{name:"执行高级 Claim"})); });
+  expect(screen.getByRole("status")).toHaveTextContent("已转移 1 / 1 条");
+  act(() => { vi.advanceTimersByTime(3000); });
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+
+  api.claimStreamPendingAdvanced.mockResolvedValueOnce([]);
+  fireEvent.change(screen.getByLabelText("补充消息 ID"),{target:{value:"1-0"}});
+  await act(async () => { fireEvent.click(screen.getByRole("button",{name:"执行高级 Claim"})); });
+  expect(screen.getByRole("status")).toHaveTextContent("已转移 0 / 1 条");
+  act(() => { vi.advanceTimersByTime(10_000); });
+  expect(screen.getByRole("status")).toHaveTextContent("已转移 0 / 1 条");
 });
 
 it("切换Group后丢弃旧请求，错误不泄露服务端消息", async () => {

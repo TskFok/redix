@@ -1,5 +1,6 @@
 import Select from "../../components/Select";
 import { useEffect, useId, useRef, useState } from "react";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 import {
   claimStreamPendingAdvanced,
   getStreamPendingPage,
@@ -49,7 +50,7 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
   const [explicitIds, setExplicitIds] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useTransientFeedback();
   const busyRef = useRef(false);
   const tokenRef = useRef(0);
   const mounted = useRef(false);
@@ -118,7 +119,10 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
         retry_count: retry, force });
       if (!isCurrent()) return;
       setSelected([]); setExplicitIds("");
-      setMessage(`已转移 ${affected.length} / ${ids.length} 条；未满足条件或已被删除的消息不会返回。`);
+      setMessage(
+        `已转移 ${affected.length} / ${ids.length} 条；未满足条件或已被删除的消息不会返回。`,
+        affected.length === ids.length ? undefined : null,
+      );
       try {
         const result = await getStreamPendingPage(pageInput(history[history.length - 1], applied));
         if (!isCurrent()) return;

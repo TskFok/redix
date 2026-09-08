@@ -1,5 +1,6 @@
 import Select from "../../components/Select";
 import { useState } from "react";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import {
   openConnection,
@@ -213,7 +214,7 @@ export function ConnectionForm({
     formValuesFromProfile(initial),
   );
   const [error, setError] = useState<string | null>(null);
-  const [testStatus, setTestStatus] = useState<string | null>(null);
+  const [testStatus, setTestStatus] = useTransientFeedback();
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
 

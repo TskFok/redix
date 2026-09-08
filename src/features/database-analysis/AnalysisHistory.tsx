@@ -3,6 +3,7 @@ import type { DatabaseAnalysisReport } from "../../lib/types";
 import { deleteAnalysisHistory, getAnalysisHistory, listAnalysisHistory, saveAnalysisHistory,
   type AnalysisHistorySummary, type SavedAnalysis } from "./analysisHistoryApi";
 import AnalysisTrends, { analysisScope } from "./AnalysisTrends";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 interface Props {
   connectionId: string;
@@ -35,7 +36,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useTransientFeedback();
   const [trendReports, setTrendReports] = useState<SavedAnalysis[] | null>(null);
   const generation = useRef(0);
   const scope = JSON.stringify([connectionId, database]);
@@ -82,7 +83,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
       if (!isCurrent()) return;
       const reports = results.flatMap((result) => result.status === "fulfilled" && result.value.connection_id === connectionId && result.value.report.database === database ? [result.value] : []);
       setTrendReports(reports);
-      if (reports.length !== results.length) setMessage("部分历史报告读取失败，趋势只包含成功读取的记录。");
+      if (reports.length !== results.length) setMessage("部分历史报告读取失败，趋势只包含成功读取的记录。", null);
     })}>加载历史趋势</button>
     {trendReports && <AnalysisTrends key={JSON.stringify(trendReports.map((item) => item.id))} items={trendReports} current={report} />}
     {items.length > 0 && <div className="database-table-wrap"><table className="database-table" aria-label="已保存分析">

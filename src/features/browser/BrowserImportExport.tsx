@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import { exportKeys, importKeys } from "../../lib/tauri";
 import type { ExportedKey, ImportKeysInput } from "../../lib/types";
@@ -51,7 +52,7 @@ export function BrowserImportExport({
 }: BrowserImportExportProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
+  const [status, setStatus] = useTransientFeedback();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = async () => {
