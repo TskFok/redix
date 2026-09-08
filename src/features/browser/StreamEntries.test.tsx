@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import StreamEntries from "./StreamEntries";
 import type { StreamEntriesPage } from "./streamEntriesApi";
@@ -7,7 +7,8 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 const page = (id: string, next: string | null = null): StreamEntriesPage => ({ entries: [{ id, fields: [{ field: "event", value: id }] }], next_cursor: next, has_more: next !== null });
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 describe("Stream 分页与增量编辑", () => {
-  beforeEach(() => { vi.resetAllMocks(); vi.stubGlobal("confirm", vi.fn(() => true)); invoke.mockResolvedValue(page("1-0", "1-0")); });
+  // Desktop WebViews may reject native confirm without displaying a dialog.
+  beforeEach(() => { vi.resetAllMocks(); vi.stubGlobal("confirm", vi.fn(() => false)); invoke.mockResolvedValue(page("1-0", "1-0")); });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
   it("前后翻页保留精确游标并从服务端切换倒序", async () => {
     invoke.mockImplementation(async (_command, { input }) => input.reverse ? page("9007199254740993-18446744073709551615") : input.cursor ? page("2-0") : page("1-0", "1-0"));
@@ -22,25 +23,70 @@ describe("Stream 分页与增量编辑", () => {
     await screen.findByLabelText("选择消息 9007199254740993-18446744073709551615");
     expect(invoke).toHaveBeenLastCalledWith("get_stream_entries", { input: { connection_id: "local", key: "events", start: "-", end: "+", cursor: null, count: 100, reverse: true } });
   });
-  it("取消新增或删除不发送写请求，确认后只发送增量动作", async () => {
+  it("原生确认不可用时仍可通过应用内确认新增和删除消息，取消不发送写请求", async () => {
     render(<StreamEntries connectionId="local" streamKey="events" />);
     await screen.findByLabelText("选择消息 1-0");
     fireEvent.change(screen.getByLabelText("消息字段 JSON"), { target: { value: '[["a","b"],["a",""]]' } });
-    vi.mocked(window.confirm).mockReturnValue(false);
     fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认添加消息" })).getByRole("button", { name: "取消" }));
     fireEvent.click(screen.getByLabelText("选择消息 1-0"));
     fireEvent.click(screen.getByRole("button", { name: "删除选中消息" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认删除" })).getByRole("button", { name: "取消" }));
     expect(invoke.mock.calls.every(([command]) => command === "get_stream_entries")).toBe(true);
-    vi.mocked(window.confirm).mockReturnValue(true);
     invoke.mockImplementation(async (command) => command === "add_stream_entry" ? "3-0" : command === "delete_stream_entries" ? 1 : page("1-0", "1-0"));
     fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认添加" }));
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("已添加消息 3-0"));
     expect(invoke).toHaveBeenCalledWith("add_stream_entry", { input: { connection_id: "local", key: "events", id: "*", fields: [{ field: "a", value: "b" }, { field: "a", value: "" }] } });
     await screen.findByLabelText("选择消息 1-0");
     fireEvent.click(screen.getByLabelText("选择消息 1-0"));
     fireEvent.click(screen.getByRole("button", { name: "删除选中消息" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("已删除 1 条消息"));
     expect(invoke).toHaveBeenCalledWith("delete_stream_entries", { input: { connection_id: "local", key: "events", ids: ["1-0"] } });
+    expect(window.confirm).not.toHaveBeenCalled();
+  });
+  it("确认期间重复点击只显示一次提示，提交期间不重复写入", async () => {
+    const write = deferred<string>();
+    invoke.mockImplementation(async (command) => command === "add_stream_entry" ? write.promise : page("1-0"));
+    render(<StreamEntries connectionId="local" streamKey="events" />);
+    await screen.findByLabelText("选择消息 1-0");
+    fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    expect(invoke.mock.calls.filter(([command]) => command === "add_stream_entry")).toHaveLength(0);
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认添加" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "添加消息" })).toBeDisabled());
+    fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    expect(invoke.mock.calls.filter(([command]) => command === "add_stream_entry")).toHaveLength(1);
+    await act(async () => { write.resolve("3-0"); });
+    expect(await screen.findByRole("status")).toHaveTextContent("已添加消息 3-0");
+  });
+  it.each(["add", "delete"])("切换键会取消尚未提交的 %s 确认，返回后旧按钮也不能写入", async (kind) => {
+    const { rerender } = render(<StreamEntries connectionId="local" streamKey="events" />);
+    await screen.findByLabelText("选择消息 1-0");
+    if (kind === "delete") fireEvent.click(screen.getByLabelText("选择消息 1-0"));
+    fireEvent.click(screen.getByRole("button", { name: kind === "add" ? "添加消息" : "删除选中消息" }));
+    const oldAccept = within(screen.getByRole("alertdialog")).getByRole("button", { name: kind === "add" ? "确认添加" : "确认删除" });
+    rerender(<StreamEntries connectionId="local" streamKey="other" />);
+    await screen.findByLabelText("选择消息 1-0");
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    rerender(<StreamEntries connectionId="local" streamKey="events" />);
+    await screen.findByLabelText("选择消息 1-0");
+    fireEvent.click(oldAccept);
+    expect(invoke.mock.calls.every(([command]) => command === "get_stream_entries")).toBe(true);
+  });
+  it("父级变为忙碌时取消待定确认，恢复后可以重新确认", async () => {
+    const { rerender } = render(<StreamEntries connectionId="local" streamKey="events" />);
+    await screen.findByLabelText("选择消息 1-0");
+    fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    rerender(<StreamEntries connectionId="local" streamKey="events" disabled />);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(invoke.mock.calls.every(([command]) => command === "get_stream_entries")).toBe(true);
+    rerender(<StreamEntries connectionId="local" streamKey="events" />);
+    fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
   });
   it("离开再返回同一键时旧分页与写入响应都不能覆盖当前页面", async () => {
     const oldPage = deferred<StreamEntriesPage>();
@@ -54,6 +100,8 @@ describe("Stream 分页与增量编辑", () => {
     await screen.findByLabelText("选择消息 1-0");
     fireEvent.change(screen.getByLabelText("消息字段 JSON"), { target: { value: '[["a","b"]]' } });
     fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认添加" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("add_stream_entry", { input: { connection_id: "other", key: "events", id: "*", fields: [{ field: "a", value: "b" }] } }));
     rerender(<StreamEntries connectionId="local" streamKey="other" onChanged={changed} />);
     await screen.findByLabelText("选择消息 1-0");
     rerender(<StreamEntries connectionId="other" streamKey="events" onChanged={changed} />);
@@ -78,7 +126,9 @@ describe("Stream 分页与增量编辑", () => {
     invoke.mockRejectedValue({ code: "COMMAND_FAILED", message: "secret" });
     fireEvent.change(screen.getByLabelText("消息字段 JSON"), { target: { value: '[["a","b"]]' } });
     fireEvent.click(screen.getByRole("button", { name: "添加消息" }));
-    expect(await screen.findByRole("alert")).not.toHaveTextContent("secret");
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认添加" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Stream 消息操作失败"));
+    expect(screen.getByRole("alert")).not.toHaveTextContent("secret");
     expect(screen.getByLabelText("消息字段 JSON")).toHaveValue('[["a","b"]]');
   });
 });

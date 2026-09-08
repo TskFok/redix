@@ -325,8 +325,8 @@ export function StreamConsumerGroups({
     <section className="stream-consumer-groups" aria-labelledby="stream-consumer-groups-title">
       <div className="stream-groups-heading">
         <div>
-          <p className="eyebrow">STREAM OPERATIONS</p>
           <h3 id="stream-consumer-groups-title">Consumer Groups</h3>
+          <p className="stream-hint">管理消费组、消费者与待确认消息。</p>
         </div>
         <button
           type="button"
@@ -419,17 +419,6 @@ export function StreamConsumerGroups({
           </div>
         </div>
       ) : null}
-
-      {selectedGroup && <StreamAdvancedPanel
-        key={JSON.stringify([connectionId, streamKey, selectedGroup.name])}
-        connectionId={connectionId}
-        streamKey={streamKey}
-        group={selectedGroup.name}
-        lastDeliveredId={selectedGroup.last_delivered_id}
-        disabled={busy || loading || detailsLoading}
-        onChanged={refresh}
-        onBusyChange={setBusy}
-      />}
 
       <div className="stream-group-data-grid" aria-busy={detailsLoading}>
         <section className="stream-group-subpanel" aria-labelledby="stream-consumers-title">
@@ -561,6 +550,18 @@ export function StreamConsumerGroups({
           )}
         </section>
       </div>
+
+      {selectedGroup && <StreamAdvancedPanel
+        key={JSON.stringify([connectionId, streamKey, selectedGroup.name])}
+        connectionId={connectionId}
+        streamKey={streamKey}
+        group={selectedGroup.name}
+        lastDeliveredId={selectedGroup.last_delivered_id}
+        disabled={busy || loading || detailsLoading}
+        onChanged={refresh}
+        onBusyChange={setBusy}
+      />}
+
     </section>
   );
 }

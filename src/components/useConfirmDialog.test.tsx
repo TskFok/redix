@@ -47,6 +47,26 @@ describe("useConfirmDialog", () => {
     expect(trigger).toHaveFocus();
   });
 
+  it("新增操作使用自己的标题和非危险确认按钮，后续删除恢复默认文案", async () => {
+    const view = renderConfirmation();
+    let answer!: Promise<boolean>;
+    act(() => {
+      answer = view.confirm("确认添加消息？", { title: "确认添加消息", confirmLabel: "确认添加", danger: false });
+    });
+    const dialog = screen.getByRole("alertdialog", { name: "确认添加消息" });
+    const accept = within(dialog).getByRole("button", { name: "确认添加" });
+    expect(accept).toHaveClass("button-primary");
+    expect(accept).not.toHaveClass("button-danger");
+    fireEvent.click(accept);
+    await expect(answer).resolves.toBe(true);
+
+    const deleteAnswer = view.request();
+    expect(screen.getByRole("alertdialog", { name: "确认删除" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认删除" })).toHaveClass("button-danger");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await expect(deleteAnswer).resolves.toBe(false);
+  });
+
   it.each(["取消按钮", "Escape", "遮罩"])("通过%s取消时返回 false 并归还焦点", async (method) => {
     const view = renderConfirmation();
     const trigger = screen.getByRole("button", { name: "删除入口" });

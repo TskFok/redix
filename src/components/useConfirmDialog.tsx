@@ -3,15 +3,22 @@ import { createPortal } from "react-dom";
 
 import "./confirmDialog.css";
 
+interface ConfirmationOptions {
+  title?: string;
+  confirmLabel?: string;
+  danger?: boolean;
+}
+
 interface Confirmation {
   message: string;
+  options: ConfirmationOptions;
   scope: object;
   resolve: (accepted: boolean) => void;
   returnFocus: HTMLElement | null;
 }
 
 export function useConfirmDialog(scope: string): {
-  confirm: (message: string) => Promise<boolean>;
+  confirm: (message: string, options?: ConfirmationOptions) => Promise<boolean>;
   confirmationDialog: ReactNode;
 } {
   const id = useId();
@@ -33,11 +40,12 @@ export function useConfirmDialog(scope: string): {
     };
   }, [scopeToken]);
 
-  const confirm = useCallback((message: string): Promise<boolean> => {
+  const confirm = useCallback((message: string, options: ConfirmationOptions = {}): Promise<boolean> => {
     if (activeScope.current !== scopeToken || pendingRef.current) return Promise.resolve(false);
     return new Promise((resolve) => {
       const request: Confirmation = {
         message,
+        options,
         scope: scopeToken,
         resolve,
         returnFocus: document.activeElement instanceof HTMLElement ? document.activeElement : null,
@@ -93,11 +101,11 @@ export function useConfirmDialog(scope: string): {
         aria-labelledby={`${id}-title`}
         aria-describedby={`${id}-message`}
       >
-        <h2 id={`${id}-title`}>确认删除</h2>
+        <h2 id={`${id}-title`}>{pending.options.title ?? "确认删除"}</h2>
         <p id={`${id}-message`}>{pending.message}</p>
         <div className="confirm-dialog-actions">
           <button ref={cancelRef} className="button button-secondary" type="button" onClick={() => finish(pending, false)}>取消</button>
-          <button ref={acceptRef} className="button button-danger" type="button" onClick={() => finish(pending, true)}>确认删除</button>
+          <button ref={acceptRef} className={`button ${pending.options.danger === false ? "button-primary" : "button-danger"}`} type="button" onClick={() => finish(pending, true)}>{pending.options.confirmLabel ?? "确认删除"}</button>
         </div>
       </section>
     </div>, document.body,
