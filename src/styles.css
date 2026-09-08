@@ -1869,6 +1869,7 @@ input[type="checkbox"]:hover:not(:disabled) {
 
 .key-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
   min-height: 0;
   flex: 0 0 auto;
