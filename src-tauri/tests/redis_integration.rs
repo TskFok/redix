@@ -1074,6 +1074,35 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         }
     }
 
+    let all_summaries = service
+        .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
+            connection_id: "integration".into(),
+            pattern: format!("{}:*", keys.prefix),
+            count: 1,
+            key_type: None,
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    let all_names = all_summaries
+        .iter()
+        .map(|summary| summary.key.clone())
+        .collect::<std::collections::BTreeSet<_>>();
+    if all_names.len() != all_summaries.len() || all_names != summaries.keys().cloned().collect() {
+        return Err("full Browser scan must return every matching key exactly once".into());
+    }
+    let all_hashes = service
+        .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
+            connection_id: "integration".into(),
+            pattern: format!("{}:*", keys.prefix),
+            count: 1,
+            key_type: Some("hash".into()),
+        })
+        .await
+        .map_err(|error| error.code().to_owned())?;
+    if all_hashes.len() != 1 || all_hashes[0].key != keys.hash || all_hashes[0].key_type != "hash" {
+        return Err("full Browser scan must preserve type filtering across pages".into());
+    }
+
     let filtered = service
         .scan_keys(ScanKeysInput {
             connection_id: "integration".into(),

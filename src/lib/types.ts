@@ -598,6 +598,13 @@ export interface AppSettings {
 
 export type ScanCursor = number | string;
 
+export interface ScanAllKeysInput {
+  connection_id: string;
+  pattern: string;
+  count: number;
+  key_type: string | null;
+}
+
 export interface ScanKeysInput {
   connection_id: string;
   cursor: ScanCursor;

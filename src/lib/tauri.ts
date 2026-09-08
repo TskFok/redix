@@ -57,6 +57,7 @@ import type {
   InstanceDetails,
   KeyInfo,
   KeyInfoInput,
+  KeySummary,
   KeyValue,
   ModuleCapabilities,
   ListSearchIndexesResult,
@@ -85,6 +86,7 @@ import type {
   PublishPubSubInput,
   PubSubSession,
   ProfilerSession,
+  ScanAllKeysInput,
   ScanKeysInput,
   ScanPage,
   SelectDatabaseInput,
@@ -174,6 +176,10 @@ export function closeConnection(connectionId: string): Promise<void> {
 
 export function scanKeys(input: ScanKeysInput): Promise<ScanPage> {
   return call<ScanPage>("scan_keys", { input });
+}
+
+export function scanAllKeys(input: ScanAllKeysInput): Promise<KeySummary[]> {
+  return call<KeySummary[]>("scan_all_keys", { input });
 }
 
 export function getClusterTopology(connectionId: string): Promise<ClusterTopology> {

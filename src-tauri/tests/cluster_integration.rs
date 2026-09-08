@@ -286,6 +286,24 @@ async fn cluster_routes_scans_all_primaries_and_reports_topology_and_analysis() 
         assert!(observed_opaque_has_more);
         assert_eq!(found, keys.iter().cloned().collect());
 
+        let all_keys = service
+            .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
+                connection_id: "cluster".into(),
+                pattern: format!("{prefix}:*"),
+                count: 1,
+                key_type: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(all_keys.len(), keys.len());
+        assert_eq!(
+            all_keys
+                .into_iter()
+                .map(|key| key.key)
+                .collect::<HashSet<_>>(),
+            keys.iter().cloned().collect()
+        );
+
         let analysis = service
             .analyze_database(AnalyzeDatabaseInput {
                 connection_id: "cluster".into(),

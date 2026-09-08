@@ -5,9 +5,6 @@ import type {
   JsonValue,
   ModuleCapabilities,
   RedisValue,
-  ScanPage,
-  ScanCursor,
-  NodeFailure,
 } from "../../lib/types";
 
 export type { JsonValue };
@@ -15,17 +12,15 @@ export type { JsonValue };
 export interface BrowserPageState {
   pattern: string;
   keyType: string;
-  cursor: ScanCursor;
-  nodeFailures: NodeFailure[];
-  // All scanned keys, including those hidden by the current type filter.
+  // Complete scan results, including keys hidden by the current type filter.
   keys: KeySummary[];
   selectedKey: string | null;
   selectedKeys: string[];
   detail: KeyValue | null;
   metadata: KeyInfo | null;
   loading: boolean;
+  scanFailed: boolean;
   error: string | null;
-  hasMore: boolean;
 }
 
 export type ModuleProbeState =
@@ -36,16 +31,14 @@ export type ModuleProbeState =
 export const initialBrowserPageState: BrowserPageState = {
   pattern: "*",
   keyType: "",
-  cursor: 0,
-  nodeFailures: [],
   keys: [],
   selectedKey: null,
   selectedKeys: [],
   detail: null,
   metadata: null,
   loading: false,
+  scanFailed: false,
   error: null,
-  hasMore: false,
 };
 
 function matchesKeyType(summary: KeySummary, keyType: string): boolean {
@@ -165,37 +158,22 @@ export function applyCreatedKey(current: BrowserPageState, detail: KeyValue): Br
   }, current.keyType);
 }
 
-export function applyScanPage(
+export function applyScanResult(
   current: BrowserPageState,
-  page: ScanPage,
-  replace: boolean,
+  keys: KeySummary[],
 ): BrowserPageState {
-  const mergedKeys = replace ? page.keys : [...current.keys, ...page.keys];
-  const keysByName = new Map<string, KeySummary>();
-  for (const key of mergedKeys) {
-    keysByName.set(key.key, key);
-  }
-  // A successful page need not visit every failed node. Keep warnings until a
-  // fresh scan or a complete traversal confirms recovery.
-  const nodeFailures = new Map<string, NodeFailure>();
-  if (!replace && page.has_more) {
-    for (const failure of current.nodeFailures) nodeFailures.set(failure.node_id, failure);
-  }
-  for (const failure of page.node_failures) nodeFailures.set(failure.node_id, failure);
-
-  return applyKeyTypeFilter({
+  const keysByName = new Map(keys.map((summary) => [summary.key, summary]));
+  return {
     ...current,
-    cursor: page.cursor,
     keys: [...keysByName.values()],
-    selectedKey: replace ? null : current.selectedKey,
-    selectedKeys: replace ? [] : current.selectedKeys,
-    detail: replace ? null : current.detail,
-    metadata: replace ? null : current.metadata,
-    hasMore: page.has_more,
-    nodeFailures: [...nodeFailures.values()],
+    selectedKey: null,
+    selectedKeys: [],
+    detail: null,
+    metadata: null,
     loading: false,
+    scanFailed: false,
     error: null,
-  }, current.keyType);
+  };
 }
 
 export function cloneRedisValue(value: RedisValue): RedisValue {

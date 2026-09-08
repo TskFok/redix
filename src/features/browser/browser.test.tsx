@@ -3,13 +3,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import BrowserPage from "./BrowserPage";
 import {
-  applyScanPage,
+  applyScanResult,
   initialBrowserPageState,
 } from "./browserState";
 import KeyDetails from "./KeyDetails";
 import KeyEditor from "./KeyEditor";
 import AddKey from "./AddKey";
-import type { KeyValue, RedisValue, ScanPage } from "../../lib/types";
+import type { KeySummary, KeyValue, RedisValue } from "../../lib/types";
 
 const { getStringValueMock, decodeStringValueMock, encodeStringValueMock, setStringValueMock } = vi.hoisted(() => ({
   getStringValueMock: vi.fn(), decodeStringValueMock: vi.fn(), encodeStringValueMock: vi.fn(), setStringValueMock: vi.fn(),
@@ -18,7 +18,7 @@ vi.mock("./valueCodecApi", () => ({ getStringValue: getStringValueMock, decodeSt
 
 const {
   acknowledgeStreamPendingEntriesMock,
-  scanKeysMock,
+  scanAllKeysMock,
   getKeyMock,
   getDatabaseOverviewMock,
   getModuleCapabilitiesMock,
@@ -63,7 +63,7 @@ const {
   getStreamPendingEntriesMock,
 } = vi.hoisted(() => ({
   acknowledgeStreamPendingEntriesMock: vi.fn(),
-  scanKeysMock: vi.fn(),
+  scanAllKeysMock: vi.fn(),
   getKeyMock: vi.fn(),
   getDatabaseOverviewMock: vi.fn(),
   getModuleCapabilitiesMock: vi.fn(),
@@ -109,7 +109,7 @@ const {
 }));
 
 vi.mock("../../lib/tauri", () => ({
-  scanKeys: scanKeysMock,
+  scanAllKeys: scanAllKeysMock,
   getKey: getKeyMock,
   getBrowserKey: getKeyMock,
   getDatabaseOverview: getDatabaseOverviewMock,
@@ -182,32 +182,92 @@ function deferred<T>() {
 }
 
 describe("Redis Browser", () => {
+  it("全量扫描完成前只显示扫描提示，完成后一次展示完整列表", async () => {
+    const scan = deferred<KeySummary[]>();
+    scanAllKeysMock.mockReturnValueOnce(scan.promise);
+    render(<BrowserPage connectionId="local" />);
+
+    expect(scanAllKeysMock).toHaveBeenCalledExactlyOnceWith({
+      connection_id: "local", pattern: "*", count: 100, key_type: null,
+    });
+    expect(screen.getByText("正在扫描键…")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Redis 键树" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+    expect(screen.queryByText("没有匹配的键。")).not.toBeInTheDocument();
+
+    await act(async () => scan.resolve([
+      stringSummary, { ...stringSummary, key: "user:2" }, { ...stringSummary, key: "events", key_type: "stream" },
+    ]));
+    expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("当前 3 个键")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "user:2" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "events" })).toBeEnabled();
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
+  });
+
   it("在其他页面切库期间打开 Browser，切库结束后恢复首次扫描", async () => {
     const view = render(<BrowserPage connectionId="local" databaseSwitching />);
-    expect(scanKeysMock).not.toHaveBeenCalled();
+    expect(scanAllKeysMock).not.toHaveBeenCalled();
 
     view.rerender(<BrowserPage connectionId="local" databaseSwitching={false} />);
 
-    await waitFor(() => expect(scanKeysMock).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(scanAllKeysMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("没有匹配的键。")).toBeInTheDocument();
   });
 
-  it("部分节点失败可继续重试，完成 opaque cursor 不显示更多", async () => {
-    scanKeysMock.mockResolvedValueOnce({ cursor: "cluster:retry", keys: [], node_failures: [{ node_id: "node-b", code: "CONNECTION_FAILED" }], has_more: true }).mockResolvedValueOnce({ cursor: "cluster:complete", keys: [], node_failures: [], has_more: false });
+  it("节点扫描失败持续显示失败状态，关闭提示后仍可刷新重试", async () => {
+    const retry = deferred<KeySummary[]>();
+    scanAllKeysMock.mockRejectedValueOnce({ code: "CLUSTER_NODE_UNAVAILABLE", message: "secret-host" })
+      .mockReturnValueOnce(retry.promise);
     render(<BrowserPage connectionId="cluster" />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("1 个节点扫描失败");
-    expect(screen.queryByText("没有匹配的键。")).not.toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "继续扫描并重试" }));
-    await waitFor(() => expect(scanKeysMock).toHaveBeenCalledTimes(2));
-    expect(scanKeysMock.mock.calls[1][0].cursor).toBe("cluster:retry");
-    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    expect(await screen.findByRole("alert")).toHaveTextContent("部分 Cluster 节点不可用");
+    expect(screen.queryByText("secret-host")).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Redis 键树" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+    expect(screen.queryByText("没有匹配的键。")).not.toBeInTheDocument();
+    expect(screen.getByText("键列表加载失败，请刷新重试。")).toBeInTheDocument();
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "关闭提示" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("没有匹配的键。")).not.toBeInTheDocument();
+    expect(screen.getByText("键列表加载失败，请刷新重试。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新键列表" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
+    expect(screen.getByText("正在扫描键…")).toBeInTheDocument();
+    expect(screen.queryByText("键列表加载失败，请刷新重试。")).not.toBeInTheDocument();
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "cluster", pattern: "*", count: 100, key_type: null,
+    });
+    await act(async () => retry.resolve([]));
+    expect(screen.getByText("没有匹配的键。")).toBeInTheDocument();
+    expect(screen.queryByText("键列表加载失败，请刷新重试。")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
+
+  it("详情读取失败不改变完整键列表的扫描成功状态", async () => {
+    scanAllKeysMock.mockResolvedValueOnce([stringSummary]);
+    getKeyMock.mockRejectedValueOnce({ code: "CONNECTION_FAILED" });
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
+    fireEvent.click(screen.getByRole("button", { name: "user:1" }));
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(screen.queryByText("键列表加载失败，请刷新重试。")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "关闭提示" }));
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(screen.queryByText("键列表加载失败，请刷新重试。")).not.toBeInTheDocument();
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubGlobal("confirm", vi.fn(() => true));
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     getKeyMock.mockResolvedValue(stringDetail);
     getDatabaseOverviewMock.mockResolvedValue([]);
     getStringValueMock.mockResolvedValue({ base64: btoa("Alice"), total_bytes: 5, ttl_ms: -1, truncated: false });
@@ -334,11 +394,11 @@ describe("Redis Browser", () => {
     fireEvent.change(screen.getByLabelText("键树分隔符"), { target: { value: "::" } });
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
 
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
-    expect(scanKeysMock).toHaveBeenLastCalledWith({
-      connection_id: "local", cursor: 0, pattern: "user::*", count: 100, key_type: null,
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", pattern: "user::*", count: 100, key_type: null,
     });
 
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
@@ -347,30 +407,25 @@ describe("Redis Browser", () => {
     fireEvent.click(screen.getByRole("combobox", { name: "类型过滤" }));
     fireEvent.click(within(screen.getByRole("listbox", { name: "类型过滤" })).getByRole("option", { name: "Hash" }));
     await act(async () => { await Promise.resolve(); });
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
 
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     expect(screen.getByLabelText("键过滤")).toHaveValue("user::*");
     expect(screen.getByLabelText("类型过滤")).toHaveValue("hash");
     expect(screen.getByLabelText("键树分隔符")).toHaveValue("::");
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
   });
 
   it("按模式加载键并在点击键后读取详情", async () => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     getKeyMock.mockResolvedValue(stringDetail);
 
     render(<BrowserPage connectionId="local" />);
 
     expect(await screen.findByRole("button", { name: "展开前缀 user:" })).toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledWith({
+    expect(scanAllKeysMock).toHaveBeenCalledWith({
       connection_id: "local",
-      cursor: 0,
       pattern: "*",
       count: 100,
       key_type: null,
@@ -387,9 +442,7 @@ describe("Redis Browser", () => {
   });
 
   it.each(["树形", "平铺"])("%s视图读取详情时不插入扫描提示，且保持操作禁用", async (view) => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 10, keys: [stringSummary], node_failures: [], has_more: true,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     const pendingDetail = deferred<KeyValue>();
     getKeyMock.mockReturnValueOnce(pendingDetail.promise);
     render(<BrowserPage connectionId="local" />);
@@ -406,7 +459,7 @@ describe("Redis Browser", () => {
     expect(within(screen.getByRole("region", { name: "键详情" })).getByRole("status"))
       .toHaveTextContent("正在读取键详情…");
     expect(within(listPanel).queryByRole("status")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "加载更多" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "user:1" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "选择键 user:1" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "刷新键列表" })).toBeDisabled();
@@ -416,31 +469,26 @@ describe("Redis Browser", () => {
     expect(await screen.findByDisplayValue("Alice")).toBeInTheDocument();
     expect(within(listPanel).queryByRole("status")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "加载更多" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
   });
 
-  it("扫描分页期间保留扫描提示和操作禁用，完成后追加键", async () => {
-    const pendingScan = deferred<{
-      cursor: number; keys: typeof stringSummary[]; node_failures: []; has_more: boolean;
-    }>();
-    scanKeysMock.mockResolvedValueOnce({
-      cursor: 10, keys: [stringSummary], node_failures: [], has_more: true,
-    }).mockReturnValueOnce(pendingScan.promise);
+  it("刷新期间显示扫描提示并禁用操作，完成后替换完整列表", async () => {
+    const pendingScan = deferred<KeySummary[]>();
+    scanAllKeysMock.mockResolvedValueOnce([stringSummary]).mockReturnValueOnce(pendingScan.promise);
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
 
     const listPanel = screen.getByRole("region", { name: "键列表" });
     expect(within(listPanel).getByRole("status")).toHaveTextContent("正在扫描键…");
-    expect(screen.getByRole("button", { name: "加载中…" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "user:1" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "刷新键列表" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "新增键" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
 
-    await act(async () => pendingScan.resolve({
-      cursor: 0, keys: [{ ...stringSummary, key: "user:2" }], node_failures: [], has_more: false,
-    }));
-
+    await act(async () => pendingScan.resolve([{ ...stringSummary, key: "user:2" }]));
+    fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
     expect(screen.getByRole("button", { name: "user:2" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
     expect(within(listPanel).queryByRole("status")).not.toBeInTheDocument();
   });
 
@@ -509,11 +557,7 @@ describe("Redis Browser", () => {
   });
 
   it("加载页面时探测模块能力且不阻塞初始扫描", async () => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
 
     render(<BrowserPage connectionId="local" />);
 
@@ -521,9 +565,8 @@ describe("Redis Browser", () => {
     await waitFor(() => {
       expect(getModuleCapabilitiesMock).toHaveBeenCalledWith("local");
     });
-    expect(scanKeysMock).toHaveBeenCalledWith({
+    expect(scanAllKeysMock).toHaveBeenCalledWith({
       connection_id: "local",
-      cursor: 0,
       pattern: "*",
       count: 100,
       key_type: null,
@@ -535,11 +578,7 @@ describe("Redis Browser", () => {
       code: "CONNECTION_FAILED",
       message: "module probe failed",
     });
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
 
     render(<BrowserPage connectionId="local" />);
 
@@ -551,9 +590,8 @@ describe("Redis Browser", () => {
     render(<BrowserPage connectionId="local" scanCount={250} />);
 
     await screen.findByText("没有匹配的键。");
-    expect(scanKeysMock).toHaveBeenCalledWith({
+    expect(scanAllKeysMock).toHaveBeenCalledWith({
       connection_id: "local",
-      cursor: 0,
       pattern: "*",
       count: 250,
       key_type: null,
@@ -561,11 +599,7 @@ describe("Redis Browser", () => {
   });
 
   it("保存 String 原始字节后更新详情，不触发旧UTF8整值读取", async () => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     getKeyMock
       .mockResolvedValueOnce(stringDetail)
       .mockResolvedValueOnce({
@@ -593,66 +627,23 @@ describe("Redis Browser", () => {
     expect(setKeyMock).not.toHaveBeenCalled();
   });
 
-  it("默认按前缀分类，展开不扫描，分页归并目录并保留完整键名，过滤重置列表", async () => {
-    scanKeysMock
-      .mockResolvedValueOnce({
-        cursor: 42,
-        keys: [stringSummary],
-        node_failures: [], has_more: true,
-      })
-      .mockResolvedValueOnce({
-        cursor: 0,
-        keys: [
-          { ...stringSummary, key: "admin:1" },
-          { ...stringSummary, key: "user:2" },
-          stringSummary,
-        ],
-        node_failures: [], has_more: false,
-      })
-      .mockResolvedValueOnce({
-        cursor: 0,
-        keys: [{ ...stringSummary, key: "user:3" }],
-        node_failures: [], has_more: false,
-      });
-
+  it("默认按前缀分类完整结果，展开不扫描，键名过滤替换列表", async () => {
+    scanAllKeysMock.mockResolvedValueOnce([
+      stringSummary, { ...stringSummary, key: "admin:1" }, { ...stringSummary, key: "user:2" },
+    ]).mockResolvedValueOnce([{ ...stringSummary, key: "user:3" }]);
     getKeyMock.mockResolvedValue({ ...stringDetail, key: "user:2" });
-
     render(<BrowserPage connectionId="local" />);
+
     const userFolder = await screen.findByRole("button", { name: "展开前缀 user:" });
     expect(screen.getByRole("button", { name: "树形" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("list", { name: "Redis 键树" })).toBeInTheDocument();
     expect(userFolder).toHaveAttribute("aria-expanded", "false");
-    expect(within(userFolder).getByText("1")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(userFolder);
-    expect(screen.getByRole("button", { name: "user:1" })).toHaveTextContent("1");
-    expect(screen.queryByText("user:1")).not.toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
-    expect(getKeyMock).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    await waitFor(() => {
-      expect(scanKeysMock).toHaveBeenNthCalledWith(2, {
-        connection_id: "local",
-        cursor: 42,
-        pattern: "*",
-        count: 100,
-        key_type: null,
-      });
-    });
-    const adminFolder = await screen.findByRole("button", { name: "展开前缀 admin:" });
-    expect(screen.getAllByRole("button", { name: "折叠前缀 user:" })).toHaveLength(1);
-    expect(within(screen.getByRole("button", { name: "折叠前缀 user:" })).getByText("2")).toBeInTheDocument();
-    const userKeys = within(screen.getByRole("list", { name: "前缀 user: 的键" }));
-    expect(userKeys.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["user:1", "user:2"]);
+    expect(within(userFolder).getByText("2")).toBeInTheDocument();
     expect(screen.getByLabelText("当前 3 个键")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
-
-    fireEvent.click(adminFolder);
-    expect(screen.getByRole("button", { name: "admin:1" })).toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    fireEvent.click(userFolder);
+    const userKeys = within(screen.getByRole("list", { name: "前缀 user: 的键" }));
+    expect(userKeys.getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual(["user:1", "user:2"]);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     fireEvent.click(userKeys.getByRole("button", { name: "user:2" }));
     expect(await screen.findByDisplayValue("Alice")).toBeInTheDocument();
     expect(getKeyMock).toHaveBeenCalledExactlyOnceWith({ connection_id: "local", key: "user:2" });
@@ -661,44 +652,35 @@ describe("Redis Browser", () => {
     const pattern = screen.getByLabelText("键过滤");
     fireEvent.change(pattern, { target: { value: "user:*" } });
     fireEvent.keyDown(pattern, { key: "Enter", code: "Enter" });
-    expect(scanKeysMock).toHaveBeenCalledTimes(3);
-
-    await waitFor(() => {
-      expect(scanKeysMock).toHaveBeenLastCalledWith({
-        connection_id: "local",
-        cursor: 0,
-        pattern: "user:*",
-        count: 100,
-        key_type: null,
-      });
-    });
+    await waitFor(() => expect(scanAllKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", pattern: "user:*", count: 100, key_type: null,
+    }));
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     expect(screen.getByRole("button", { name: "user:3" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "展开前缀 admin:" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "user:2" })).not.toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(3);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
   });
 
   it("键名防抖扫描保留期间切换的类型，并重置旧缓存", async () => {
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: 0, keys: [
+    scanAllKeysMock.mockReset()
+      .mockResolvedValueOnce([stringSummary])
+      .mockResolvedValueOnce([
         { ...stringSummary, key: "new-stream", key_type: "stream" },
         { ...stringSummary, key: "new-string" },
-      ], node_failures: [], has_more: false });
+      ]);
     render(<BrowserPage connectionId="local" />);
     await screen.findByRole("button", { name: "展开前缀 user:" });
     vi.useFakeTimers();
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("键过滤"), { target: { value: "new-*" } });
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "stream" } });
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
-    expect(scanKeysMock).toHaveBeenLastCalledWith({
-      connection_id: "local", cursor: 0, pattern: "new-*", count: 100, key_type: null,
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", pattern: "new-*", count: 100, key_type: null,
     });
     expect(screen.getByLabelText("类型过滤")).toHaveValue("stream");
     expect(screen.getByRole("button", { name: "new-stream" })).toBeEnabled();
@@ -709,9 +691,7 @@ describe("Redis Browser", () => {
   });
 
   it("类型筛选保留可见选择和详情，清除隐藏选择但保留键缓存", async () => {
-    scanKeysMock.mockReset().mockResolvedValueOnce({
-      cursor: 42, keys: [stringSummary, { ...stringSummary, key: "events", key_type: "stream" }], node_failures: [], has_more: true,
-    });
+    scanAllKeysMock.mockReset().mockResolvedValueOnce([stringSummary, { ...stringSummary, key: "events", key_type: "stream" }]);
     render(<BrowserPage connectionId="local" />);
     await screen.findByRole("button", { name: "events" });
     fireEvent.click(screen.getByRole("button", { name: "平铺" }));
@@ -730,12 +710,12 @@ describe("Redis Browser", () => {
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "" } });
     expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: "选择键 user:1" })).not.toBeChecked();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     expect(getKeyMock).toHaveBeenCalledTimes(1);
   });
 
   it.each(["设置 TTL", "重命名"])("%s 回读改变类型时清除隐藏键的勾选和详情，并保留新类型缓存", async (action) => {
-    scanKeysMock.mockReset().mockResolvedValueOnce({ cursor: 0, keys: [stringSummary], node_failures: [], has_more: false });
+    scanAllKeysMock.mockReset().mockResolvedValueOnce([stringSummary]);
     const updated = { ...stringDetail, key: action === "重命名" ? "user:renamed" : "user:1", key_type: "json", ttl_ms: 60000, value: { Json: { value: { name: "Alice" } } } };
     getKeyMock.mockReset().mockResolvedValueOnce(stringDetail);
     if (action === "设置 TTL") getKeyMock.mockResolvedValueOnce(updated);
@@ -762,24 +742,24 @@ describe("Redis Browser", () => {
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "json" } });
     expect(screen.getByRole("button", { name: updated.key })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: `选择键 ${updated.key}` })).not.toBeChecked();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
   });
 
-  it("主动刷新重置缓存和游标，但保留当前类型筛选", async () => {
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary, { ...stringSummary, key: "profile", key_type: "hash" }], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: 0, keys: [{ ...stringSummary, key: "fresh" }, { ...stringSummary, key: "new-profile", key_type: "hash" }], node_failures: [], has_more: false });
+  it("主动刷新替换完整缓存，但保留当前类型筛选", async () => {
+    scanAllKeysMock.mockReset()
+      .mockResolvedValueOnce([stringSummary, { ...stringSummary, key: "profile", key_type: "hash" }])
+      .mockResolvedValueOnce([{ ...stringSummary, key: "fresh" }, { ...stringSummary, key: "new-profile", key_type: "hash" }]);
 
     render(<BrowserPage connectionId="local" />);
     await screen.findByRole("button", { name: "profile" });
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "hash" } });
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
     fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
     expect(await screen.findByRole("button", { name: "new-profile" })).toBeEnabled();
-    expect(scanKeysMock).toHaveBeenLastCalledWith({
-      connection_id: "local", cursor: 0, pattern: "*", count: 100, key_type: null,
+    expect(scanAllKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", pattern: "*", count: 100, key_type: null,
     });
     expect(screen.queryByRole("button", { name: "fresh" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
@@ -788,7 +768,7 @@ describe("Redis Browser", () => {
     expect(screen.getByRole("button", { name: "fresh" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "profile" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "展开前缀 user:" })).not.toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
   });
 
   it("主动刷新完成后重新读取数据库 key 总数", async () => {
@@ -811,7 +791,7 @@ describe("Redis Browser", () => {
     getDatabaseOverviewMock.mockImplementation(async () => [
       { database: 0, key_count: keyCount, expires: 0, avg_ttl_ms: null },
     ]);
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     createKeyMock.mockResolvedValue(stringDetail);
 
     render(<BrowserPage connectionId="local" onProfileChanged={vi.fn()} />);
@@ -835,10 +815,8 @@ describe("Redis Browser", () => {
   });
 
   it("连接切换后旧扫描完成不会刷新新连接的数据库统计", async () => {
-    const oldScan = deferred<ScanPage>();
-    scanKeysMock.mockReturnValueOnce(oldScan.promise).mockResolvedValue({
-      cursor: 0, keys: [], node_failures: [], has_more: false,
-    });
+    const oldScan = deferred<KeySummary[]>();
+    scanAllKeysMock.mockReturnValueOnce(oldScan.promise).mockResolvedValue([]);
     getDatabaseOverviewMock.mockImplementation(async (connectionId: string) => [
       { database: 0, key_count: connectionId === "local" ? 3 : 8, expires: 0, avg_ttl_ms: null },
     ]);
@@ -851,142 +829,84 @@ describe("Redis Browser", () => {
       expect(getDatabaseOverviewMock.mock.calls.filter(([id]) => id === "remote")).toHaveLength(2);
     });
     await act(async () => {
-      oldScan.resolve({ cursor: 0, keys: [], node_failures: [], has_more: false });
+      oldScan.resolve([]);
     });
 
     expect(getDatabaseOverviewMock.mock.calls.filter(([id]) => id === "remote")).toHaveLength(2);
     expect(screen.getByRole("option", { name: "DB 0（8 keys）" })).toBeInTheDocument();
   });
 
-  it.each([
-    { mode: "单机", cursors: [42, 17, 9, 3, 0] },
-    { mode: "集群", cursors: ["cluster:a", "cluster:b", "cluster:c", "cluster:d", "cluster:done"] },
-  ])("$mode 多次加载后切换 STREAM 立即复用缓存，后续沿原游标缓存全部类型", async ({ cursors }) => {
-    const stream = { ...stringSummary, key: "events", key_type: "stream" };
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: cursors[0], keys: [stringSummary], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: cursors[1], keys: [{ ...stringSummary, key: "profile", key_type: "hash" }], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: cursors[2], keys: [stream], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: cursors[3], keys: [{ ...stringSummary, key: "settings" }], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: cursors[4], keys: [{ ...stream, key: "notifications" }], node_failures: [], has_more: false });
-
+  it("全量扫描后切换类型只筛选缓存，清空筛选恢复完整列表", async () => {
+    scanAllKeysMock.mockResolvedValueOnce([
+      stringSummary, { ...stringSummary, key: "profile", key_type: "hash" },
+      { ...stringSummary, key: "events", key_type: "stream" },
+      { ...stringSummary, key: "settings" }, { ...stringSummary, key: "notifications", key_type: "stream" },
+    ]);
     render(<BrowserPage connectionId="local" />);
-    await screen.findByRole("button", { name: "展开前缀 user:" });
-    fireEvent.click(screen.getByRole("button", { name: "平铺" }));
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
     await screen.findByRole("button", { name: "profile" });
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    await screen.findByRole("button", { name: "events" });
+    fireEvent.click(screen.getByRole("button", { name: "平铺" }));
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
-    fireEvent.click(screen.getByLabelText("类型过滤"));
-    fireEvent.click(within(screen.getByRole("listbox")).getByRole("option", { name: "Stream" }));
-    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
-
-    expect(scanKeysMock).toHaveBeenCalledTimes(3);
+    fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "stream" } });
     expect(screen.getByRole("button", { name: "events" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "notifications" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "profile" })).not.toBeInTheDocument();
-    expect(screen.getByLabelText("当前 1 个键")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    expect(await screen.findByRole("button", { name: "notifications" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "events" })).toBeEnabled();
     expect(screen.getByLabelText("当前 2 个键")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
-    expect(scanKeysMock.mock.calls.map(([input]) => input)).toEqual(
-      [0, ...cursors.slice(0, 4)].map((cursor) => ({
-        connection_id: "local", cursor, pattern: "*", count: 100, key_type: null,
-      })),
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "hash" } });
     expect(screen.getByRole("button", { name: "profile" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "events" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "" } });
     for (const key of ["user:1", "profile", "events", "settings", "notifications"]) {
       expect(screen.getByRole("button", { name: key })).toBeEnabled();
     }
     expect(screen.getByLabelText("当前 5 个键")).toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(5);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
   });
 
-  it("缓存中没有 STREAM 时不自动重新扫描，用户继续加载后才推进游标", async () => {
-    const pendingPage = deferred<ScanPage>();
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: 17, keys: [], node_failures: [], has_more: true })
-      .mockReturnValueOnce(pendingPage.promise);
-
+  it("完整缓存没有目标类型时直接显示空结果，不重新扫描", async () => {
+    scanAllKeysMock.mockResolvedValueOnce([stringSummary]);
     render(<BrowserPage connectionId="local" />);
     await screen.findByRole("button", { name: "展开前缀 user:" });
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "stream" } });
-    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("没有匹配的键。")).not.toBeInTheDocument();
-    expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    await waitFor(() => expect(scanKeysMock).toHaveBeenCalledTimes(3));
-    expect(screen.getByText("正在扫描键…")).toBeInTheDocument();
-
-    await act(async () => pendingPage.resolve({ cursor: 0, keys: [], node_failures: [], has_more: false }));
     expect(screen.getByText("没有匹配的键。")).toBeInTheDocument();
+    expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "" } });
     expect(screen.getByRole("button", { name: "展开前缀 user:" })).toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(3);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
   });
 
-  it("空批次后切换连接会终止旧 STREAM 筛选并清空旧缓存", async () => {
-    const pendingPage = deferred<ScanPage>();
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: 17, keys: [], node_failures: [], has_more: true })
-      .mockReturnValueOnce(pendingPage.promise)
-      .mockResolvedValueOnce({ cursor: 0, keys: [{ ...stringSummary, key: "other" }], node_failures: [], has_more: false });
-
+  it.each(["成功", "失败"])("连接切换后忽略旧全量扫描的%s响应", async (result) => {
+    const pending = deferred<KeySummary[]>();
+    scanAllKeysMock.mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce([{ ...stringSummary, key: "other" }]);
     const { rerender } = render(<BrowserPage connectionId="local" />);
-    await screen.findByRole("button", { name: "展开前缀 user:" });
-    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
-    fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "stream" } });
-    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    await waitFor(() => expect(scanKeysMock).toHaveBeenCalledTimes(3));
-
+    expect(screen.getByText("正在扫描键…")).toBeInTheDocument();
     rerender(<BrowserPage connectionId="other" />);
     expect(await screen.findByRole("button", { name: "other" })).toBeEnabled();
-    await act(async () => pendingPage.resolve({ cursor: 9, keys: [], node_failures: [], has_more: true }));
-    expect(scanKeysMock).toHaveBeenCalledTimes(4);
+    await act(async () => {
+      if (result === "成功") pending.resolve([stringSummary]);
+      else pending.reject({ code: "CONNECTION_FAILED" });
+    });
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("button", { name: "other" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "展开前缀 user:" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument();
   });
 
-  it.each(["游标停滞", "请求失败"])("续扫遇到%s时停止并保留游标供重试", async (reason) => {
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: 42, keys: [], node_failures: [], has_more: true });
-    if (reason === "游标停滞") {
-      scanKeysMock.mockResolvedValueOnce({ cursor: 42, keys: [], node_failures: [], has_more: true });
-    } else {
-      scanKeysMock.mockRejectedValueOnce({ code: "CONNECTION_FAILED" });
-    }
-    scanKeysMock.mockResolvedValueOnce({
-      cursor: 0, keys: [{ ...stringSummary, key: "events", key_type: "stream" }], node_failures: [], has_more: false,
-    });
-
+  it("刷新等待完整结果期间隐藏旧列表，失败后不恢复旧结果", async () => {
+    const pending = deferred<KeySummary[]>();
+    scanAllKeysMock.mockResolvedValueOnce([stringSummary]).mockReturnValueOnce(pending.promise);
     render(<BrowserPage connectionId="local" />);
-    expect(await screen.findByRole("button", { name: "加载更多" })).toBeEnabled();
-    expect(screen.queryByText("没有匹配的键。")).not.toBeInTheDocument();
-    expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
-    if (reason === "请求失败") expect(await screen.findByRole("alert")).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    expect(await screen.findByRole("button", { name: "events" })).toBeEnabled();
-    expect(scanKeysMock.mock.calls[2][0].cursor).toBe(42);
-    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+    await screen.findByRole("button", { name: "展开前缀 user:" });
+    fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
+    expect(screen.getByText("正在扫描键…")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Redis 键树" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开前缀 user:" })).not.toBeInTheDocument();
+    await act(async () => pending.reject({ code: "CONNECTION_FAILED" }));
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "展开前缀 user:" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新键列表" })).toBeEnabled();
   });
 
   it("勾选键后只导出一次，并通过 Blob 下载且不包含连接密码", async () => {
@@ -1003,11 +923,7 @@ describe("Redis Browser", () => {
         value: { String: { value: "Alice" } },
       },
     ]);
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
 
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
@@ -1032,7 +948,7 @@ describe("Redis Browser", () => {
       ttl_ms: 10_000,
       value: { String: { value: "imported" } },
     };
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     const file = new File([JSON.stringify([entry])], "keys.json", {
       type: "application/json",
     });
@@ -1049,15 +965,11 @@ describe("Redis Browser", () => {
         entries: [entry],
       });
     });
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
   });
 
   it("删除成功后清理选择并从列表移除键", async () => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
 
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
@@ -1082,11 +994,7 @@ describe("Redis Browser", () => {
 
   it("取消删除确认时不调用 deleteKey，也不进入 busy", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
 
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
@@ -1105,11 +1013,7 @@ describe("Redis Browser", () => {
 
   it("确认删除后调用 deleteKey 并清理键", async () => {
     vi.stubGlobal("confirm", vi.fn(() => false));
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
 
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
@@ -1145,11 +1049,7 @@ describe("Redis Browser", () => {
   });
 
   it("设置 TTL 后刷新详情", async () => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     getKeyMock
       .mockResolvedValueOnce(stringDetail)
       .mockResolvedValueOnce({ ...stringDetail, ttl_ms: 60_000 });
@@ -1177,11 +1077,7 @@ describe("Redis Browser", () => {
   });
 
   it("TTL 为 0 时按立即删除处理，不刷新已删除详情", async () => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     setKeyTtlMock.mockResolvedValue(-2);
 
     render(<BrowserPage connectionId="local" />);
@@ -1208,11 +1104,7 @@ describe("Redis Browser", () => {
 
   it("连接切换后忽略旧连接保存完成，不刷新旧详情", async () => {
     const save = deferred<{ byte_length: number; ttl_ms: number }>();
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     setStringValueMock.mockImplementation(() => save.promise);
 
     const { rerender } = render(<BrowserPage connectionId="local" />);
@@ -1226,9 +1118,9 @@ describe("Redis Browser", () => {
 
     rerender(<BrowserPage connectionId="remote" />);
     await waitFor(() => {
-      expect(scanKeysMock).toHaveBeenCalledWith({
+      expect(scanAllKeysMock).toHaveBeenCalledWith({
         connection_id: "remote",
-        cursor: 0,
+
         pattern: "*",
         count: 100,
         key_type: null,
@@ -1302,7 +1194,7 @@ describe("Redis Browser", () => {
       { key: "set:1", key_type: "set", ttl_ms: -1, size: 2 },
       { key: "zset:1", key_type: "zset", ttl_ms: -1, size: 2 },
     ];
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: summaries, node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue(summaries);
     getKeyMock.mockImplementation(async ({ key }: { key: string }) => {
       const summary = summaries.find((item) => item.key === key)!;
       const value = summary.key_type === "hash" ? { Hash: { fields: [] } }
@@ -1338,7 +1230,7 @@ describe("Redis Browser", () => {
 
   it("加载失败时显示 alert 并在请求期间禁用重复过滤", async () => {
     let rejectScan: ((reason: unknown) => void) | undefined;
-    scanKeysMock.mockImplementation(
+    scanAllKeysMock.mockImplementation(
       () => new Promise((_, reject) => {
         rejectScan = reject;
       }),
@@ -1349,36 +1241,22 @@ describe("Redis Browser", () => {
     const pattern = screen.getByLabelText("键过滤");
     expect(pattern).toBeDisabled();
     fireEvent.keyDown(pattern, { key: "Enter", code: "Enter" });
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
 
     rejectScan?.({ code: "COMMAND_FAILED", message: "加载失败" });
     expect(await screen.findByRole("alert")).toHaveTextContent("加载键失败");
   });
 
-  it("SCAN 替换和追加按 key 去重，并保留最新摘要", () => {
+  it("全量扫描替换旧缓存并按 key 去重，保留最新摘要", () => {
     const current = {
       ...initialBrowserPageState,
-      keys: [{ ...stringSummary, ttl_ms: 1000 }],
-      cursor: 7,
-      hasMore: true,
+      keys: [{ ...stringSummary, key: "obsolete" }],
     };
-    const page = {
-      cursor: 0,
-      keys: [
-        { ...stringSummary, ttl_ms: 2000 },
-        { ...stringSummary, ttl_ms: 3000 },
-        { ...stringSummary, key: "user:2", size: 3 },
-      ],
-      node_failures: [], has_more: false,
-    };
-
-    expect(applyScanPage(current, page, true).keys).toEqual([
-      { ...stringSummary, ttl_ms: 3000 },
+    expect(applyScanResult(current, [
+      { ...stringSummary, ttl_ms: 2000 }, { ...stringSummary, ttl_ms: 3000 },
       { ...stringSummary, key: "user:2", size: 3 },
-    ]);
-    expect(applyScanPage(current, page, false).keys).toEqual([
-      { ...stringSummary, ttl_ms: 3000 },
-      { ...stringSummary, key: "user:2", size: 3 },
+    ]).keys).toEqual([
+      { ...stringSummary, ttl_ms: 3000 }, { ...stringSummary, key: "user:2", size: 3 },
     ]);
   });
 
@@ -1425,7 +1303,7 @@ describe("Redis Browser", () => {
   });
 
   it("新增键以弹窗打开，支持焦点循环、关闭和重新打开", async () => {
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("没有匹配的键。");
     const trigger = screen.getByRole("button", { name: "新增键" });
@@ -1463,7 +1341,7 @@ describe("Redis Browser", () => {
 
   it("创建请求期间禁用示例填充并阻止关闭弹窗，失败后保留表单", async () => {
     const creation = deferred<KeyValue>();
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     createKeyMock.mockReturnValueOnce(creation.promise);
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("没有匹配的键。");
@@ -1488,7 +1366,7 @@ describe("Redis Browser", () => {
       ...stringDetail,
       key: "new:user",
     };
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     createKeyMock.mockResolvedValue(created);
 
     render(<BrowserPage connectionId="local" />);
@@ -1513,11 +1391,11 @@ describe("Redis Browser", () => {
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 new:" }));
     expect(screen.getByRole("button", { name: "new:user" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "新增键" })).not.toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
   });
 
   it("新增键成功后立即恢复入口焦点且不触发加载", async () => {
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     createKeyMock.mockResolvedValue({ ...stringDetail, key: "new:user" });
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("没有匹配的键。");
@@ -1533,120 +1411,111 @@ describe("Redis Browser", () => {
     expect(trigger).toBeEnabled();
     expect(trigger).toHaveFocus();
     expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
   });
 
-  it("新增键保留已加载分页、展开状态、勾选和当前详情", async () => {
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: 84, keys: [{ ...stringSummary, key: "user:2" }], node_failures: [], has_more: true })
-      .mockResolvedValue({ cursor: 0, keys: [{ ...stringSummary, key: "user:4" }], node_failures: [], has_more: false });
+  it("新增键保留完整列表、展开状态、勾选和当前详情", async () => {
+    scanAllKeysMock.mockResolvedValueOnce([stringSummary, { ...stringSummary, key: "user:2" }]);
     createKeyMock.mockResolvedValue({ ...stringDetail, key: "user:3" });
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    await screen.findByRole("button", { name: "user:2" });
     fireEvent.click(screen.getByRole("checkbox", { name: "选择键 user:2" }));
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
     fireEvent.click(screen.getByRole("button", { name: "新增键" }));
     fireEvent.change(screen.getByLabelText("键名"), { target: { value: "user:3" } });
     fireEvent.click(screen.getByRole("button", { name: "创建键" }));
-
     expect(await screen.findByRole("button", { name: "user:3" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
     expect(screen.getByRole("checkbox", { name: "选择键 user:2" })).toBeChecked();
     expect(screen.getByDisplayValue("Alice")).toBeInTheDocument();
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     expect(getKeyMock).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    expect(await screen.findByRole("button", { name: "user:4" })).toBeEnabled();
-    expect(scanKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 84 }));
-    expect(screen.getByRole("button", { name: "user:3" })).toBeEnabled();
   });
 
   it("页面隐藏时暂停自动刷新，返回页面沿用列表", async () => {
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [stringSummary], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     const { rerender } = render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     vi.useFakeTimers();
     fireEvent.change(screen.getByLabelText("键列表自动刷新"), { target: { value: "2" } });
     rerender(<BrowserPage connectionId="local" active={false} />);
     await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("heading", { name: "键列表" })).not.toBeInTheDocument();
 
     rerender(<BrowserPage connectionId="local" active />);
     expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([1000, 10000])("扫描数量设为 %i 时首次加载使用完整批量大小并展示结果", async (scanCount) => {
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [stringSummary], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     render(<BrowserPage connectionId="local" scanCount={scanCount} />);
 
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
-    expect(scanKeysMock).toHaveBeenCalledExactlyOnceWith({
-      connection_id: "local", cursor: 0, pattern: "*", count: scanCount, key_type: null,
+    expect(scanAllKeysMock).toHaveBeenCalledExactlyOnceWith({
+      connection_id: "local", pattern: "*", count: scanCount, key_type: null,
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it.each([1000, 10000])("扫描数量改为 %i 后刷新从头扫描并替换键列表", async (scanCount) => {
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: 42, keys: [{ ...stringSummary, key: "before-refresh" }], node_failures: [], has_more: true })
-      .mockResolvedValueOnce({ cursor: 0, keys: [{ ...stringSummary, key: "after-refresh" }], node_failures: [], has_more: false });
+    scanAllKeysMock.mockReset()
+      .mockResolvedValueOnce([{ ...stringSummary, key: "before-refresh" }])
+      .mockResolvedValueOnce([{ ...stringSummary, key: "after-refresh" }]);
     const { rerender } = render(<BrowserPage connectionId="local" scanCount={100} />);
     expect(await screen.findByRole("button", { name: "before-refresh" })).toBeEnabled();
 
     rerender(<BrowserPage connectionId="local" scanCount={scanCount} />);
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "before-refresh" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
 
     expect(await screen.findByRole("button", { name: "after-refresh" })).toBeEnabled();
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
-    expect(scanKeysMock).toHaveBeenLastCalledWith({
-      connection_id: "local", cursor: 0, pattern: "*", count: scanCount, key_type: null,
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", pattern: "*", count: scanCount, key_type: null,
     });
     expect(screen.queryByRole("button", { name: "before-refresh" })).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("调整扫描批量大小保留列表，下次加载更多才使用新大小", async () => {
-    scanKeysMock.mockReset()
-      .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true })
-      .mockResolvedValue({ cursor: 0, keys: [{ ...stringSummary, key: "user:2" }], node_failures: [], has_more: false });
+  it("调整扫描批量大小保留列表，下次刷新才使用新大小", async () => {
+    scanAllKeysMock.mockResolvedValueOnce([stringSummary])
+      .mockResolvedValueOnce([{ ...stringSummary, key: "user:2" }]);
     const { rerender } = render(<BrowserPage connectionId="local" scanCount={100} />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     rerender(<BrowserPage connectionId="local" scanCount={250} />);
     expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    expect(await screen.findByRole("button", { name: "user:2" })).toBeEnabled();
-    expect(scanKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 42, count: 250 }));
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
+    fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
+    expect(screen.getByRole("button", { name: "user:2" })).toBeEnabled();
+    expect(scanAllKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", pattern: "*", count: 250, key_type: null,
+    });
   });
 
   it("切页期间完成的扫描保留结果，返回后不重复请求", async () => {
-    const scan = deferred<ScanPage>();
-    scanKeysMock.mockReturnValueOnce(scan.promise);
+    const scan = deferred<KeySummary[]>();
+    scanAllKeysMock.mockReturnValueOnce(scan.promise);
     const { rerender } = render(<BrowserPage connectionId="local" />);
     expect(screen.getByText("正在扫描键…")).toBeInTheDocument();
     rerender(<BrowserPage connectionId="local" active={false} />);
-    await act(async () => scan.resolve({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true }));
+    await act(async () => scan.resolve([stringSummary]));
     rerender(<BrowserPage connectionId="local" active />);
     fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
     expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "加载更多" })).toBeEnabled();
-    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(1);
   });
 
   it("新增 Stream 键时生成 Stream DTO", async () => {
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     createKeyMock.mockResolvedValue({
       key: "events",
       key_type: "stream",
@@ -1771,7 +1640,7 @@ describe("Redis Browser", () => {
   });
 
   it("拒绝空键名和后端重复键错误", async () => {
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("没有匹配的键。");
     fireEvent.click(screen.getByRole("button", { name: "新增键" }));
@@ -1790,9 +1659,9 @@ describe("Redis Browser", () => {
       stringSummary,
       { ...stringSummary, key: "user:2" },
     ];
-    scanKeysMock
-      .mockResolvedValueOnce({ cursor: 0, keys: summaries, node_failures: [], has_more: false })
-      .mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock
+      .mockResolvedValueOnce(summaries)
+      .mockResolvedValue([]);
     deleteKeysMock.mockResolvedValue(2);
 
     render(<BrowserPage connectionId="local" />);
@@ -1810,37 +1679,33 @@ describe("Redis Browser", () => {
         connection_id: "local",
         keys: ["user:1", "user:2"],
       });
-      expect(scanKeysMock).toHaveBeenCalledTimes(2);
+      expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
     });
     expect(screen.getByRole("button", { name: "批量删除" })).toBeDisabled();
   });
 
-  it("显式刷新从游标 0 重新扫描并清空已有选择", async () => {
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+  it("显式刷新重新获取完整列表并清空已有选择", async () => {
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     fireEvent.click(screen.getByLabelText("选择键 user:1"));
     fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
 
     await waitFor(() => {
-      expect(scanKeysMock).toHaveBeenLastCalledWith({
+      expect(scanAllKeysMock).toHaveBeenLastCalledWith({
         connection_id: "local",
-        cursor: 0,
         pattern: "*",
         count: 100,
         key_type: null,
       });
     });
-    expect(await screen.findByLabelText("选择键 user:1")).not.toBeChecked();
+    fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
+    expect(screen.getByLabelText("选择键 user:1")).not.toBeChecked();
   });
 
   it("连接切换后忽略未完成新增键响应", async () => {
     const creation = deferred<typeof stringDetail>();
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     createKeyMock.mockImplementation(() => creation.promise);
 
     const { rerender } = render(<BrowserPage connectionId="local" />);
@@ -1851,9 +1716,9 @@ describe("Redis Browser", () => {
 
     rerender(<BrowserPage connectionId="remote" />);
     await waitFor(() => {
-      expect(scanKeysMock).toHaveBeenCalledWith({
+      expect(scanAllKeysMock).toHaveBeenCalledWith({
         connection_id: "remote",
-        cursor: 0,
+
         pattern: "*",
         count: 100,
         key_type: null,
@@ -1862,7 +1727,7 @@ describe("Redis Browser", () => {
     creation.resolve(stringDetail);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
     expect(screen.queryByText("stale")).not.toBeInTheDocument();
   });
 
@@ -1922,11 +1787,7 @@ describe("Redis Browser", () => {
       ttl_ms: -1,
       value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
     };
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [jsonSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([jsonSummary]);
     getKeyMock.mockResolvedValue(jsonDetail);
 
     render(<BrowserPage connectionId="local" />);
@@ -1956,11 +1817,7 @@ describe("Redis Browser", () => {
       ...jsonDetail,
       value: { Json: { value: { name: "Bob", tags: ["redis"] } } },
     };
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [jsonSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([jsonSummary]);
     getKeyMock
       .mockResolvedValueOnce(jsonDetail)
       .mockResolvedValueOnce(refreshedDetail);
@@ -2015,11 +1872,7 @@ describe("Redis Browser", () => {
       ttl_ms: -1,
       value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
     };
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [jsonSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([jsonSummary]);
     getKeyMock.mockResolvedValue(jsonDetail);
 
     render(<BrowserPage connectionId="local" />);
@@ -2054,11 +1907,7 @@ describe("Redis Browser", () => {
       ttl_ms: -1,
       value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
     };
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [jsonSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([jsonSummary]);
     getKeyMock.mockResolvedValueOnce(jsonDetail);
     deleteJsonPathMock.mockResolvedValue({
       key: "profile:1",
@@ -2177,11 +2026,7 @@ describe("Redis Browser", () => {
       ttl_ms: -1,
       value: { Json: { value: { name: "Alice", tags: ["redis"] } } },
     };
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [jsonSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([jsonSummary]);
     getKeyMock
       .mockResolvedValueOnce(jsonDetail)
       .mockRejectedValueOnce({ code: "COMMAND_FAILED", message: "refresh failed" });
@@ -2229,11 +2074,7 @@ describe("Redis Browser", () => {
       ttl_ms: -1,
       value: { Json: { value: { name: "Alice" } } },
     };
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [jsonSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([jsonSummary]);
     getKeyMock.mockResolvedValue(jsonDetail);
     getJsonPathMock.mockRejectedValue({
       code: "JSON_PATH_NOT_FOUND",
@@ -2446,11 +2287,7 @@ describe("Redis Browser", () => {
 
   it("BrowserPage 重命名后同步列表和当前选中键身份", async () => {
     const renamedDetail = { ...stringDetail, key: "user:renamed" };
-    scanKeysMock.mockResolvedValue({
-      cursor: 0,
-      keys: [stringSummary],
-      node_failures: [], has_more: false,
-    });
+    scanAllKeysMock.mockResolvedValue([stringSummary]);
     getKeyMock.mockResolvedValue(stringDetail);
     renameKeyMock.mockResolvedValue(renamedDetail);
 

@@ -18,7 +18,7 @@ const {
   saveConnectionMock,
   deleteConnectionMock,
   testConnectionMock,
-  scanKeysMock,
+  scanAllKeysMock,
   getDatabaseOverviewMock,
   getModuleCapabilitiesMock,
   getKeyMock,
@@ -38,7 +38,7 @@ const {
   saveConnectionMock: vi.fn(),
   deleteConnectionMock: vi.fn(),
   testConnectionMock: vi.fn(),
-  scanKeysMock: vi.fn(),
+  scanAllKeysMock: vi.fn(),
   getDatabaseOverviewMock: vi.fn(),
   getModuleCapabilitiesMock: vi.fn(),
   getKeyMock: vi.fn(),
@@ -60,7 +60,7 @@ vi.mock("../../lib/tauri", () => ({
   saveConnection: saveConnectionMock,
   deleteConnection: deleteConnectionMock,
   testConnection: testConnectionMock,
-  scanKeys: scanKeysMock,
+  scanAllKeys: scanAllKeysMock,
   getDatabaseOverview: getDatabaseOverviewMock,
   getModuleCapabilities: getModuleCapabilitiesMock,
   getKey: getKeyMock,
@@ -100,7 +100,7 @@ describe("Redis Workbench 工作区", () => {
     saveConnectionMock.mockResolvedValue(localProfile);
     deleteConnectionMock.mockResolvedValue(undefined);
     testConnectionMock.mockResolvedValue({ server_version: "8.4.0" });
-    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    scanAllKeysMock.mockResolvedValue([]);
     getDatabaseOverviewMock.mockResolvedValue([]);
     getModuleCapabilitiesMock.mockResolvedValue({
       modules: [],

@@ -11,15 +11,14 @@ interface KeyListProps {
   selectedKeys: string[];
   arraySupported?: boolean;
   vectorSetSupported?: boolean;
-  hasMore: boolean;
   loading: boolean;
+  scanFailed: boolean;
   busy?: boolean;
   onPatternChange: (pattern: string) => void;
   onPatternKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
   onKeyTypeChange: (keyType: string) => void;
   onSelect: (key: string) => void;
   onToggleSelect: (key: string) => void;
-  onLoadMore: () => void;
 }
 
 export function KeyList({
@@ -30,15 +29,14 @@ export function KeyList({
   selectedKeys,
   arraySupported = false,
   vectorSetSupported = false,
-  hasMore,
   loading,
+  scanFailed,
   busy = false,
   onPatternChange,
   onPatternKeyDown,
   onKeyTypeChange,
   onSelect,
   onToggleSelect,
-  onLoadMore,
 }: KeyListProps) {
   const [view, setView] = useState<"flat" | "tree">("tree");
   const [separator, setSeparator] = useState(":");
@@ -76,16 +74,6 @@ export function KeyList({
             <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 3h12L9 8.5V13l-2-1V8.5Z" /></svg>
             筛选
           </button>
-          {hasMore ? (
-            <button
-              type="button"
-              className="button button-secondary"
-              onClick={onLoadMore}
-              disabled={controlsDisabled}
-            >
-              {loading ? "加载中…" : "加载更多"}
-            </button>
-          ) : null}
         </div>
       </div>
 
@@ -102,9 +90,11 @@ export function KeyList({
         </p>
       ) : null}
 
-      {keys.length === 0 && !loading ? (
+      {loading ? null : scanFailed ? (
+        <p className="browser-empty-list">键列表加载失败，请刷新重试。</p>
+      ) : keys.length === 0 ? (
         <p className="browser-empty-list">
-          {hasMore ? "已加载的数据中暂无匹配项，可继续加载更多。" : "没有匹配的键。"}
+          没有匹配的键。
         </p>
       ) : view === "tree" ? (
         <KeyTree key={JSON.stringify([pattern, keyType, separator])} separator={separator} keys={keys} selectedKey={selectedKey}

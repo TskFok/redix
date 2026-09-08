@@ -21,9 +21,9 @@ use crate::{
         InstanceDetails, InstanceOverview, JsonMutationResult, JsonPathValue, KeyInfo,
         KeyInfoInput, KeySearchIndexSummary, KeySummary, KeyValue, ListSearchIndexesResult,
         ModuleCapabilities, NodeFailure, ProfilerSession, PubSubSession, PublishPubSubInput,
-        RedisValue, RenameKeyInput, ScanCursor, ScanKeysInput, ScanPage, SearchIndexInfo,
-        SearchIndexInput, SearchQueryInput, SearchQueryResult, SelectDatabaseInput,
-        SetArrayElementInput, SetJsonPathInput, SetKeyInput, SetKeyTtlInput,
+        RedisValue, RenameKeyInput, ScanAllKeysInput, ScanCursor, ScanKeysInput, ScanPage,
+        SearchIndexInfo, SearchIndexInput, SearchQueryInput, SearchQueryResult,
+        SelectDatabaseInput, SetArrayElementInput, SetJsonPathInput, SetKeyInput, SetKeyTtlInput,
         SetVectorSetAttributesInput, SlowLogConfig, SlowLogEntry, SortedSetEntry,
         StartProfilerInput, StartPubSubInput, StopProfilerInput, StopPubSubInput, StreamConsumer,
         StreamConsumerGroup, StreamEntry, StreamPendingEntry, UpdateSlowLogConfigInput,
@@ -505,6 +505,32 @@ impl RedisService {
         }
         let mut connection = self.connection(connection_id).await?;
         read_key_mode(&mut connection, key, true).await
+    }
+
+    pub async fn scan_all_keys(
+        &self,
+        input: ScanAllKeysInput,
+    ) -> Result<Vec<KeySummary>, AppError> {
+        let input = ScanKeysInput::from(input);
+        input.validate()?;
+        let token = self.active_snapshot(&input.connection_id).await?.0.token;
+        let connection_id = &input.connection_id;
+        let keys = super::key_ops::collect_scan_pages(|cursor| {
+            let page_input = ScanKeysInput {
+                cursor,
+                ..input.clone()
+            };
+            async move {
+                self.ensure_generation_current(connection_id, token).await?;
+                let page = self.scan_keys(page_input).await;
+                // A reconnect or database switch invalidates every page accumulated so far.
+                self.ensure_generation_current(connection_id, token).await?;
+                page
+            }
+        })
+        .await?;
+        self.ensure_generation_current(connection_id, token).await?;
+        Ok(keys)
     }
 
     pub async fn rename_browser_key(&self, input: RenameKeyInput) -> Result<KeyValue, AppError> {

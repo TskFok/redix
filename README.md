@@ -57,7 +57,7 @@ npm run clean # 清理构建产物与 Vite 缓存，保留已安装依赖
 
 `check:non-cloud` 只扫描产品源码目录和 `package.json`，不扫描 README、设计文档或范围说明。它用于阻止非本地产品入口意外进入代码和菜单文案。
 
-Browser 使用 Redis `SCAN` 分页浏览键，不使用阻塞式全量键枚举。Cluster 跨 primary 的完整遍历仅覆盖当前键 DTO 可表示的 UTF-8 键名；节点返回二进制键名时，该节点以可重试失败返回并保留游标，不能据此承诺任意二进制键空间都能完成遍历。Workbench 只在当前本地连接上执行用户输入的 Redis 命令。
+Browser 由后端使用 Redis `SCAN` 遍历当前数据库，跨批次去重后一次性返回所有匹配键，列表在扫描全部成功后显示，无需点击“加载更多”。每次扫描数量只控制底层 SCAN 批大小，不限制最终键数量；全量结果保存在内存中，等待时间和内存占用随键数量增加。扫描结果不是某一时刻的严格快照，期间新增、删除或过期的键可能变化。Cluster 会遍历所有 primary；节点失败或扫描中断时报错，不将部分结果显示为完整列表。当前键 DTO 只支持 UTF-8 键名，包含二进制键名的扫描可能失败。Workbench 只在当前本地连接上执行用户输入的 Redis 命令。
 
 Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新以及校验后的本地 JSON 导入导出；基础数据类型支持 String、Hash、List、Set、Sorted Set、Stream。Hash、List、Set、Sorted Set 使用有界分页和字段/成员/索引级增量写入，不用当前页重建整个键；Stream 使用有界 ID 范围分页，并支持显式添加和删除消息。Stream 详情还支持 Consumer Group 的创建/删除、消费者与 Pending 列表、Pending 确认、消费者删除和显式 XCLAIM 转移。转移需要选择消息并指定目标消费者、最小空闲时间，只操作满足条件的 Pending 消息，基础转移不启用 FORCE；高级面板支持 IDLE/TIME/RETRYCOUNT/FORCE，FORCE 必须显式选择并说明会新增 Pending 记录，不自动消费。RedisJSON 同时支持根文档编辑，以及路径级读取、保存、删除和数组追加。连接级模块能力通过 `MODULE LIST` 探测并按 session 缓存；探测失败或未检测到 RedisJSON/RedisSearch 时，不会阻断普通 Browser 流程，对应的路径编辑器或 Search / Query 工作区会稳定降级为不可用提示。RedisSearch / Query 工作区在 Search 2.0+ 可用时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引和有限的 `FT.SEARCH ... LIMIT` 查询（默认 NOCONTENT，可开启文档字段结果表），以及 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 查询；查询文本不持久化；Browser 的 Hash/JSON 键详情会显示匹配的索引摘要。
 
@@ -81,7 +81,7 @@ Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics、远
 
 ## 本轮补齐能力（2026-09-01）
 
-- Browser 支持平铺/按 `:` 前缀分层的键树切换；树只展示当前已扫描结果，不额外扫描全库。JSON 可按对象/数组折叠、定位并回填路径编辑器，不能安全表达的路径只读。
+- Browser 支持平铺/按 `:` 前缀分层的键树切换；两种视图共用后端全量扫描结果，展开目录不额外查询 Redis。JSON 可按对象/数组折叠、定位并回填路径编辑器，不能安全表达的路径只读。
 - Workbench 支持离线模块命令帮助、当前光标行补全、`#`/`//` 注释行、嵌套结果树/表格，以及按连接删除单条或清空历史。敏感命令继续不写历史，包括被引号包围或转义的命令名。
 - Search 可显式开启文档字段结果；默认键名模式兼容旧行为。支持 RESP2/RESP3 回复和过期文档空内容；字段、文档、深度、单页和总响应均有限额，超限返回固定错误。
 - Sentinel 配置种子节点、master name 和独立认证，支持失败种子回退及主节点 ROLE 校验；重新连接或切库时重新发现。正在运行的会话不会无缝迁移到新的主节点。Sentinel 密码只存系统钥匙串，普通导出不含密码。

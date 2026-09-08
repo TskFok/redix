@@ -4,8 +4,9 @@ use crate::{
         DeleteKeyInput, DeleteKeysInput, DeleteStreamConsumerGroupInput, DeleteStreamConsumerInput,
         ExportKeysInput, ExportedKey, GetKeyInput, GetStreamConsumerGroupsInput,
         GetStreamConsumersInput, GetStreamPendingEntriesInput, ImportKeysInput, KeyInfo,
-        KeyInfoInput, KeyValue, RenameKeyInput, ScanKeysInput, ScanPage, SetKeyInput,
-        SetKeyTtlInput, StreamConsumer, StreamConsumerGroup, StreamPendingEntry,
+        KeyInfoInput, KeySummary, KeyValue, RenameKeyInput, ScanAllKeysInput, ScanKeysInput,
+        ScanPage, SetKeyInput, SetKeyTtlInput, StreamConsumer, StreamConsumerGroup,
+        StreamPendingEntry,
     },
     error::AppError,
     redis::RedisOperations,
@@ -18,6 +19,14 @@ pub async fn scan_keys(
     input: ScanKeysInput,
 ) -> Result<ScanPage, AppError> {
     state.redis.scan_keys(input).await
+}
+
+#[tauri::command]
+pub async fn scan_all_keys(
+    state: tauri::State<'_, AppState>,
+    input: ScanAllKeysInput,
+) -> Result<Vec<KeySummary>, AppError> {
+    state.redis.scan_all_keys(input).await
 }
 
 #[tauri::command]

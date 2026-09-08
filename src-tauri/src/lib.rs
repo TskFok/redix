@@ -128,6 +128,7 @@ pub fn run() {
             commands::connections::open_connection,
             commands::connections::close_connection,
             commands::browser::scan_keys,
+            commands::browser::scan_all_keys,
             commands::browser::get_key,
             commands::browser::set_key,
             commands::browser::create_key,

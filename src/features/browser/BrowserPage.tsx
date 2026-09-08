@@ -6,8 +6,8 @@ import { useAutoRefresh } from "./useAutoRefresh";
 import StartBulkDeleteButton from "../tasks/StartBulkDeleteButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { getBrowserKey, getModuleCapabilities, scanKeys } from "../../lib/tauri";
-import type { ConnectionProfile, KeyValue, ScanCursor } from "../../lib/types";
+import { getBrowserKey, getModuleCapabilities, scanAllKeys } from "../../lib/tauri";
+import type { ConnectionProfile, KeyValue } from "../../lib/types";
 import KeyDetails from "./KeyDetails";
 import KeyList from "./KeyList";
 import AddKey from "./AddKey";
@@ -16,7 +16,7 @@ import BrowserImportExport from "./BrowserImportExport";
 import BrowserDatabaseSelect from "./BrowserDatabaseSelect";
 import {
   applyCreatedKey,
-  applyScanPage,
+  applyScanResult,
   applyKeyTypeFilter,
   browserErrorMessage,
   filterKeysByType,
@@ -75,14 +75,13 @@ export function BrowserPage({
   connectionIdRef.current = connectionId;
   const mountedRef = useRef(false);
   const scanLoadingRef = useRef(false);
-  const deferredScanRef = useRef<{ cursor: ScanCursor; pattern: string; replace: boolean } | null>(null);
+  const deferredScanRef = useRef<string | null>(null);
   const scanRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const moduleProbeRequestRef = useRef(0);
   const debounceRef = useRef<number | null>(null);
   const skipDebounceForPatternRef = useRef<string | null>(null);
   const scannedPatternRef = useRef("*");
-  const keyTypeRef = useRef("");
   const visibleKeys = useMemo(() => filterKeysByType(state.keys, state.keyType), [state.keys, state.keyType]);
   const normalizedScanCount =
     Number.isInteger(scanCount) && scanCount >= 10 && scanCount <= 10000 ? scanCount : 100;
@@ -95,15 +94,11 @@ export function BrowserPage({
     }
   }, []);
 
-  const scanPage = useCallback(
-    async (
-      cursor: ScanCursor,
-      requestedPattern: string,
-      replace: boolean,
-    ) => {
+  const scanAll = useCallback(
+    async (requestedPattern: string) => {
       if (!mountedRef.current) return;
       if (databaseSwitchingRef.current) {
-        deferredScanRef.current = { cursor, pattern: requestedPattern, replace };
+        deferredScanRef.current = requestedPattern;
         return;
       }
       if (scanLoadingRef.current) return;
@@ -111,66 +106,40 @@ export function BrowserPage({
       deferredScanRef.current = null;
       scanLoadingRef.current = true;
       scannedPatternRef.current = requestedPattern;
-      const requestedKeyType = keyTypeRef.current;
       const requestedScanCount = scanCountRef.current;
       const requestId = scanRequestRef.current + 1;
       scanRequestRef.current = requestId;
-      if (replace) {
-        detailRequestRef.current += 1;
-        setDetailLoading(false);
-      }
+      detailRequestRef.current += 1;
+      setDetailLoading(false);
       setState((current) => ({
         ...current,
         pattern: requestedPattern,
-        cursor: replace ? 0 : current.cursor,
-        nodeFailures: replace ? [] : current.nodeFailures,
-        hasMore: replace ? false : current.hasMore,
-        keys: replace ? [] : current.keys,
-        selectedKey: replace ? null : current.selectedKey,
-        selectedKeys: replace ? [] : current.selectedKeys,
-        detail: replace ? null : current.detail,
-        metadata: replace ? null : current.metadata,
+        keys: [],
+        selectedKey: null,
+        selectedKeys: [],
+        detail: null,
+        metadata: null,
         loading: true,
+        scanFailed: false,
         error: null,
       }));
 
       try {
-        let nextCursor = cursor;
-        let replacePage = replace;
-        while (mountedRef.current && scanRequestRef.current === requestId) {
-          const page = await scanKeys({
-            connection_id: connectionId,
-            cursor: nextCursor,
-            pattern: requestedPattern,
-            count: requestedScanCount,
-            key_type: null,
-          });
-          if (!mountedRef.current || scanRequestRef.current !== requestId) return;
-
-          // SCAN can return no matches while later batches still contain keys.
-          // Pause on node failures or a stalled cursor so retries stay user-driven.
-          const continueScanning = filterKeysByType(page.keys, requestedKeyType).length === 0 && page.has_more
-            && page.node_failures.length === 0 && page.cursor !== nextCursor;
-          const shouldReplace = replacePage;
-          setState((current) => ({
-            ...applyScanPage(current, page, shouldReplace),
-            loading: continueScanning,
-          }));
-          if (!continueScanning) break;
-          nextCursor = page.cursor;
-          replacePage = false;
-        }
-        if (
-          replace && mountedRef.current && scanRequestRef.current === requestId
-          && connectionIdRef.current === connectionId
-        ) {
-          refreshDatabaseCounts();
-        }
+        const keys = await scanAllKeys({
+          connection_id: connectionId,
+          pattern: requestedPattern,
+          count: requestedScanCount,
+          key_type: null,
+        });
+        if (!mountedRef.current || scanRequestRef.current !== requestId) return;
+        setState((current) => applyScanResult(current, keys));
+        if (connectionIdRef.current === connectionId) refreshDatabaseCounts();
       } catch (caught) {
         if (mountedRef.current && scanRequestRef.current === requestId) {
           setState((current) => ({
             ...current,
             loading: false,
+            scanFailed: true,
             error: browserErrorMessage(caught, "加载键失败，请稍后重试。"),
           }));
         }
@@ -197,7 +166,6 @@ export function BrowserPage({
   useEffect(() => {
     mountedRef.current = true;
     scanLoadingRef.current = false;
-    keyTypeRef.current = "";
     skipDebounceForPatternRef.current = "*";
     setDetailActionLoading(false);
     setShowAddKey(false);
@@ -206,7 +174,7 @@ export function BrowserPage({
       pattern: "*",
       loading: true,
     });
-    void scanPage(0, "*", true);
+    void scanAll("*");
 
     return () => {
       mountedRef.current = false;
@@ -219,15 +187,15 @@ export function BrowserPage({
         debounceRef.current = null;
       }
     };
-  }, [connectionId, scanPage]);
+  }, [connectionId, scanAll]);
 
   useEffect(() => {
     const pending = deferredScanRef.current;
     if (!databaseSwitching && pending) {
       deferredScanRef.current = null;
-      void scanPage(pending.cursor, pending.pattern, pending.replace);
+      void scanAll(pending);
     }
-  }, [databaseSwitching, scanPage]);
+  }, [databaseSwitching, scanAll]);
 
   useEffect(() => {
     const requestId = moduleProbeRequestRef.current + 1;
@@ -273,7 +241,7 @@ export function BrowserPage({
     const requestedPattern = state.pattern.trim() || "*";
     debounceRef.current = window.setTimeout(() => {
       debounceRef.current = null;
-      void scanPage(0, requestedPattern, true);
+      void scanAll(requestedPattern);
     }, FILTER_DEBOUNCE_MS);
 
     return () => {
@@ -282,7 +250,7 @@ export function BrowserPage({
         debounceRef.current = null;
       }
     };
-  }, [scanPage, state.pattern]);
+  }, [scanAll, state.pattern]);
 
   const handlePatternChange = (pattern: string) => {
     setState((current) => ({ ...current, pattern, error: null }));
@@ -304,23 +272,15 @@ export function BrowserPage({
       window.clearTimeout(debounceRef.current);
       debounceRef.current = null;
     }
-    void scanPage(0, requestedPattern, true);
+    void scanAll(requestedPattern);
   };
 
   const handleKeyTypeChange = (keyType: string) => {
     if (state.loading || detailLoading || detailActionLoading) {
       return;
     }
-    keyTypeRef.current = keyType;
     detailRequestRef.current += 1;
     setState((current) => applyKeyTypeFilter(current, keyType));
-  };
-
-  const handleLoadMore = () => {
-    if (state.loading || !state.hasMore) {
-      return;
-    }
-    void scanPage(state.cursor, state.pattern.trim() || "*", false);
   };
 
   const handleRefresh = () => {
@@ -328,7 +288,7 @@ export function BrowserPage({
       return;
     }
     setBulkFeedback(null);
-    void scanPage(0, state.pattern.trim() || "*", true);
+    void scanAll(state.pattern.trim() || "*");
   };
 
   const handleToggleSelect = (key: string) => {
@@ -371,11 +331,11 @@ export function BrowserPage({
   }, [connectionId, refreshDatabaseCounts, setBulkFeedback]);
 
   const handleBulkDeleted = () => {
-    void scanPage(0, state.pattern.trim() || "*", true);
+    void scanAll(state.pattern.trim() || "*");
   };
 
   const handleImported = async () => {
-    await scanPage(0, state.pattern.trim() || "*", true);
+    await scanAll(state.pattern.trim() || "*");
   };
 
   const handleBulkError = (message: string) => {
@@ -481,7 +441,7 @@ export function BrowserPage({
   const listBusy = state.loading || detailLoading || detailActionLoading || databaseSwitching
     || bulkActionLoading || fileActionLoading || bulkStartLoading;
   useAutoRefresh(refreshSeconds, !active || listBusy || showAddKey || state.selectedKey !== null || state.selectedKeys.length > 0, () => {
-    void scanPage(0, state.pattern.trim() || "*", true);
+    void scanAll(state.pattern.trim() || "*");
   });
   const arraySupported =
     moduleProbe.status === "ready" && moduleProbe.capabilities.array_supported;
@@ -499,7 +459,6 @@ export function BrowserPage({
         onClose={() => setState((current) => ({ ...current, error: null }))}
         resetKey={state}
       /> : null}
-      {state.nodeFailures.length > 0 && <div className="feedback feedback-error" role="alert"><p>{state.nodeFailures.length} 个节点扫描失败，当前键列表为部分结果。</p><button type="button" className="button button-secondary" disabled={listBusy} onClick={state.hasMore ? handleLoadMore : handleRefresh}>{state.hasMore ? "继续扫描并重试" : "重新扫描并重试"}</button></div>}
 
       <div className="browser-actions" aria-label="Browser 操作">
         {onProfileChanged && <BrowserDatabaseSelect
@@ -585,15 +544,14 @@ export function BrowserPage({
           selectedKeys={state.selectedKeys}
           arraySupported={arraySupported}
           vectorSetSupported={vectorSetSupported}
-          hasMore={state.hasMore}
           loading={state.loading}
+          scanFailed={state.scanFailed}
           busy={listBusy}
           onPatternChange={handlePatternChange}
           onPatternKeyDown={handlePatternKeyDown}
           onKeyTypeChange={handleKeyTypeChange}
           onSelect={(key) => void handleSelect(key)}
           onToggleSelect={handleToggleSelect}
-          onLoadMore={handleLoadMore}
         />
         <KeyDetails
           connectionId={connectionId}

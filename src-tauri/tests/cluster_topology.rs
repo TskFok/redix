@@ -1093,6 +1093,85 @@ async fn cluster_database_overview_rejects_a_replaced_generation() {
 }
 
 #[tokio::test]
+async fn scan_all_keys_rejects_partial_cluster_results() {
+    let (port, _, _, _, _) = spawn_topology_cluster(false).await;
+    let service = RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    );
+    service.open_connection("topology-cluster").await.unwrap();
+    let result = service
+        .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
+            connection_id: "topology-cluster".into(),
+            pattern: "*".into(),
+            count: 1,
+            key_type: None,
+        })
+        .await;
+    assert_eq!(result, Err(AppError::ClusterNodeUnavailable));
+}
+
+#[tokio::test]
+async fn scan_all_keys_rejects_a_replaced_cluster_generation() {
+    let (port, _, _, entered, resume) =
+        spawn_topology_cluster_info_options(false, true, false, false, None, true).await;
+    let service = Arc::new(RedisService::new(
+        Arc::new(TopologyProfiles(vec![topology_profile(port)])),
+        Arc::new(TopologySecrets),
+    ));
+    service.open_connection("topology-cluster").await.unwrap();
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
+                connection_id: "topology-cluster".into(),
+                pattern: "*".into(),
+                count: 1,
+                key_type: None,
+            })
+            .await
+    });
+    entered.await.unwrap();
+    service.open_connection("topology-cluster").await.unwrap();
+    resume.send(()).unwrap();
+    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+}
+
+#[tokio::test]
+async fn scan_all_keys_rejects_results_after_switching_a_standalone_database() {
+    let (port, _, _, entered, resume) =
+        spawn_topology_cluster_info_options(false, true, false, false, None, true).await;
+    let mut profile = topology_profile(port);
+    profile.cluster = None;
+    let service = Arc::new(RedisService::new(
+        Arc::new(TopologyProfiles(vec![profile])),
+        Arc::new(TopologySecrets),
+    ));
+    service.open_connection("topology-cluster").await.unwrap();
+    let request_service = Arc::clone(&service);
+    let request = tokio::spawn(async move {
+        request_service
+            .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
+                connection_id: "topology-cluster".into(),
+                pattern: "*".into(),
+                count: 1,
+                key_type: None,
+            })
+            .await
+    });
+    entered.await.unwrap();
+    service
+        .select_database(redix_lib::domain::SelectDatabaseInput {
+            connection_id: "topology-cluster".into(),
+            database: 1,
+        })
+        .await
+        .unwrap();
+    resume.send(()).unwrap();
+    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+}
+
+#[tokio::test]
 async fn cluster_scan_rejects_a_page_after_the_active_generation_is_closed() {
     let (port, _, _, entered, resume) =
         spawn_topology_cluster_info_options(false, true, false, false, None, true).await;

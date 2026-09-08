@@ -60,6 +60,7 @@ import {
   renameKey,
   renameBrowserKey,
   saveConnection,
+  scanAllKeys,
   scanKeys,
   saveCommandHistory,
   saveAppSettings,
@@ -233,6 +234,19 @@ describe("Tauri IPC bridge", () => {
         key_type: null,
       },
     });
+  });
+
+  it("全量扫描使用独立端点，扫描批大小不截断返回的键列表", async () => {
+    const input = { connection_id: "local", pattern: "user:*", count: 1, key_type: null };
+    const keys = [
+      { key: "user:1", key_type: "string", ttl_ms: -1, size: 5 },
+      { key: "user:2", key_type: "hash", ttl_ms: 1200, size: 2 },
+      { key: "user:3", key_type: "set", ttl_ms: -1, size: 4 },
+    ];
+    invokeMock.mockResolvedValue(keys);
+
+    await expect(scanAllKeys(input)).resolves.toEqual(keys);
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith("scan_all_keys", { input });
   });
 
   it("为连接命令使用 Rust 的 snake_case 名称和参数形状", async () => {

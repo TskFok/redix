@@ -105,7 +105,7 @@ export function KeyTree({ keys, separator = ":", selectedKey, selectedKeys, load
   </>;
 
   return <div className="key-tree-panel">
-    <p className="browser-helper">{separator ? `按 ${separator} 前缀自动分类，目录优先，按名称排序。` : "按完整键名排序。"}数量仅统计已扫描的匹配键。</p>
+    <p className="browser-helper">{separator ? `按 ${separator} 前缀自动分类，目录优先，按名称排序。` : "按完整键名排序。"}数量为匹配键总数。</p>
     <ul className="key-list key-tree" aria-label="Redis 键树">{renderFolder(root, 0)}</ul>
   </div>;
 }

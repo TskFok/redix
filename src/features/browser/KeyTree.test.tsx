@@ -9,19 +9,18 @@ afterEach(cleanup);
 
 const summaries = (keys: string[]): KeySummary[] => keys.map((key) => ({ key, key_type: "string", ttl_ms: -1, size: 3 }));
 
-function Harness({ keys = ["user", "user:1", "user:2", "cache:one"], pattern = "*", loading = false, onPatternChange = vi.fn(), onLoadMore = vi.fn() }: {
+function Harness({ keys = ["user", "user:1", "user:2", "cache:one"], pattern = "*", loading = false, onPatternChange = vi.fn() }: {
   keys?: string[];
   pattern?: string;
   loading?: boolean;
   onPatternChange?: (pattern: string) => void;
-  onLoadMore?: () => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [opened, setOpened] = useState<string | null>(null);
   return <>
     <KeyList pattern={pattern} keyType="" keys={summaries(keys)} selectedKey={opened} selectedKeys={selected}
-      hasMore loading={loading} onPatternChange={onPatternChange} onPatternKeyDown={vi.fn()} onKeyTypeChange={vi.fn()}
-      onSelect={setOpened} onToggleSelect={(key) => setSelected((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} onLoadMore={onLoadMore} />
+      loading={loading} scanFailed={false} onPatternChange={onPatternChange} onPatternKeyDown={vi.fn()} onKeyTypeChange={vi.fn()}
+      onSelect={setOpened} onToggleSelect={(key) => setSelected((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])} />
     <output aria-label="已打开的键">{opened}</output>
     <output aria-label="已选择的键">{JSON.stringify(selected)}</output>
   </>;
@@ -131,15 +130,13 @@ describe("键树浏览", () => {
     expect(screen.getByLabelText("已选择的键")).toHaveTextContent('["",":lead","a:","a::b","__proto__:x","constructor:y"]');
   });
 
-  it("树形仍使用现有搜索与加载更多，追加扫描不清除展开状态", () => {
+  it("树形保留搜索入口，新增键不清除展开状态", () => {
     const patterns: string[] = [];
-    let loads = 0;
-    const props = { onPatternChange: (pattern: string) => { patterns.push(pattern); }, onLoadMore: () => { loads += 1; } };
+    const props = { onPatternChange: (pattern: string) => { patterns.push(pattern); } };
     const { rerender } = render(<Harness {...props} />);
     fireEvent.click(screen.getByRole("button", { name: "树形" }));
     fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
-    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
-    expect(loads).toBe(1);
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
     rerender(<Harness {...props} keys={["user", "user:1", "user:2", "cache:one", "user:3", "account:one"]} />);
     expect(screen.getByRole("button", { name: "user:3" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "折叠前缀 user:" })).toHaveTextContent("3");
@@ -154,13 +151,15 @@ describe("键树浏览", () => {
     expect(screen.queryByRole("button", { name: "折叠前缀 user:" })).not.toBeInTheDocument();
   });
 
-  it("加载时树中的键打开和批量选择都禁用", () => {
+  it("全量扫描等待时隐藏旧树和勾选，仅显示扫描提示", () => {
     const { rerender } = render(<Harness />);
     fireEvent.click(screen.getByRole("button", { name: "树形" }));
     fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
     rerender(<Harness loading />);
-    expect(screen.getByRole("checkbox", { name: "选择键 user:1" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "user:1" })).toBeDisabled();
+    expect(screen.getByText("正在扫描键…")).toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Redis 键树" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "选择键 user:1" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "user:1" })).not.toBeInTheDocument();
   });
 });
 

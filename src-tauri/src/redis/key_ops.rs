@@ -1,7 +1,7 @@
 use crate::{
     domain::{
-        normalize_key_type, HashEntry, KeySummary, RedisValue, SortedSetEntry, StreamEntry,
-        StreamField,
+        normalize_key_type, HashEntry, KeySummary, RedisValue, ScanCursor, ScanPage,
+        SortedSetEntry, StreamEntry, StreamField,
     },
     error::AppError,
 };
@@ -12,6 +12,36 @@ use super::{
 };
 
 const MAX_CLUSTER_SCAN_PAGE_BYTES: usize = 4 * 1024 * 1024;
+
+pub(crate) async fn collect_scan_pages<F, Fut>(mut scan: F) -> Result<Vec<KeySummary>, AppError>
+where
+    F: FnMut(ScanCursor) -> Fut,
+    Fut: std::future::Future<Output = Result<ScanPage, AppError>>,
+{
+    let mut cursor = ScanCursor::default();
+    let mut visited_cursors = std::collections::HashSet::from([cursor.clone()]);
+    let mut seen_keys = std::collections::HashSet::new();
+    let mut keys = Vec::new();
+    loop {
+        let page = scan(cursor).await?;
+        if !page.node_failures.is_empty() {
+            return Err(AppError::ClusterNodeUnavailable);
+        }
+        for key in page.keys {
+            if seen_keys.insert(key.key.clone()) {
+                keys.push(key);
+            }
+        }
+        // Empty filtered pages do not mean SCAN has completed. Cluster cursors are opaque.
+        if !page.has_more {
+            return Ok(keys);
+        }
+        if !visited_cursors.insert(page.cursor.clone()) {
+            return Err(AppError::CommandFailed);
+        }
+        cursor = page.cursor;
+    }
+}
 
 pub(crate) fn ensure_cluster_scan_page_size(
     page: &crate::domain::ScanPage,
@@ -182,6 +212,131 @@ mod tests {
         StreamField,
     };
     use crate::error::AppError;
+
+    fn scan_page(cursor: ScanCursor, keys: &[&str], has_more: bool) -> ScanPage {
+        ScanPage {
+            cursor,
+            keys: keys
+                .iter()
+                .map(|key| KeySummary {
+                    key: (*key).into(),
+                    key_type: "string".into(),
+                    ttl_ms: -1,
+                    size: Some(1),
+                    memory_bytes: None,
+                    encoding: None,
+                    idle_seconds: None,
+                })
+                .collect(),
+            has_more,
+            node_failures: Vec::new(),
+        }
+    }
+
+    async fn collect_pages(
+        pages: Vec<Result<ScanPage, AppError>>,
+    ) -> Result<Vec<KeySummary>, AppError> {
+        let mut pages = pages.into_iter();
+        super::collect_scan_pages(|_| {
+            std::future::ready(
+                pages
+                    .next()
+                    .expect("scan must stop at completion or failure"),
+            )
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn scan_all_keys_continues_after_empty_pages_and_deduplicates_all_pages() {
+        let keys = collect_pages(vec![
+            Ok(scan_page(7.into(), &["a", "a"], true)),
+            Ok(scan_page(3.into(), &[], true)),
+            Ok(scan_page(0.into(), &["a", "b"], false)),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(
+            keys.iter()
+                .map(|item| item.key.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "b"]
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_all_keys_forwards_opaque_cluster_cursors_and_stops_on_has_more() {
+        let mut requests = Vec::new();
+        let mut pages = vec![
+            scan_page(ScanCursor::Cluster("cluster:first".into()), &[], true),
+            scan_page(ScanCursor::Cluster("cluster:done".into()), &["key"], false),
+        ]
+        .into_iter();
+        let keys = super::collect_scan_pages(|cursor| {
+            requests.push(cursor);
+            std::future::ready(Ok(pages.next().unwrap()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            requests,
+            [
+                ScanCursor::Standalone(0),
+                ScanCursor::Cluster("cluster:first".into())
+            ]
+        );
+        assert_eq!(keys[0].key, "key");
+    }
+
+    #[tokio::test]
+    async fn scan_all_keys_rejects_node_failures_even_on_the_final_page() {
+        let mut failed_page = scan_page(0.into(), &["partial"], false);
+        failed_page.node_failures.push(crate::domain::NodeFailure {
+            node_id: "unavailable".into(),
+            code: "CLUSTER_NODE_UNAVAILABLE".into(),
+        });
+        assert_eq!(
+            collect_pages(vec![Ok(failed_page)]).await,
+            Err(AppError::ClusterNodeUnavailable)
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_all_keys_discards_prior_pages_when_a_later_scan_fails() {
+        assert_eq!(
+            collect_pages(vec![
+                Ok(scan_page(7.into(), &["partial"], true)),
+                Err(AppError::ConnectionFailed),
+            ])
+            .await,
+            Err(AppError::ConnectionFailed)
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_all_keys_rejects_stalled_and_cyclic_cursors() {
+        for cursors in [vec![0], vec![7, 7], vec![7, 3, 7]] {
+            let pages = cursors
+                .into_iter()
+                .map(|cursor| Ok(scan_page(cursor.into(), &[], true)))
+                .collect();
+            assert_eq!(collect_pages(pages).await, Err(AppError::CommandFailed));
+        }
+    }
+
+    #[tokio::test]
+    async fn scan_all_keys_does_not_limit_the_combined_result_to_one_page_size() {
+        let first = "a".repeat(3 * 1024 * 1024);
+        let second = "b".repeat(3 * 1024 * 1024);
+        let keys = collect_pages(vec![
+            Ok(scan_page(1.into(), &[&first], true)),
+            Ok(scan_page(0.into(), &[&second], false)),
+        ])
+        .await
+        .unwrap();
+        assert_eq!(keys.len(), 2);
+        assert!(serde_json::to_vec(&keys).unwrap().len() > 4 * 1024 * 1024);
+    }
 
     #[test]
     fn cluster_scan_page_rejects_serialized_output_over_four_mibibytes() {

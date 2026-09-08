@@ -125,7 +125,7 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
                 }))
               }
             />
-            <small>Browser 每次向 Redis 请求的 SCAN 数量，范围为 10 到 10000。</small>
+            <small>Browser 每批 SCAN 的工作量提示，范围为 10 到 10000；全部扫描完成后统一展示，不限制最终键数量。</small>
           </label>
           <label className="field settings-checkbox">
             <span>

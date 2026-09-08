@@ -72,6 +72,7 @@ fn exposes_all_tauri_command_adapters() {
     let _ = vector_set::search_vector_set;
     let _ = vector_set::download_vector_embedding;
     let _ = browser::scan_keys;
+    let _ = browser::scan_all_keys;
     let _ = browser::get_key;
     let _ = browser::get_browser_key;
     let _ = browser::rename_browser_key;

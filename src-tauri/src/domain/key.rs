@@ -1,7 +1,7 @@
 use crate::error::AppError;
 use std::collections::HashSet;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Hash)]
 #[serde(untagged)]
 pub enum ScanCursor {
     Standalone(u64),
@@ -27,6 +27,26 @@ pub struct ScanKeysInput {
     pub pattern: String,
     pub count: usize,
     pub key_type: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ScanAllKeysInput {
+    pub connection_id: String,
+    pub pattern: String,
+    pub count: usize,
+    pub key_type: Option<String>,
+}
+
+impl From<ScanAllKeysInput> for ScanKeysInput {
+    fn from(input: ScanAllKeysInput) -> Self {
+        Self {
+            connection_id: input.connection_id,
+            cursor: ScanCursor::default(),
+            pattern: input.pattern,
+            count: input.count,
+            key_type: input.key_type,
+        }
+    }
 }
 
 impl ScanKeysInput {
