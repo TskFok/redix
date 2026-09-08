@@ -1,4 +1,5 @@
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import {
   closeConnection,
@@ -89,6 +90,19 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
   const [tagQuery, setTagQuery] = useState("");
   const [onlyUntagged, setOnlyUntagged] = useState(false);
   const activeId = activeConnectionId === undefined ? state.activeId : activeConnectionId;
+  const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([
+    activeId, state.profiles, state.editingProfile, formOpen, state.loading, state.saving,
+    state.testingId, state.openingId, state.deletingId, transferBusy, tags, tagQuery, onlyUntagged,
+  ]));
+  const currentConfirmRef = useRef(confirm);
+  currentConfirmRef.current = confirm;
+  const deleteInFlight = useRef(false);
+  const mountedRef = useRef(false);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -190,11 +204,14 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
   };
 
   const handleDelete = async (profile: ConnectionProfile) => {
-    if (!window.confirm(`确定删除连接“${profile.name}”吗？`)) {
+    if (deleteInFlight.current || state.loading || state.saving || state.testingId || state.openingId || transferBusy) {
       return;
     }
+    if (!await confirm(`确定删除连接“${profile.name}”吗？`)) return;
+    if (!mountedRef.current || currentConfirmRef.current !== confirm || deleteInFlight.current) return;
     const wasEditing = state.editingProfile?.id === profile.id;
     const wasActive = activeId === profile.id;
+    deleteInFlight.current = true;
 
     setState((current) => ({
       ...current,
@@ -203,6 +220,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
     }));
     try {
       await deleteConnection(profile.id);
+      if (!mountedRef.current) return;
       setState((current) => ({
         ...current,
         profiles: current.profiles.filter((item) => item.id !== profile.id),
@@ -218,11 +236,14 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
         onOpenConnection(null);
       }
     } catch (caught) {
+      if (!mountedRef.current) return;
       setState((current) => ({
         ...current,
         deletingId: null,
         error: toUserFacingError(caught, "删除连接失败，请稍后重试。"),
       }));
+    } finally {
+      deleteInFlight.current = false;
     }
   };
 
@@ -335,6 +356,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
         state.loading || state.saving || Boolean(state.testingId) || transferBusy
       }
     >
+      {confirmationDialog}
       {!formOpen ? (
         <>
           <div className="page-heading connections-heading">

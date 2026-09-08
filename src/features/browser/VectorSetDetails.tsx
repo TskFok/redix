@@ -1,5 +1,6 @@
 import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import {
   addVectorSetElements,
@@ -126,6 +127,13 @@ export function VectorSetDetails({
   const [queryVectorText, setQueryVectorText] = useState("[]");
   const [queryCount, setQueryCount] = useState("10");
   const [queryWithAttributes, setQueryWithAttributes] = useState(true);
+  const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([
+    connectionId, keyName, disabled, busy, state.activeTab, state.selectedElements,
+    state.selectedElement, selectedDetails?.name, attributesDraft,
+  ]));
+  const confirmationRef = useRef(confirm);
+  confirmationRef.current = confirm;
+  const inFlight = useRef(false);
   const requestRef = useRef<VectorSetRequestToken | null>(null);
   const requestIdRef = useRef(0);
 
@@ -137,6 +145,7 @@ export function VectorSetDetails({
     };
     requestIdRef.current = token.requestId;
     requestRef.current = token;
+    inFlight.current = true;
     setBusy(true);
     setState((current) => ({ ...current, activeTab: tab, loading: true, error: null }));
     return token;
@@ -147,6 +156,7 @@ export function VectorSetDetails({
 
   const finishRequest = (token: VectorSetRequestToken) => {
     if (isCurrent(token)) {
+      inFlight.current = false;
       setBusy(false);
       setState((current) => ({ ...current, loading: false }));
     }
@@ -184,6 +194,7 @@ export function VectorSetDetails({
     };
     requestIdRef.current = token.requestId;
     requestRef.current = token;
+    inFlight.current = true;
     setBusy(true);
     setState((current) => ({ ...current, loading: true }));
     void loadPageData(token, null, true)
@@ -200,6 +211,7 @@ export function VectorSetDetails({
     return () => {
       requestIdRef.current += 1;
       requestRef.current = null;
+      inFlight.current = false;
     };
     // The initial summary is a seed only; key changes own this request lifecycle.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -305,16 +317,19 @@ export function VectorSetDetails({
   };
 
   const handleDeleteSelected = async () => {
-    if (state.selectedElements.length === 0 || !window.confirm(`确定删除选中的 ${state.selectedElements.length} 个 Vector Set 元素吗？`)) {
-      return;
-    }
+    if (busy || disabled || inFlight.current || state.selectedElements.length === 0) return;
+    const previousRequest = requestRef.current;
+    const elements = [...state.selectedElements];
+    const accepted = await confirm(`确定删除选中的 ${elements.length} 个 Vector Set 元素吗？`);
+    if (!accepted || confirmationRef.current !== confirm || !previousRequest || !isCurrent(previousRequest) || inFlight.current) return;
     const token = beginRequest("elements");
     try {
       await deleteVectorSetElements({
         connection_id: connectionId,
         key: keyName,
-        elements: state.selectedElements,
+        elements,
       });
+      if (!isCurrent(token)) return;
       await reloadFirstPage(token);
       if (isCurrent(token)) {
         setState((current) => ({ ...current, selectedElements: [] }));
@@ -363,9 +378,10 @@ export function VectorSetDetails({
   };
 
   const handleDeleteAttributes = async () => {
-    if (!selectedDetails || !window.confirm(`确定清除元素“${selectedDetails.name}”的属性吗？`)) {
-      return;
-    }
+    if (busy || disabled || inFlight.current || !selectedDetails) return;
+    const previousRequest = requestRef.current;
+    const accepted = await confirm(`确定清除元素“${selectedDetails.name}”的属性吗？`, { title: "确认清除属性", confirmLabel: "确认清除" });
+    if (!accepted || confirmationRef.current !== confirm || !previousRequest || !isCurrent(previousRequest) || inFlight.current) return;
     const token = beginRequest(state.activeTab);
     try {
       await deleteVectorSetAttributes({
@@ -421,6 +437,7 @@ export function VectorSetDetails({
 
   return (
     <section className="module-details vector-set-details" aria-labelledby="vector-set-details-title" aria-busy={busy || disabled}>
+      {confirmationDialog}
       <div className="module-details-heading">
         <div>
           <p className="eyebrow">REDIS MODULE</p>

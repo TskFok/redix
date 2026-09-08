@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import type {
   JsonMutationResult,
@@ -17,7 +18,7 @@ interface JsonPathEditorProps {
   value: JsonValue;
   busy: boolean;
   error: string | null;
-  confirmRootDelete?: (path: string) => boolean;
+  rootDeleteMessage?: string;
   onRead(path: string): Promise<JsonPathValue>;
   onMutate(mutation: JsonPathMutation): Promise<JsonMutationResult>;
 }
@@ -51,7 +52,7 @@ export function JsonPathEditor({
   value,
   busy,
   error,
-  confirmRootDelete,
+  rootDeleteMessage,
   onRead,
   onMutate,
 }: JsonPathEditorProps) {
@@ -61,6 +62,12 @@ export function JsonPathEditor({
   const [operationError, setOperationError] = useState<string | null>(null);
   const [readResult, setReadResult] = useState<JsonPathValue | null>(null);
   const [blockedReason, setBlockedReason] = useState<string | null>(null);
+  const { confirm, confirmationDialog } = useConfirmDialog(
+    JSON.stringify([path, jsonDraft, busy, rootDeleteMessage]),
+  );
+  const currentConfirmRef = useRef(confirm);
+  currentConfirmRef.current = confirm;
+  const deletingRef = useRef(false);
   const mountedRef = useRef(false);
   const readRequestRef = useRef(0);
   const sourceValueRef = useRef(value);
@@ -128,6 +135,7 @@ export function JsonPathEditor({
   };
 
   const mutate = async (kind: JsonPathMutation["kind"]) => {
+    if (busy || deletingRef.current) return;
     const trimmedPath = validatePath();
     if (trimmedPath === null) {
       return;
@@ -136,15 +144,21 @@ export function JsonPathEditor({
     if (kind === "delete") {
       setValidationError(null);
       setOperationError(null);
-      if (confirmRootDelete && !confirmRootDelete(trimmedPath)) {
-        return;
+      if (rootDeleteMessage && (trimmedPath === "$" || trimmedPath === ".")) {
+        const requestId = readRequestRef.current;
+        if (!await confirm(rootDeleteMessage)) return;
+        if (!mountedRef.current || currentConfirmRef.current !== confirm
+          || readRequestRef.current !== requestId || deletingRef.current) return;
       }
+      deletingRef.current = true;
       try {
         await onMutate({ kind, path: trimmedPath });
       } catch {
-        if (!error) {
+        if (mountedRef.current && !error) {
           setOperationError("JSON Path 操作失败，请稍后重试。");
         }
+      } finally {
+        deletingRef.current = false;
       }
       return;
     }
@@ -196,6 +210,7 @@ export function JsonPathEditor({
 
   return (
     <section className="json-path-editor" aria-labelledby="json-path-editor-title" aria-busy={busy}>
+      {confirmationDialog}
       <div className="editor-heading">
         <div>
           <p className="eyebrow">JSON PATH</p>

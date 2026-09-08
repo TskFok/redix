@@ -1,5 +1,6 @@
 import Select from "../../components/Select";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import {
   createSearchIndex,
@@ -230,13 +231,20 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   const indexRequestRef = useRef(0);
   const infoRequestRef = useRef(0);
   const searchRequestRef = useRef(0);
+  const mutationRef = useRef(false);
 
   const capability = searchCapabilityState(probe);
   const vectorSupported = capability.status === "ready" && vectorSearchSupported(capability.capabilities.search_version);
   const mutationBusy = createBusy || deleteBusy;
+  const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([
+    connectionId, capability.status, state.selectedIndex, state.indexes, state.query,
+    state.includeContent, state.loading, indexLoading, mutationBusy, showCreate, createDraft,
+  ]));
+  const currentConfirmRef = useRef(confirm);
+  currentConfirmRef.current = confirm;
 
   const changeQuery = (changes: Partial<Pick<SearchState, "query" | "includeContent" | "selectedIndex">>) => {
-    if (mutationBusy) return;
+    if (mutationBusy || mutationRef.current) return;
     searchRequestRef.current += 1;
     setState((current) => ({ ...current, ...changes, result: null, offset: 0, loading: false, requestToken: null, error: null,
       info: "selectedIndex" in changes ? null : current.info }));
@@ -300,6 +308,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
     setCreateError(null);
     setCreateBusy(false);
     setDeleteBusy(false);
+    mutationRef.current = false;
 
     void getModuleCapabilities(connectionId)
       .then((capabilities) => {
@@ -367,7 +376,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   }, [capability.status, connectionId, state.selectedIndex]);
 
   const runSearch = async (requestedOffset: number) => {
-    if (mutationBusy || capability.status !== "ready" || !state.selectedIndex) {
+    if (mutationBusy || mutationRef.current || capability.status !== "ready" || !state.selectedIndex) {
       return;
     }
     const query = state.query.trim();
@@ -420,7 +429,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   };
 
   const handleCreate = async () => {
-    if (mutationBusy) return;
+    if (mutationBusy || mutationRef.current) return;
     const requestGeneration = connectionRequestRef.current;
     const index = createDraft.index.trim();
     const fields = createDraft.fields
@@ -463,6 +472,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
         .filter(Boolean),
       fields,
     };
+    mutationRef.current = true;
     setCreateBusy(true);
     setCreateError(null);
     try {
@@ -474,16 +484,22 @@ export function SearchPage({ connectionId }: SearchPageProps) {
     } catch (caught) {
       if (mountedRef.current && connectionRequestRef.current === requestGeneration) setCreateError(searchErrorMessage(caught, "创建索引失败，请检查索引定义。"));
     } finally {
-      if (mountedRef.current && connectionRequestRef.current === requestGeneration) setCreateBusy(false);
+      if (mountedRef.current && connectionRequestRef.current === requestGeneration) {
+        mutationRef.current = false;
+        setCreateBusy(false);
+      }
     }
   };
 
   const handleDelete = async () => {
-    if (mutationBusy || state.loading || !state.selectedIndex || !window.confirm(`确定删除索引“${state.selectedIndex}”吗？`)) {
+    if (mutationBusy || mutationRef.current || state.loading || indexLoading || capability.status !== "ready" || !state.selectedIndex) {
       return;
     }
     const index = state.selectedIndex;
     const requestGeneration = connectionRequestRef.current;
+    if (!await confirm(`确定删除索引“${index}”吗？`)) return;
+    if (!mountedRef.current || connectionRequestRef.current !== requestGeneration || currentConfirmRef.current !== confirm || mutationRef.current) return;
+    mutationRef.current = true;
     setDeleteBusy(true);
     setState((current) => ({ ...current, loading: true, error: null }));
     try {
@@ -507,7 +523,10 @@ export function SearchPage({ connectionId }: SearchPageProps) {
         error: searchErrorMessage(caught, "删除索引失败，请稍后重试。"),
       }));
     } finally {
-      if (mountedRef.current && connectionRequestRef.current === requestGeneration) setDeleteBusy(false);
+      if (mountedRef.current && connectionRequestRef.current === requestGeneration) {
+        mutationRef.current = false;
+        setDeleteBusy(false);
+      }
     }
   };
 
@@ -516,6 +535,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
 
   return (
     <section className="search-page" aria-labelledby="search-query-page-title" aria-busy={indexLoading || infoLoading || state.loading || mutationBusy}>
+      {confirmationDialog}
       <div className="page-heading search-page-heading">
         <div>
           <p className="eyebrow">REDISEARCH / QUERY</p>

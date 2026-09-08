@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 import { getCollectionPage, mutateCollection, type CollectionEntry, type CollectionKind, type CollectionMutation, type CollectionPage } from "./collectionApi";
 import { browserErrorMessage } from "./browserState";
 
@@ -28,6 +29,12 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
   const [value, setValue] = useState("");
   const [score, setScore] = useState("0");
   const [prepend, setPrepend] = useState(false);
+  const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([
+    connectionId, keyName, kind, disabled, busy, cursor, pattern, appliedPattern,
+    editing?.id, entryName, value, score, prepend,
+  ]));
+  const confirmationRef = useRef(confirm);
+  confirmationRef.current = confirm;
   const request = useRef(0);
   const mounted = useRef(false);
   const inFlight = useRef(false);
@@ -68,7 +75,15 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
   useEffect(() => { callbacks.current.onBusyChange?.(busy); }, [busy]);
 
   const write = async (mutation: CollectionMutation, confirmation: string) => {
-    if (blocked || inFlight.current || !window.confirm(confirmation)) return;
+    if (blocked || inFlight.current) return;
+    const previousRequest = request.current;
+    const deleting = mutation.operation === "hash_delete" || mutation.operation === "set_remove" || mutation.operation === "zset_remove";
+    const accepted = await confirm(confirmation, deleting ? undefined : {
+      title: editing ? "确认保存修改" : "确认添加一项",
+      confirmLabel: editing ? "确认保存" : "确认添加",
+      danger: false,
+    });
+    if (!accepted || confirmationRef.current !== confirm || !current(previousRequest) || inFlight.current) return;
     const token = ++request.current;
     inFlight.current = true;
     setBusy(true);
@@ -110,6 +125,7 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
   const typeName = { hash: "Hash", list: "List", set: "Set", zset: "Sorted Set" }[kind];
 
   return <section className="module-details collection-details" aria-label={`${typeName} 分页详情`}>
+    {confirmationDialog}
     <div className="module-details-heading"><h3>{typeName}</h3><span className="form-help">总项数：{page?.total ?? "—"} · 当前页：{page?.entries.length ?? 0} 项</span></div>
     <p className="form-help">{kind === "list" ? "按索引分页。其他客户端修改 List 时索引可能移动，编辑前请刷新。" : "SCAN 每次请求 100 项；数量是提示，最多接受 2,000 项 / 4 MiB。空页也可能有下一页。并发修改时可能重复或遗漏，请刷新重新扫描。"}</p>
     {kind !== "list" && <form className="module-toolbar collection-search" onSubmit={(event) => { event.preventDefault(); if (!blocked && new TextEncoder().encode(pattern).length <= 4096) void load("0", pattern, []); }}>

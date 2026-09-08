@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import {
   deleteQueryLibraryItem,
@@ -40,6 +41,13 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
     ...initialQueryLibraryPageState,
   }));
   const [draft, setDraft] = useState<QueryLibraryItemInput | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([
+    state.items, state.query, state.loading, state.saving, draft, deleting,
+  ]));
+  const currentConfirmRef = useRef(confirm);
+  currentConfirmRef.current = confirm;
+  const mutationRef = useRef(false);
   const mountedRef = useRef(false);
   const requestRef = useRef(0);
   const visibleItems = useMemo(
@@ -86,7 +94,7 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
   };
 
   const handleSave = async () => {
-    if (!draft) {
+    if (!draft || state.loading || state.saving || mutationRef.current) {
       return;
     }
     const input: QueryLibraryItemInput = {
@@ -103,6 +111,7 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
       return;
     }
 
+    mutationRef.current = true;
     setState((current) => ({ ...current, saving: true, error: null }));
     try {
       const saved = await saveQueryLibraryItem(input);
@@ -129,13 +138,17 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
           error: normalizeQueryLibraryError(caught),
         }));
       }
+    } finally {
+      mutationRef.current = false;
     }
   };
 
   const handleDelete = async (item: QueryLibraryItem) => {
-    if (!window.confirm(`确认删除查询“${item.name}”？`)) {
-      return;
-    }
+    if (state.loading || state.saving || mutationRef.current) return;
+    if (!await confirm(`确认删除查询“${item.name}”？`)) return;
+    if (!mountedRef.current || currentConfirmRef.current !== confirm || mutationRef.current) return;
+    mutationRef.current = true;
+    setDeleting(true);
     try {
       await deleteQueryLibraryItem(item.id);
       if (mountedRef.current) {
@@ -144,6 +157,7 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
           items: current.items.filter((currentItem) => currentItem.id !== item.id),
           error: null,
         }));
+        setDraft((current) => current?.id === item.id ? null : current);
       }
     } catch (caught) {
       if (mountedRef.current) {
@@ -152,11 +166,15 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
           error: normalizeQueryLibraryError(caught),
         }));
       }
+    } finally {
+      mutationRef.current = false;
+      if (mountedRef.current) setDeleting(false);
     }
   };
 
   return (
     <section className="query-library-page" aria-labelledby="query-library-page-title">
+      {confirmationDialog}
       <div className="page-heading">
         <div>
           <p className="eyebrow">QUERY LIBRARY</p>
@@ -168,7 +186,7 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
         </button>
       </div>
 
-      <QueryPackage disabled={state.loading || state.saving} onImported={(items) => setState((current) => ({ ...current, items: [...items, ...current.items] }))} />
+      <QueryPackage disabled={state.loading || state.saving || deleting} onImported={(items) => setState((current) => ({ ...current, items: [...items, ...current.items] }))} />
 
       {state.error ? (
         <p className="feedback feedback-error" role="alert">
@@ -232,6 +250,7 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
                 <button
                   type="button"
                   className="button button-danger"
+                  disabled={state.saving || deleting}
                   onClick={() => void handleDelete(item)}
                 >
                   删除查询 {item.name}
@@ -302,7 +321,7 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
             <button
               type="button"
               className="button button-primary"
-              disabled={state.saving}
+              disabled={state.saving || deleting}
               onClick={() => void handleSave()}
             >
               保存查询

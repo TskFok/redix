@@ -1,5 +1,7 @@
 import Select from "../../components/Select";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import {
   acknowledgeStreamPendingEntries,
@@ -50,6 +52,15 @@ export function StreamConsumerGroups({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailsRefresh, setDetailsRefresh] = useState(0);
+  const confirmationScope = JSON.stringify([
+    connectionId, streamKey, selectedGroupName, consumers, selectedPendingIds,
+    claimConsumer, claimIdle, busy, loading, detailsLoading, detailsRefresh,
+  ]);
+  const confirmationToken = useMemo(() => ({}), [confirmationScope]);
+  const confirmationTokenRef = useRef(confirmationToken);
+  confirmationTokenRef.current = confirmationToken;
+  const { confirm, confirmationDialog } = useConfirmDialog(confirmationScope);
+  const inFlightRef = useRef(false);
   const mountedRef = useRef(false);
   const groupsRequestRef = useRef(0);
   const detailsRequestRef = useRef(0);
@@ -60,6 +71,7 @@ export function StreamConsumerGroups({
 
   useEffect(() => {
     mutationRef.current += 1;
+    inFlightRef.current = false;
     setBusy(false);
     setClaimNotice(null);
   }, [connectionId, streamKey, selectedGroupName]);
@@ -217,46 +229,48 @@ export function StreamConsumerGroups({
   };
 
   const handleDeleteGroup = async () => {
-    if (!selectedGroup || !window.confirm(`确定删除 Consumer Group “${selectedGroup.name}”吗？`)) {
-      return;
-    }
+    if (!selectedGroup || busy || loading || detailsLoading || inFlightRef.current) return;
+    const input = { connection_id: connectionId, key: streamKey, name: selectedGroup.name };
+    const scope = scopeRef.current;
+    const generation = mutationRef.current;
+    if (!await confirm(`确定删除 Consumer Group “${input.name}”吗？`)) return;
+    if (!mountedRef.current || confirmationTokenRef.current !== confirmationToken
+        || scopeRef.current !== scope || mutationRef.current !== generation || inFlightRef.current) return;
+    const token = ++mutationRef.current;
+    const isCurrent = () => mountedRef.current && scopeRef.current === scope && mutationRef.current === token;
+    inFlightRef.current = true;
     setBusy(true);
     setError(null);
     try {
-      await deleteStreamConsumerGroup({
-        connection_id: connectionId,
-        key: streamKey,
-        name: selectedGroup.name,
-      });
-      await refresh();
+      await deleteStreamConsumerGroup(input);
+      if (isCurrent()) await refresh();
     } catch (caught) {
-      setError(browserErrorMessage(caught, "删除 Consumer Group 失败，请稍后重试。"));
+      if (isCurrent()) setError(browserErrorMessage(caught, "删除 Consumer Group 失败，请稍后重试。"));
     } finally {
-      setBusy(false);
+      if (isCurrent()) { inFlightRef.current = false; setBusy(false); }
     }
   };
 
   const handleDeleteConsumer = async (consumer: StreamConsumer) => {
-    if (
-      !selectedGroup ||
-      !window.confirm(`确定删除消费者“${consumer.name}”吗？这会移除其 Pending 记录。`)
-    ) {
-      return;
-    }
+    if (!selectedGroup || busy || loading || detailsLoading || inFlightRef.current) return;
+    const input = { connection_id: connectionId, key: streamKey, group: selectedGroup.name, consumer: consumer.name };
+    const scope = scopeRef.current;
+    const generation = mutationRef.current;
+    if (!await confirm(`确定删除消费者“${input.consumer}”吗？这会移除其 Pending 记录。`)) return;
+    if (!mountedRef.current || confirmationTokenRef.current !== confirmationToken
+        || scopeRef.current !== scope || mutationRef.current !== generation || inFlightRef.current) return;
+    const token = ++mutationRef.current;
+    const isCurrent = () => mountedRef.current && scopeRef.current === scope && mutationRef.current === token;
+    inFlightRef.current = true;
     setBusy(true);
     setError(null);
     try {
-      await deleteStreamConsumer({
-        connection_id: connectionId,
-        key: streamKey,
-        group: selectedGroup.name,
-        consumer: consumer.name,
-      });
-      await refresh();
+      await deleteStreamConsumer(input);
+      if (isCurrent()) await refresh();
     } catch (caught) {
-      setError(browserErrorMessage(caught, "删除消费者失败，请稍后重试。"));
+      if (isCurrent()) setError(browserErrorMessage(caught, "删除消费者失败，请稍后重试。"));
     } finally {
-      setBusy(false);
+      if (isCurrent()) { inFlightRef.current = false; setBusy(false); }
     }
   };
 
@@ -284,23 +298,31 @@ export function StreamConsumerGroups({
 
   const handleClaim = async () => {
     const minIdleMs = Number(claimIdle);
-    if (!selectedGroup || selectedPendingIds.length === 0) return;
+    if (!selectedGroup || selectedPendingIds.length === 0 || busy || loading || detailsLoading || inFlightRef.current) return;
     if (!claimConsumer.trim() || claimConsumer.length > 256 || !/^\d+$/.test(claimIdle)
         || !Number.isSafeInteger(minIdleMs) || minIdleMs < 0) {
       setError("请填写目标消费者和有效的非负整数空闲时间。");
       return;
     }
-    if (!window.confirm(`将 ${selectedPendingIds.length} 条 Pending 消息转移给“${claimConsumer}”？这会改变消息所属消费者。`)) return;
+    const entries = [...selectedPendingIds];
+    const input = {
+      connection_id: connectionId, key: streamKey, group: selectedGroup.name,
+      consumer: claimConsumer, min_idle_ms: minIdleMs, entries,
+    };
     const scope = scopeRef.current;
+    const generation = mutationRef.current;
+    if (!await confirm(
+      `将 ${entries.length} 条 Pending 消息转移给“${input.consumer}”？这会改变消息所属消费者。`,
+      { title: "确认转移 Pending", confirmLabel: "确认转移", danger: false },
+    )) return;
+    if (!mountedRef.current || confirmationTokenRef.current !== confirmationToken
+        || scopeRef.current !== scope || mutationRef.current !== generation || inFlightRef.current) return;
     const token = ++mutationRef.current;
     const isCurrent = () => mountedRef.current && scopeRef.current === scope && mutationRef.current === token;
-    const entries = [...selectedPendingIds];
+    inFlightRef.current = true;
     setBusy(true); setError(null); setClaimNotice(null);
     try {
-      const claimed = await claimStreamPendingEntries({
-        connection_id: connectionId, key: streamKey, group: selectedGroup.name,
-        consumer: claimConsumer, min_idle_ms: minIdleMs, entries,
-      });
+      const claimed = await claimStreamPendingEntries(input);
       if (!isCurrent()) return;
       setSelectedPendingIds([]);
       await refresh();
@@ -308,7 +330,7 @@ export function StreamConsumerGroups({
     } catch (caught) {
       if (isCurrent()) setError(browserErrorMessage(caught, "转移 Pending 消息失败，请稍后重试。"));
     } finally {
-      if (isCurrent()) setBusy(false);
+      if (isCurrent()) { inFlightRef.current = false; setBusy(false); }
     }
   };
 
@@ -323,6 +345,7 @@ export function StreamConsumerGroups({
 
   return (
     <section className="stream-consumer-groups" aria-labelledby="stream-consumer-groups-title">
+      {confirmationDialog}
       <div className="stream-groups-heading">
         <div>
           <h3 id="stream-consumer-groups-title">Consumer Groups</h3>
@@ -397,7 +420,7 @@ export function StreamConsumerGroups({
           type="button"
           className="button button-danger"
           onClick={() => void handleDeleteGroup()}
-          disabled={busy || selectedGroup === null}
+          disabled={busy || loading || detailsLoading || selectedGroup === null}
         >
           删除 Group
         </button>
@@ -452,7 +475,7 @@ export function StreamConsumerGroups({
                           type="button"
                           className="button button-quiet button-compact"
                           onClick={() => void handleDeleteConsumer(consumer)}
-                          disabled={busy}
+                          disabled={busy || loading || detailsLoading}
                           aria-label={`删除消费者 ${consumer.name}`}
                         >
                           删除
@@ -503,7 +526,7 @@ export function StreamConsumerGroups({
                 onChange={(event) => setClaimIdle(event.target.value)} disabled={busy} />
             </label>
             <button type="button" className="button button-secondary" onClick={() => void handleClaim()}
-              disabled={busy || detailsLoading || !selectedGroup || !claimConsumer.trim() || selectedPendingIds.length === 0}>
+              disabled={busy || loading || detailsLoading || !selectedGroup || !claimConsumer.trim() || selectedPendingIds.length === 0}>
               转移选中 Pending
             </button>
           </div>

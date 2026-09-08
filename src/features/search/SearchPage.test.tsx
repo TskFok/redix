@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ModuleCapabilities } from "../../lib/types";
@@ -188,18 +188,57 @@ describe("RedisSearch / Query 页面", () => {
 
   it("删除索引期间阻止切换索引、内容模式和再次查询或删除", async () => {
     listSearchIndexesMock.mockResolvedValue({ indexes: [{ name: "idx:users" }, { name: "idx:orders" }] });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     let resolve!: () => void;
     deleteSearchIndexMock.mockImplementationOnce(() => new Promise<void>((done) => { resolve = done; }));
     render(<SearchPage connectionId="local" />);
     await screen.findByRole("option", { name: "idx:users" });
     const queryButton = screen.getByRole("button", { name: "查询" });
     fireEvent.click(screen.getByRole("button", { name: "删除当前索引" }));
+    expect(deleteSearchIndexMock).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" })));
+    expect(deleteSearchIndexMock).toHaveBeenCalledWith({ connection_id: "local", index: "idx:users" });
     expect(screen.getByRole("combobox", { name: "当前索引" })).toBeDisabled();
     expect(screen.getByRole("checkbox", { name: "返回文档内容" })).toBeDisabled();
     expect(queryButton).toBeDisabled();
     expect(screen.getByRole("button", { name: "删除当前索引" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "删除当前索引" }));
+    expect(deleteSearchIndexMock).toHaveBeenCalledTimes(1);
     await act(async () => resolve());
+  });
+
+  it("取消删除索引保留索引且不发请求", async () => {
+    render(<SearchPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "删除当前索引" }));
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("idx:users");
+    await act(async () => fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "取消" })));
+    expect(deleteSearchIndexMock).not.toHaveBeenCalled();
+    expect(screen.getByRole("option", { name: "idx:users" })).toBeInTheDocument();
+  });
+
+  it.each(["连接", "索引", "查询", "刷新", "新建索引"])("更改%s取消索引删除确认", async (context) => {
+    listSearchIndexesMock.mockResolvedValue({ indexes: [{ name: "idx:users" }, { name: "idx:orders" }] });
+    const view = render(<SearchPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "删除当前索引" }));
+    const accept = within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" });
+    if (context === "连接") view.rerender(<SearchPage connectionId="other" />);
+    else if (context === "索引") fireEvent.change(screen.getByRole("combobox", { name: "当前索引" }), { target: { value: "idx:orders" } });
+    else if (context === "查询") fireEvent.change(screen.getByLabelText("查询语句"), { target: { value: "@name:Bob" } });
+    else fireEvent.click(screen.getByRole("button", { name: context === "刷新" ? "刷新索引" : "新建索引" }));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await act(async () => fireEvent.click(accept));
+    expect(deleteSearchIndexMock).not.toHaveBeenCalled();
+  });
+
+  it("确认接受后同批切换索引仍阻止旧删除请求", async () => {
+    listSearchIndexesMock.mockResolvedValue({ indexes: [{ name: "idx:users" }, { name: "idx:orders" }] });
+    render(<SearchPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "删除当前索引" }));
+    act(() => {
+      fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
+      fireEvent.change(screen.getByRole("combobox", { name: "当前索引" }), { target: { value: "idx:orders" } });
+    });
+    await act(async () => {});
+    expect(deleteSearchIndexMock).not.toHaveBeenCalled();
   });
 
   it.each(["成功", "失败"])("创建后忽略较早索引列表请求的%s响应", async (outcome) => {

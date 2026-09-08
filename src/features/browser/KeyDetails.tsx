@@ -643,12 +643,9 @@ export function KeyDetails({
         <JsonPathEditor
           key={JSON.stringify([connectionId, detail.key])}
           value={detail.value.Json.value}
-          busy={busy}
+          busy={uiBusy || loading}
           error={jsonPathError}
-          confirmRootDelete={(path) =>
-            !isRootJsonPath(path)
-              || window.confirm(`确定删除整个 JSON 键“${detail.key}”吗？`)
-          }
+          rootDeleteMessage={`确定删除整个 JSON 键“${detail.key}”吗？`}
           onRead={handleJsonPathRead}
           onMutate={handleJsonPathMutate}
         />

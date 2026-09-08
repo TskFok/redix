@@ -389,13 +389,15 @@ describe("Redix 应用壳", () => {
   it("返回后删除当前连接会清除连接上下文", async () => {
     const remoteProfile = { ...localProfile, id: "remote", name: "远程 Redis" };
     listConnectionsMock.mockResolvedValue([localProfile, remoteProfile]);
-    vi.stubGlobal("confirm", vi.fn().mockReturnValue(true));
+    vi.stubGlobal("confirm", vi.fn().mockReturnValue(false));
     render(<App />);
 
     fireEvent.click((await screen.findAllByRole("button", { name: "连接" }))[0]);
     await screen.findByRole("heading", { name: "数据浏览" });
     fireEvent.click(screen.getByRole("button", { name: "返回连接管理" }));
     fireEvent.click(await screen.findByRole("button", { name: "删除 本地 Redis" }));
+    expect(deleteConnectionMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(screen.queryByText("本地 Redis")).not.toBeInTheDocument());
     expect(deleteConnectionMock).toHaveBeenCalledWith("local");
     expect(screen.queryByText("已连接")).not.toBeInTheDocument();

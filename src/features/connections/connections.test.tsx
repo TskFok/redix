@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import ConnectionPage from "./ConnectionPage";
@@ -88,7 +88,6 @@ describe("Redis 连接管理页面", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "local") });
-    vi.stubGlobal("confirm", vi.fn(() => true));
     listConnectionsMock.mockResolvedValue([]);
     listConnectionTagsMock.mockResolvedValue({});
     saveConnectionMock.mockResolvedValue(localProfile);
@@ -528,7 +527,8 @@ describe("Redis 连接管理页面", () => {
     await screen.findByText("本地 Redis");
 
     fireEvent.click(screen.getByRole("button", { name: "删除 本地 Redis" }));
-
+    expect(deleteConnectionMock).not.toHaveBeenCalled();
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(deleteConnectionMock).toHaveBeenCalledWith("local"));
     expect(screen.queryByText("本地 Redis")).not.toBeInTheDocument();
   });
@@ -542,6 +542,7 @@ describe("Redis 连接管理页面", () => {
     await waitFor(() => expect(onOpenConnectionMock).toHaveBeenCalledWith(localProfile));
 
     fireEvent.click(screen.getByRole("button", { name: "删除 本地 Redis" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
     await waitFor(() =>
       expect(onOpenConnectionMock).toHaveBeenNthCalledWith(2, null),
     );
@@ -557,8 +558,61 @@ describe("Redis 连接管理页面", () => {
     render(<ConnectionPage activeConnectionId="local" onOpenConnection={onOpenConnectionMock} />);
     expect(await screen.findByRole("button", { name: "重新连接" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "删除 本地 Redis" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(onOpenConnectionMock).toHaveBeenLastCalledWith(null));
     expect(screen.queryByText("本地 Redis")).not.toBeInTheDocument();
+  });
+
+  it("取消删除连接保留连接且不发送请求", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "删除 本地 Redis" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("本地 Redis");
+    await act(async () => fireEvent.click(within(dialog).getByRole("button", { name: "取消" })));
+    expect(deleteConnectionMock).not.toHaveBeenCalled();
+    expect(screen.getByText("本地 Redis")).toBeInTheDocument();
+  });
+
+  it.each(["活动连接", "编辑连接", "筛选连接"])("更改%s取消待确认删除", async (context) => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    const view = render(<ConnectionPage activeConnectionId="local" onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "删除 本地 Redis" }));
+    const accept = within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" });
+    if (context === "活动连接") view.rerender(<ConnectionPage activeConnectionId="other" onOpenConnection={onOpenConnectionMock} />);
+    else if (context === "编辑连接") fireEvent.click(screen.getByRole("button", { name: "编辑 本地 Redis" }));
+    else fireEvent.change(screen.getByLabelText("筛选连接标签"), { target: { value: "missing" } });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    await act(async () => fireEvent.click(accept));
+    expect(deleteConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it("连接删除请求未完成时不重复请求", async () => {
+    let finish!: () => void;
+    deleteConnectionMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    const remove = await screen.findByRole("button", { name: "删除 本地 Redis" });
+    fireEvent.click(remove);
+    fireEvent.click(remove);
+    expect(screen.getAllByRole("alertdialog")).toHaveLength(1);
+    await act(async () => fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" })));
+    fireEvent.click(remove);
+    expect(deleteConnectionMock).toHaveBeenCalledTimes(1);
+    await act(async () => finish());
+    expect(screen.queryByText("本地 Redis")).not.toBeInTheDocument();
+  });
+
+  it("确认接受后同批切换活动连接仍阻止旧删除请求", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    const view = render(<ConnectionPage activeConnectionId="local" onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "删除 本地 Redis" }));
+    act(() => {
+      fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
+      view.rerender(<ConnectionPage activeConnectionId="other" onOpenConnection={onOpenConnectionMock} />);
+    });
+    await act(async () => {});
+    expect(deleteConnectionMock).not.toHaveBeenCalled();
   });
 
   it("外部活动连接置空时不再沿用内部已连接状态", async () => {

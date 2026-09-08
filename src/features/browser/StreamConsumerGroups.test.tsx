@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import StreamConsumerGroups from "./StreamConsumerGroups";
@@ -65,7 +65,7 @@ function deferred<T>() {
 describe("Stream Consumer Groups", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal("confirm", vi.fn(() => false));
     getGroupsMock.mockResolvedValue([group]);
     getConsumersMock.mockResolvedValue([consumer]);
     getPendingMock.mockResolvedValue([pending]);
@@ -157,7 +157,6 @@ describe("Stream Consumer Groups", () => {
   });
 
   it("确认选中的 Pending 并支持删除消费者和 Group", async () => {
-    const confirmMock = vi.mocked(window.confirm);
     render(<StreamConsumerGroups connectionId="local" streamKey="events" />);
     await screen.findByText("1-0");
 
@@ -172,7 +171,9 @@ describe("Stream Consumer Groups", () => {
       });
     });
 
+    await waitFor(() => expect(screen.getByRole("button", { name: "删除消费者 consumer-1" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "删除消费者 consumer-1" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
     await waitFor(() => {
       expect(deleteConsumerMock).toHaveBeenCalledWith({
         connection_id: "local",
@@ -182,7 +183,9 @@ describe("Stream Consumer Groups", () => {
       });
     });
 
+    await waitFor(() => expect(screen.getByRole("button", { name: "删除 Group" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "删除 Group" }));
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
     await waitFor(() => {
       expect(deleteGroupMock).toHaveBeenCalledWith({
         connection_id: "local",
@@ -190,7 +193,7 @@ describe("Stream Consumer Groups", () => {
         name: "workers",
       });
     });
-    expect(confirmMock).toHaveBeenCalledTimes(2);
+    expect(window.confirm).not.toHaveBeenCalled();
   });
 
   it("忽略切换键后返回的旧 Group 响应", async () => {
@@ -221,7 +224,7 @@ describe("Pending Claim", () => {
     vi.clearAllMocks();
     getGroupsMock.mockResolvedValue([group]); getConsumersMock.mockResolvedValue([consumer]);
     getPendingMock.mockResolvedValue([pending]); claimMock.mockResolvedValue(["1-0"]);
-    vi.stubGlobal("confirm", vi.fn(() => true));
+    vi.stubGlobal("confirm", vi.fn(() => false));
   });
   afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
@@ -232,6 +235,7 @@ describe("Pending Claim", () => {
     fireEvent.change(screen.getByLabelText("目标消费者"), { target: { value: "replacement" } });
     fireEvent.change(screen.getByLabelText("最小空闲时间（毫秒）"), { target: { value: "1000" } });
     fireEvent.click(screen.getByRole("button", { name: "转移选中 Pending" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认转移 Pending" })).getByRole("button", { name: "确认转移" }));
     expect(await screen.findByRole("status")).toHaveTextContent("已转移 1 / 1 条");
     expect(claimMock).toHaveBeenCalledWith({ connection_id: "local", key: "events", group: "workers",
       consumer: "replacement", min_idle_ms: 1000, entries: ["1-0"] });
@@ -244,6 +248,7 @@ describe("Pending Claim", () => {
     fireEvent.click(screen.getByLabelText("选择 Pending 1-0"));
     fireEvent.change(screen.getByLabelText("目标消费者"), { target: { value: "replacement" } });
     fireEvent.click(screen.getByRole("button", { name: "转移选中 Pending" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认转移 Pending" })).getByRole("button", { name: "确认转移" }));
     expect(await screen.findByRole("alert")).not.toHaveTextContent("secret");
     expect(screen.getByLabelText("选择 Pending 1-0")).toBeChecked();
     expect(screen.getByLabelText("目标消费者")).toHaveValue("replacement");
@@ -256,6 +261,8 @@ describe("Pending Claim", () => {
     fireEvent.click(screen.getByLabelText("选择 Pending 1-0"));
     fireEvent.change(screen.getByLabelText("目标消费者"), { target: { value: "replacement" } });
     fireEvent.click(screen.getByRole("button", { name: "转移选中 Pending" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认转移 Pending" })).getByRole("button", { name: "确认转移" }));
+    await waitFor(() => expect(claimMock).toHaveBeenCalledOnce());
     rerender(<StreamConsumerGroups connectionId="local" streamKey="other" />);
     await waitFor(() => expect(screen.getByLabelText("目标消费者")).toHaveValue(""));
     response.resolve(["1-0"]);
@@ -269,6 +276,8 @@ describe("Pending Claim", () => {
     fireEvent.click(screen.getByLabelText("选择 Pending 1-0"));
     fireEvent.change(screen.getByLabelText("目标消费者"), { target: { value: "replacement" } });
     fireEvent.click(screen.getByRole("button", { name: "转移选中 Pending" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "确认转移 Pending" })).getByRole("button", { name: "确认转移" }));
+    await waitFor(() => expect(claimMock).toHaveBeenCalledOnce());
     rerender(<StreamConsumerGroups connectionId="local" streamKey="other" />);
     await screen.findByText("1-0");
     rerender(<StreamConsumerGroups connectionId="local" streamKey="events" />);
@@ -279,4 +288,99 @@ describe("Pending Claim", () => {
     expect(screen.queryByText(/已转移/)).not.toBeInTheDocument();
   });
 
+});
+
+
+describe.each([
+  { label: "删除 Group", title: "确认删除", accept: "确认删除", api: deleteGroupMock,
+    payload: { connection_id: "local", key: "events", name: "workers" }, result: 1 },
+  { label: "删除消费者 consumer-1", title: "确认删除", accept: "确认删除", api: deleteConsumerMock,
+    payload: { connection_id: "local", key: "events", group: "workers", consumer: "consumer-1" }, result: 0 },
+  { label: "转移选中 Pending", title: "确认转移 Pending", accept: "确认转移", api: claimMock,
+    payload: { connection_id: "local", key: "events", group: "workers", consumer: "replacement", min_idle_ms: 1000, entries: ["1-0"] }, result: ["1-0"] },
+])("$label 页面确认", ({ label, title, accept, api, payload, result }) => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("confirm", vi.fn(() => false));
+    getGroupsMock.mockResolvedValue([group, { ...group, name: "alerts" }]);
+    getConsumersMock.mockResolvedValue([consumer]);
+    getPendingMock.mockResolvedValue([pending]);
+    api.mockResolvedValue(result);
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  async function prepare() {
+    const view = render(<StreamConsumerGroups connectionId="local" streamKey="events" />);
+    await screen.findByText("1-0");
+    fireEvent.click(screen.getByLabelText("选择 Pending 1-0"));
+    fireEvent.change(screen.getByLabelText("目标消费者"), { target: { value: "replacement" } });
+    fireEvent.change(screen.getByLabelText("最小空闲时间（毫秒）"), { target: { value: "1000" } });
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    expect(screen.getByRole("alertdialog", { name: title })).toBeInTheDocument();
+    return view;
+  }
+
+  it("原生确认不可用时仍等待页面确认，并只提交一次正确请求", async () => {
+    const response = deferred<number | string[]>();
+    api.mockReturnValue(response.promise);
+    await prepare();
+    expect(api).not.toHaveBeenCalled();
+    const approve = within(screen.getByRole("alertdialog")).getByRole("button", { name: accept });
+    await act(async () => {
+      fireEvent.click(approve);
+      fireEvent.click(screen.getByRole("button", { name: label }));
+    });
+    expect(api).toHaveBeenCalledExactlyOnceWith(payload);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: label })).toBeDisabled();
+    expect(window.confirm).not.toHaveBeenCalled();
+    await act(async () => { response.resolve(result); await response.promise; });
+  });
+
+  it("取消后保留选择并且不发请求", async () => {
+    await prepare();
+    await act(async () => { fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "取消" })); });
+    expect(api).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("选择 Pending 1-0")).toBeChecked();
+  });
+
+  it.each(["连接", "键", "Group", "Pending 选择", "目标消费者", "空闲时间", "刷新"])("等待确认时%s变化取消旧操作", async (change) => {
+    const { rerender } = await prepare();
+    const approve = within(screen.getByRole("alertdialog")).getByRole("button", { name: accept });
+    if (change === "连接") rerender(<StreamConsumerGroups connectionId="other" streamKey="events" />);
+    else if (change === "键") rerender(<StreamConsumerGroups connectionId="local" streamKey="other" />);
+    else if (change === "Group") fireEvent.change(screen.getByLabelText("选择 Consumer Group"), { target: { value: "alerts" } });
+    else if (change === "Pending 选择") fireEvent.click(screen.getByLabelText("选择 Pending 1-0"));
+    else if (change === "目标消费者") fireEvent.change(screen.getByLabelText("目标消费者"), { target: { value: "other" } });
+    else if (change === "空闲时间") fireEvent.change(screen.getByLabelText("最小空闲时间（毫秒）"), { target: { value: "2000" } });
+    else fireEvent.click(screen.getByRole("button", { name: "刷新 Groups" }));
+    await act(async () => { fireEvent.click(approve); });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("点击确认后立即切换目标也不会提交旧请求", async () => {
+    const { rerender } = await prepare();
+    await act(async () => {
+      fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: accept }));
+      rerender(<StreamConsumerGroups connectionId="local" streamKey="other" />);
+    });
+    expect(api).not.toHaveBeenCalled();
+  });
+
+  it("切换键后旧请求响应不会刷新当前页面", async () => {
+    const response = deferred<number | string[]>();
+    api.mockReturnValue(response.promise);
+    const { rerender } = await prepare();
+    await act(async () => { fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: accept })); });
+    expect(api).toHaveBeenCalledExactlyOnceWith(payload);
+    rerender(<StreamConsumerGroups connectionId="local" streamKey="other" />);
+    await screen.findByText("1-0");
+    const groupRequests = getGroupsMock.mock.calls.length;
+    await act(async () => { response.resolve(result); await response.promise; });
+    expect(getGroupsMock).toHaveBeenCalledTimes(groupRequests);
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "刷新 Groups" })).toBeEnabled();
+  });
 });

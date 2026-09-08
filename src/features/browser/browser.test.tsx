@@ -1026,6 +1026,7 @@ describe("Redis Browser", () => {
     await screen.findByRole("button", { name: "展开前缀 hash:" });
     for (const [key, label] of [["hash:1", "Hash 分页详情"], ["list:1", "List 分页详情"], ["set:1", "Set 分页详情"], ["zset:1", "Sorted Set 分页详情"]]) {
       fireEvent.click(screen.getByRole("button", { name: `展开前缀 ${key.split(":")[0]}:` }));
+      await waitFor(() => expect(screen.getByRole("button", { name: key })).toBeEnabled());
       fireEvent.click(screen.getByRole("button", { name: key }));
       expect(await screen.findByRole("region", { name: label })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "保存" })).not.toBeInTheDocument();
@@ -1648,7 +1649,11 @@ describe("Redis Browser", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
 
-    expect(confirm).toHaveBeenCalledWith("确定删除整个 JSON 键“profile:1”吗？");
+    expect(screen.getByRole("alertdialog")).toHaveTextContent("确定删除整个 JSON 键“profile:1”吗？");
+    expect(deleteJsonPathMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
+    expect(confirm).not.toHaveBeenCalled();
     expect(deleteJsonPathMock).not.toHaveBeenCalled();
   });
 
@@ -1688,6 +1693,8 @@ describe("Redis Browser", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
 
+    expect(deleteJsonPathMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => {
       expect(deleteJsonPathMock).toHaveBeenCalledWith({
         connection_id: "local",
@@ -1752,6 +1759,8 @@ describe("Redis Browser", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
 
+    expect(deleteJsonPathMock).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => {
       expect(deleteJsonPathMock).toHaveBeenCalledWith({
         connection_id: "local",

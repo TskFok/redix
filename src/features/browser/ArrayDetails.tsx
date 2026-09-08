@@ -1,5 +1,6 @@
 import Select from "../../components/Select";
 import { useEffect, useRef, useState } from "react";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import {
   aggregateArray,
@@ -98,6 +99,13 @@ export function ArrayDetails({
   const [aggregateEnd, setAggregateEnd] = useState("");
   const [aggregateMatch, setAggregateMatch] = useState("");
   const [aggregateLimit, setAggregateLimit] = useState("100");
+  const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([
+    connectionId, keyName, disabled, busy, state.activeTab, state.rangeStart, state.rangeEnd,
+    editingIndex, editingValue,
+  ]));
+  const confirmationRef = useRef(confirm);
+  confirmationRef.current = confirm;
+  const inFlight = useRef(false);
   const requestRef = useRef<ArrayRequestToken | null>(null);
   const requestIdRef = useRef(0);
 
@@ -109,6 +117,7 @@ export function ArrayDetails({
     };
     requestIdRef.current = token.requestId;
     requestRef.current = token;
+    inFlight.current = true;
     setBusy(true);
     setState((current) => ({ ...current, activeTab: tab, loading: true, error: null }));
     return token;
@@ -119,6 +128,7 @@ export function ArrayDetails({
 
   const finishRequest = (token: ArrayRequestToken) => {
     if (isCurrent(token)) {
+      inFlight.current = false;
       setBusy(false);
       setState((current) => ({ ...current, loading: false }));
     }
@@ -184,6 +194,7 @@ export function ArrayDetails({
     };
     requestIdRef.current = token.requestId;
     requestRef.current = token;
+    inFlight.current = true;
     setBusy(true);
     setState((current) => ({ ...current, loading: true }));
     void loadViewData(token, "0", "499")
@@ -200,6 +211,7 @@ export function ArrayDetails({
     return () => {
       requestIdRef.current += 1;
       requestRef.current = null;
+      inFlight.current = false;
     };
     // The initial summary is a seed only. A key/connection change starts a new request.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -210,9 +222,11 @@ export function ArrayDetails({
   }, [busy, onBusyChange]);
 
   const runMutation = async (operation: () => Promise<unknown>) => {
+    if (busy || disabled || inFlight.current) return;
     const token = beginRequest("view");
     try {
       await operation();
+      if (!isCurrent(token)) return;
       await loadViewData(token, state.rangeStart, state.rangeEnd);
       if (isCurrent(token)) {
         setEditingIndex(null);
@@ -278,18 +292,20 @@ export function ArrayDetails({
   };
 
   const handleDeleteCell = async (index: string) => {
-    if (!window.confirm(`确定删除 Array 索引“${index}”吗？`)) {
-      return;
-    }
+    if (busy || disabled || inFlight.current) return;
+    const previousRequest = requestRef.current;
+    const accepted = await confirm(`确定删除 Array 索引“${index}”吗？`);
+    if (!accepted || confirmationRef.current !== confirm || !previousRequest || !isCurrent(previousRequest) || inFlight.current) return;
     await runMutation(() =>
       deleteArrayElements({ connection_id: connectionId, key: keyName, indices: [index] }),
     );
   };
 
   const handleDeleteRange = async () => {
-    if (!window.confirm(`确定删除索引 ${state.rangeStart} 到 ${state.rangeEnd} 吗？`)) {
-      return;
-    }
+    if (busy || disabled || inFlight.current) return;
+    const previousRequest = requestRef.current;
+    const accepted = await confirm(`确定删除索引 ${state.rangeStart} 到 ${state.rangeEnd} 吗？`);
+    if (!accepted || confirmationRef.current !== confirm || !previousRequest || !isCurrent(previousRequest) || inFlight.current) return;
     await runMutation(() =>
       deleteArrayRange({
         connection_id: connectionId,
@@ -382,6 +398,7 @@ export function ArrayDetails({
 
   return (
     <section className="module-details array-details" aria-labelledby="array-details-title" aria-busy={busy || disabled}>
+      {confirmationDialog}
       <div className="module-details-heading">
         <div>
           <p className="eyebrow">REDIS MODULE</p>
