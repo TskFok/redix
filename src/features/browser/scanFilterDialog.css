@@ -11,6 +11,13 @@
   margin-top: 0;
 }
 
+.browser-list-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .browser-filter-trigger {
   display: inline-flex;
   align-items: center;

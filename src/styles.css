@@ -1715,11 +1715,6 @@ input[type="checkbox"]:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.browser-load-more {
-  width: 100%;
-  margin-top: 12px;
-}
-
 .browser-empty-details {
   justify-content: flex-start;
 }

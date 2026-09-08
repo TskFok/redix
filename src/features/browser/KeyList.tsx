@@ -65,15 +65,27 @@ export function KeyList({
           <button type="button" className="button button-secondary" aria-pressed={view === "flat"} onClick={() => setView("flat")}>平铺</button>
           <button type="button" className="button button-secondary" aria-pressed={view === "tree"} onClick={() => setView("tree")}>树形</button>
         </div>
-        <button ref={filterTrigger} type="button" className="button button-secondary browser-filter-trigger"
-          aria-label="筛选" aria-haspopup="dialog" aria-expanded={filtersOpen} data-active={hasFilters}
-          onClick={() => {
-            filterTrigger.current?.focus({ preventScroll: true });
-            setFiltersOpen(true);
-          }}>
-          <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 3h12L9 8.5V13l-2-1V8.5Z" /></svg>
-          {hasFilters ? "筛选 · 已启用" : "筛选"}
-        </button>
+        <div className="browser-list-actions">
+          <button ref={filterTrigger} type="button" className="button button-secondary browser-filter-trigger"
+            aria-label="筛选" aria-haspopup="dialog" aria-expanded={filtersOpen} data-active={hasFilters}
+            onClick={() => {
+              filterTrigger.current?.focus({ preventScroll: true });
+              setFiltersOpen(true);
+            }}>
+            <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 3h12L9 8.5V13l-2-1V8.5Z" /></svg>
+            {hasFilters ? "筛选 · 已启用" : "筛选"}
+          </button>
+          {hasMore ? (
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={onLoadMore}
+              disabled={controlsDisabled}
+            >
+              {loading ? "加载中…" : "加载更多"}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {filtersOpen ? (
@@ -108,17 +120,6 @@ export function KeyList({
           })}
         </ul>
       )}
-
-      {hasMore ? (
-        <button
-          type="button"
-          className="button button-secondary browser-load-more"
-          onClick={onLoadMore}
-          disabled={controlsDisabled}
-        >
-          {loading ? "加载中…" : "加载更多"}
-        </button>
-      ) : null}
     </section>
   );
 }
