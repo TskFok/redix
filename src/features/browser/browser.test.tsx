@@ -373,6 +373,64 @@ describe("Redis Browser", () => {
     });
   });
 
+  it.each(["树形", "平铺"])("%s视图读取详情时不插入扫描提示，且保持操作禁用", async (view) => {
+    scanKeysMock.mockResolvedValue({
+      cursor: 10, keys: [stringSummary], node_failures: [], has_more: true,
+    });
+    const pendingDetail = deferred<KeyValue>();
+    getKeyMock.mockReturnValueOnce(pendingDetail.promise);
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByRole("button", { name: "展开前缀 user:" });
+    if (view === "平铺") {
+      fireEvent.click(screen.getByRole("button", { name: "平铺" }));
+    } else {
+      fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
+    }
+
+    fireEvent.click(screen.getByRole("button", { name: "user:1" }));
+
+    const listPanel = screen.getByRole("region", { name: "键列表" });
+    expect(within(screen.getByRole("region", { name: "键详情" })).getByRole("status"))
+      .toHaveTextContent("正在读取键详情…");
+    expect(within(listPanel).queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "加载更多" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "user:1" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: "选择键 user:1" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "刷新键列表" })).toBeDisabled();
+
+    await act(async () => pendingDetail.resolve(stringDetail));
+
+    expect(await screen.findByDisplayValue("Alice")).toBeInTheDocument();
+    expect(within(listPanel).queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "加载更多" })).toBeEnabled();
+  });
+
+  it("扫描分页期间保留扫描提示和操作禁用，完成后追加键", async () => {
+    const pendingScan = deferred<{
+      cursor: number; keys: typeof stringSummary[]; node_failures: []; has_more: boolean;
+    }>();
+    scanKeysMock.mockResolvedValueOnce({
+      cursor: 10, keys: [stringSummary], node_failures: [], has_more: true,
+    }).mockReturnValueOnce(pendingScan.promise);
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+
+    const listPanel = screen.getByRole("region", { name: "键列表" });
+    expect(within(listPanel).getByRole("status")).toHaveTextContent("正在扫描键…");
+    expect(screen.getByRole("button", { name: "加载中…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "user:1" })).toBeDisabled();
+
+    await act(async () => pendingScan.resolve({
+      cursor: 0, keys: [{ ...stringSummary, key: "user:2" }], node_failures: [], has_more: false,
+    }));
+
+    expect(screen.getByRole("button", { name: "user:2" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(within(listPanel).queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("Array 和 Vector Set 键路由到专用详情视图", async () => {
     const onDetailChange = vi.fn();
     const onDeleted = vi.fn();

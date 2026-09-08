@@ -13,6 +13,7 @@ interface KeyListProps {
   vectorSetSupported?: boolean;
   hasMore: boolean;
   loading: boolean;
+  busy?: boolean;
   onPatternChange: (pattern: string) => void;
   onPatternKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
   onKeyTypeChange: (keyType: string) => void;
@@ -31,6 +32,7 @@ export function KeyList({
   vectorSetSupported = false,
   hasMore,
   loading,
+  busy = false,
   onPatternChange,
   onPatternKeyDown,
   onKeyTypeChange,
@@ -44,6 +46,8 @@ export function KeyList({
   const filterTrigger = useRef<HTMLButtonElement>(null);
   const closeFilters = useCallback(() => setFiltersOpen(false), []);
   const hasFilters = (pattern.trim() || "*") !== "*" || keyType !== "";
+  // Detail requests block interactions without adding a scan status above the keys.
+  const controlsDisabled = loading || busy;
   return (
     <section className="browser-list-panel" aria-labelledby="key-list-title">
       <div className="browser-panel-heading">
@@ -74,7 +78,7 @@ export function KeyList({
 
       {filtersOpen ? (
         <ScanFilterDialog pattern={pattern} keyType={keyType} separator={separator} showSeparator={view === "tree"}
-          arraySupported={arraySupported} vectorSetSupported={vectorSetSupported} loading={loading}
+          arraySupported={arraySupported} vectorSetSupported={vectorSetSupported} loading={controlsDisabled}
           onPatternChange={onPatternChange} onPatternKeyDown={onPatternKeyDown} onKeyTypeChange={onKeyTypeChange}
           onSeparatorChange={setSeparator} onClose={closeFilters} />
       ) : null}
@@ -89,7 +93,7 @@ export function KeyList({
         <p className="browser-empty-list">没有匹配的键。</p>
       ) : view === "tree" ? (
         <KeyTree key={JSON.stringify([pattern, keyType, separator])} separator={separator} keys={keys} selectedKey={selectedKey}
-          selectedKeys={selectedKeys} loading={loading} onSelect={onSelect} onToggleSelect={onToggleSelect} />
+          selectedKeys={selectedKeys} loading={controlsDisabled} onSelect={onSelect} onToggleSelect={onToggleSelect} />
       ) : (
         <ul className="key-list" aria-label="Redis 键列表">
           {keys.map((summary) => {
@@ -97,7 +101,7 @@ export function KeyList({
             const checked = selectedKeys.includes(summary.key);
             return (
               <li key={summary.key}>
-                <KeyRow summary={summary} selected={selected} checked={checked} loading={loading}
+                <KeyRow summary={summary} selected={selected} checked={checked} loading={controlsDisabled}
                   onSelect={onSelect} onToggleSelect={onToggleSelect} />
               </li>
             );
@@ -110,7 +114,7 @@ export function KeyList({
           type="button"
           className="button button-secondary browser-load-more"
           onClick={onLoadMore}
-          disabled={loading}
+          disabled={controlsDisabled}
         >
           {loading ? "加载中…" : "加载更多"}
         </button>
