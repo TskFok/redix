@@ -40,6 +40,8 @@ export function CommandInput({
       <label className="field" htmlFor="redis-command-input">
         <span>Redis 命令</span>
         <textarea
+          autoCapitalize="off"
+          autoCorrect="off"
           id="redis-command-input"
           ref={inputRef}
           value={value}

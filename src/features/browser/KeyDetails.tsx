@@ -491,6 +491,8 @@ export function KeyDetails({
         <label className="field">
           <span>重命名</span>
           <input
+            autoCapitalize="off"
+            autoCorrect="off"
             aria-label="新键名"
             value={renameDraft}
             onChange={(event) => {
@@ -547,6 +549,8 @@ export function KeyDetails({
             <label className="field">
               <span>TTL（毫秒）</span>
               <input
+                autoCapitalize="off"
+                autoCorrect="off"
                 type="number"
                 min="0"
                 step="1"

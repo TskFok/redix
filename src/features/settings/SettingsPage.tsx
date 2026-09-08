@@ -112,6 +112,8 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
           <label className="field">
             <span>每次扫描数量</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               aria-label="每次扫描数量"
               type="number"
               min={10}
@@ -130,6 +132,8 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
           <label className="field settings-checkbox">
             <span>
               <input
+                autoCapitalize="off"
+                autoCorrect="off"
                 aria-label="批量命令遇错后继续"
                 type="checkbox"
                 checked={draft.continue_on_error}

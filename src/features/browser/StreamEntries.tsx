@@ -109,8 +109,8 @@ function StreamEntriesScope({ connectionId, streamKey, disabled = false, onChang
     </div>
     <p className="stream-empty-state">按 ID 分页读取，每页最多 500 条。添加与删除直接修改消息，保留 TTL 和消费组；分页不是数据快照。</p>
     <div className="stream-group-create">
-      <label className="field"><span>起点 ID</span><input aria-label="消息范围起点" value={start} disabled={unavailable} onChange={(event) => setStart(event.target.value)} /></label>
-      <label className="field"><span>终点 ID</span><input aria-label="消息范围终点" value={end} disabled={unavailable} onChange={(event) => setEnd(event.target.value)} /></label>
+      <label className="field"><span>起点 ID</span><input autoCapitalize="off" autoCorrect="off" aria-label="消息范围起点" value={start} disabled={unavailable} onChange={(event) => setStart(event.target.value)} /></label>
+      <label className="field"><span>终点 ID</span><input autoCapitalize="off" autoCorrect="off" aria-label="消息范围终点" value={end} disabled={unavailable} onChange={(event) => setEnd(event.target.value)} /></label>
       <button type="button" className="button button-secondary" disabled={unavailable} onClick={applyRange}>应用消息范围</button>
       <label className="field"><span>排序</span><Select aria-label="消息排序" value={query.reverse ? "desc" : "asc"} disabled={unavailable} onChange={(event) => setQuery({ ...query, reverse: event.target.value === "desc", cursors: [null] })}><option value="asc">ID 升序</option><option value="desc">ID 降序</option></Select></label>
       <label className="field"><span>每页条数</span><Select aria-label="每页消息数" value={query.count} disabled={unavailable} onChange={(event) => setQuery({ ...query, count: Number(event.target.value), cursors: [null] })}>{[50, 100, 250, 500].map((count) => <option key={count} value={count}>{count}</option>)}</Select></label>
@@ -119,7 +119,7 @@ function StreamEntriesScope({ connectionId, streamKey, disabled = false, onChang
     {notice ? <p role="status">{notice}</p> : null}
     {loading ? <p>正在加载消息…</p> : page?.entries.length === 0 ? <p>当前范围没有消息。</p> : null}
     {page && page.entries.length > 0 ? <div className="stream-table-wrap"><table className="stream-groups-table"><thead><tr><th aria-label="选择" /><th>消息 ID</th><th>字段与值</th></tr></thead><tbody>
-      {page.entries.map((entry) => <tr key={entry.id}><td><input type="checkbox" aria-label={`选择消息 ${entry.id}`} disabled={unavailable} checked={selected.includes(entry.id)} onChange={() => setSelected((previous) => previous.includes(entry.id) ? previous.filter((id) => id !== entry.id) : [...previous, entry.id])} /></td><td><code>{entry.id}</code></td><td><pre>{JSON.stringify(entry.fields.map(({ field, value }) => [field, value]), null, 2)}</pre></td></tr>)}
+      {page.entries.map((entry) => <tr key={entry.id}><td><input autoCapitalize="off" autoCorrect="off" type="checkbox" aria-label={`选择消息 ${entry.id}`} disabled={unavailable} checked={selected.includes(entry.id)} onChange={() => setSelected((previous) => previous.includes(entry.id) ? previous.filter((id) => id !== entry.id) : [...previous, entry.id])} /></td><td><code>{entry.id}</code></td><td><pre>{JSON.stringify(entry.fields.map(({ field, value }) => [field, value]), null, 2)}</pre></td></tr>)}
     </tbody></table></div> : null}
     <div className="stream-group-create">
       <button type="button" className="button button-secondary" aria-label="上一页消息" disabled={unavailable || query.cursors.length === 1} onClick={() => setQuery({ ...query, cursors: query.cursors.slice(0, -1) })}>上一页</button>
@@ -128,8 +128,8 @@ function StreamEntriesScope({ connectionId, streamKey, disabled = false, onChang
       <button type="button" className="button button-danger" disabled={unavailable || selected.length === 0} onClick={() => void mutate("delete")}>删除选中消息</button>
     </div>
     <div className="stream-group-create">
-      <label className="field"><span>新增消息 ID</span><input aria-label="新增消息 ID" value={entryId} disabled={unavailable} onChange={(event) => setEntryId(event.target.value)} /></label>
-      <label className="field"><span>字段 JSON：[["字段", "值"]]</span><textarea aria-label="消息字段 JSON" rows={4} value={fieldsJson} disabled={unavailable} onChange={(event) => setFieldsJson(event.target.value)} /></label>
+      <label className="field"><span>新增消息 ID</span><input autoCapitalize="off" autoCorrect="off" aria-label="新增消息 ID" value={entryId} disabled={unavailable} onChange={(event) => setEntryId(event.target.value)} /></label>
+      <label className="field"><span>字段 JSON：[["字段", "值"]]</span><textarea autoCapitalize="off" autoCorrect="off" aria-label="消息字段 JSON" rows={4} value={fieldsJson} disabled={unavailable} onChange={(event) => setFieldsJson(event.target.value)} /></label>
       <button type="button" className="button button-primary" disabled={unavailable} onClick={() => void mutate("add")}>添加消息</button>
     </div>
   </section>;

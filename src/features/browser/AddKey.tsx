@@ -333,6 +333,8 @@ export function AddKey({
         <label className="field">
           <span>键名</span>
           <input
+            autoCapitalize="off"
+            autoCorrect="off"
             value={key}
             onChange={(event) => setKey(event.target.value)}
             disabled={isBusy}
@@ -359,19 +361,19 @@ export function AddKey({
       {kind === "string" ? (
         <label className="field">
           <span>字符串值</span>
-          <textarea value={stringValue} onChange={(event) => setStringValue(event.target.value)} disabled={isBusy} />
+          <textarea autoCapitalize="off" autoCorrect="off" value={stringValue} onChange={(event) => setStringValue(event.target.value)} disabled={isBusy} />
         </label>
       ) : null}
       {kind === "json" ? (
         <label className="field">
           <span>JSON 文档</span>
-          <textarea value={jsonText} onChange={(event) => setJsonText(event.target.value)} disabled={isBusy} spellCheck={false} />
+          <textarea autoCapitalize="off" autoCorrect="off" value={jsonText} onChange={(event) => setJsonText(event.target.value)} disabled={isBusy} spellCheck={false} />
         </label>
       ) : null}
       {kind === "stream" ? (
         <label className="field">
           <span>Stream 条目 JSON</span>
-          <textarea value={streamText} onChange={(event) => setStreamText(event.target.value)} disabled={isBusy} spellCheck={false} />
+          <textarea autoCapitalize="off" autoCorrect="off" value={streamText} onChange={(event) => setStreamText(event.target.value)} disabled={isBusy} spellCheck={false} />
         </label>
       ) : null}
       {kind === "array" ? (
@@ -386,28 +388,30 @@ export function AddKey({
           {arrayMode === "contiguous" ? (
             <label className="field">
               <span>Array 起始索引</span>
-              <input aria-label="Array 起始索引" value={arrayStartIndex} onChange={(event) => setArrayStartIndex(event.target.value)} disabled={isBusy} inputMode="numeric" />
+              <input autoCapitalize="off" autoCorrect="off" aria-label="Array 起始索引" value={arrayStartIndex} onChange={(event) => setArrayStartIndex(event.target.value)} disabled={isBusy} inputMode="numeric" />
             </label>
           ) : null}
           <label className="field">
             <span>Array 值</span>
-            <textarea aria-label="Array 值" value={collectionText} onChange={(event) => setCollectionText(event.target.value)} disabled={isBusy} placeholder={arrayMode === "sparse" ? "index=value" : "每行一个值"} spellCheck={false} />
+            <textarea autoCapitalize="off" autoCorrect="off" aria-label="Array 值" value={collectionText} onChange={(event) => setCollectionText(event.target.value)} disabled={isBusy} placeholder={arrayMode === "sparse" ? "index=value" : "每行一个值"} spellCheck={false} />
           </label>
         </>
       ) : null}
       {kind === "vectorset" ? (
         <>
           <div className="browser-add-key-grid">
-            <label className="field"><span>Vector Set 维度</span><input aria-label="Vector Set 维度" type="number" min="1" step="1" value={vectorDimension} onChange={(event) => setVectorDimension(event.target.value)} disabled={isBusy} /></label>
-            <label className="field"><span>量化类型（可选）</span><input value={vectorQuantization} onChange={(event) => setVectorQuantization(event.target.value)} disabled={isBusy} placeholder="f32" /></label>
+            <label className="field"><span>Vector Set 维度</span><input autoCapitalize="off" autoCorrect="off" aria-label="Vector Set 维度" type="number" min="1" step="1" value={vectorDimension} onChange={(event) => setVectorDimension(event.target.value)} disabled={isBusy} /></label>
+            <label className="field"><span>量化类型（可选）</span><input autoCapitalize="off" autoCorrect="off" value={vectorQuantization} onChange={(event) => setVectorQuantization(event.target.value)} disabled={isBusy} placeholder="f32" /></label>
           </div>
-          <label className="field"><span>Vector Set 元素</span><textarea aria-label="Vector Set 元素" value={vectorText} onChange={(event) => setVectorText(event.target.value)} disabled={isBusy} placeholder={'每行 name|[0.1,0.2]'} spellCheck={false} /></label>
+          <label className="field"><span>Vector Set 元素</span><textarea autoCapitalize="off" autoCorrect="off" aria-label="Vector Set 元素" value={vectorText} onChange={(event) => setVectorText(event.target.value)} disabled={isBusy} placeholder={'每行 name|[0.1,0.2]'} spellCheck={false} /></label>
         </>
       ) : null}
       {kind !== "string" && kind !== "json" && kind !== "stream" && kind !== "array" && kind !== "vectorset" ? (
         <label className="field">
           <span>{kind === "hash" || kind === "zset" ? "集合值（每行一项）" : "集合值（每行一个）"}</span>
           <textarea
+            autoCapitalize="off"
+            autoCorrect="off"
             value={collectionText}
             onChange={(event) => setCollectionText(event.target.value)}
             disabled={isBusy}
@@ -419,7 +423,7 @@ export function AddKey({
       <div className="browser-add-key-footer">
         <label className="field">
           <span>TTL（毫秒，可选）</span>
-          <input type="number" min="0" step="1" value={ttlText} onChange={(event) => setTtlText(event.target.value)} disabled={isBusy} />
+          <input autoCapitalize="off" autoCorrect="off" type="number" min="0" step="1" value={ttlText} onChange={(event) => setTtlText(event.target.value)} disabled={isBusy} />
         </label>
         <button type="submit" className="button button-primary" disabled={isBusy}>
           {submitting ? "创建中…" : "创建键"}

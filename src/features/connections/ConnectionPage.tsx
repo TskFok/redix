@@ -341,6 +341,8 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
               <label className="button button-secondary transfer-file-button">
                 导入连接
                 <input
+                  autoCapitalize="off"
+                  autoCorrect="off"
                   type="file"
                   aria-label="导入连接文件"
                   accept="application/json,.json"
@@ -393,8 +395,8 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
             </p>
           ) : (<>
             {tags && state.profiles.length > 0 && <div className="form-grid">
-              <label className="field"><span>筛选连接标签</span><input value={tagQuery} placeholder="按标签键或值搜索，例如 env=prod" onChange={(event) => setTagQuery(event.target.value)} /></label>
-              <label className="field settings-checkbox"><span><input type="checkbox" checked={onlyUntagged} onChange={(event) => setOnlyUntagged(event.target.checked)} />仅显示无标签连接</span></label>
+              <label className="field"><span>筛选连接标签</span><input autoCapitalize="off" autoCorrect="off" value={tagQuery} placeholder="按标签键或值搜索，例如 env=prod" onChange={(event) => setTagQuery(event.target.value)} /></label>
+              <label className="field settings-checkbox"><span><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={onlyUntagged} onChange={(event) => setOnlyUntagged(event.target.checked)} />仅显示无标签连接</span></label>
             </div>}
             {tagsError && <p role="status">连接标签加载失败。<button type="button" className="button button-quiet" onClick={() => { void listConnectionTags().then(loaded => {setTags(loaded);setTagsError(false);}).catch(() => setTagsError(true)); }}>重试加载标签</button></p>}
             {state.profiles.length > 0 && visibleProfiles.length === 0 ? <p className="empty-state">没有匹配标签的连接。</p> :

@@ -32,7 +32,7 @@ export default function QueryPackage({ onImported, disabled = false }: {onImport
   }, "查询包导出失败，请检查本地查询和存储后重试。");
   return <section aria-label="查询包导入导出" aria-busy={busy}>
     <div className="card-actions">
-      <label className="button button-secondary transfer-file-button">导入查询包<input type="file" aria-label="导入查询包文件" accept="application/json,.json" disabled={busy || disabled} onChange={importFile}/></label>
+      <label className="button button-secondary transfer-file-button">导入查询包<input autoCapitalize="off" autoCorrect="off" type="file" aria-label="导入查询包文件" accept="application/json,.json" disabled={busy || disabled} onChange={importFile}/></label>
       <button type="button" className="button button-secondary" disabled={busy || disabled} onClick={exportFile}>导出查询包</button>
     </div>
     <p className="panel-hint">查询包使用 Redix JSON 格式，导入后追加到当前查询库；不会执行命令。最多 500 条查询、文件上限 10 MiB。</p>

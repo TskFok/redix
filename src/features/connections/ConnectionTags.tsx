@@ -38,8 +38,8 @@ export function ConnectionTagsPanel({ connectionId, connectionName, tags, onSave
     {!editing ? <button type="button" className="button button-quiet" onClick={() => {setDraft(tags.map(tag => ({...tag})));setError(null);setEditing(true);}}>管理标签 {connectionName}</button> :
       <div role="group" aria-label={`编辑 ${connectionName} 标签`} aria-busy={busy}>
         {draft.map((tag,index) => <div className="form-grid" key={index}>
-          <label className="field"><span>标签键 {index+1}</span><input maxLength={40} value={tag.key} disabled={busy} onChange={event => setDraft(current => current.map((item,i) => i === index ? {...item,key:event.target.value}:item))}/></label>
-          <label className="field"><span>标签值 {index+1}</span><input maxLength={120} value={tag.value} disabled={busy} onChange={event => setDraft(current => current.map((item,i) => i === index ? {...item,value:event.target.value}:item))}/></label>
+          <label className="field"><span>标签键 {index+1}</span><input autoCapitalize="off" autoCorrect="off" maxLength={40} value={tag.key} disabled={busy} onChange={event => setDraft(current => current.map((item,i) => i === index ? {...item,key:event.target.value}:item))}/></label>
+          <label className="field"><span>标签值 {index+1}</span><input autoCapitalize="off" autoCorrect="off" maxLength={120} value={tag.value} disabled={busy} onChange={event => setDraft(current => current.map((item,i) => i === index ? {...item,value:event.target.value}:item))}/></label>
           <button type="button" className="button button-quiet" disabled={busy} onClick={() => setDraft(current => current.filter((_,i) => i !== index))}>删除标签 {index+1}</button>
         </div>)}
         {error && <p role="alert" className="feedback feedback-error">{error}</p>}

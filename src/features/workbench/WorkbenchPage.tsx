@@ -390,6 +390,8 @@ export function WorkbenchPage({
             <label className="command-continue field">
               <span>
                 <input
+                  autoCapitalize="off"
+                  autoCorrect="off"
                   type="checkbox"
                   checked={state.continueOnError}
                   onChange={(event) =>

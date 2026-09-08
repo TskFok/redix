@@ -135,22 +135,22 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
     }}>{expanded ? "收起 Stream 高级操作" : "展开 Stream 高级操作"}</button>
     {expanded && <>
       <div className="stream-group-create">
-        <label className="field"><span>Group 最后投递 ID</span><input value={groupId} disabled={locked} onChange={event => setGroupId(event.target.value)} /></label>
+        <label className="field"><span>Group 最后投递 ID</span><input autoCapitalize="off" autoCorrect="off" value={groupId} disabled={locked} onChange={event => setGroupId(event.target.value)} /></label>
         <button type="button" className="button button-secondary" disabled={locked} onClick={updateId}>更新 Group ID</button>
       </div>
       <p className="panel-hint">SETID 调整下一次读取新消息的位置，可能使消息重新投递或跳过尚未读取的消息；现有 Pending 和 Stream 内容会保留。</p>
       <div className="form-grid">
-        <label className="field"><span>Pending 起始 ID</span><input value={filter.start} disabled={locked} onChange={event => setFilter(current => ({...current,start:event.target.value}))} /></label>
-        <label className="field"><span>Pending 结束 ID</span><input value={filter.end} disabled={locked} onChange={event => setFilter(current => ({...current,end:event.target.value}))} /></label>
-        <label className="field"><span>Pending 消费者过滤</span><input value={filter.consumer} disabled={locked} placeholder="留空查看所有消费者" onChange={event => setFilter(current => ({...current,consumer:event.target.value}))} /></label>
-        <label className="field"><span>Pending 每页数量</span><input type="number" min={1} max={500} value={filter.count} disabled={locked} onChange={event => setFilter(current => ({...current,count:Number(event.target.value)}))} /></label>
+        <label className="field"><span>Pending 起始 ID</span><input autoCapitalize="off" autoCorrect="off" value={filter.start} disabled={locked} onChange={event => setFilter(current => ({...current,start:event.target.value}))} /></label>
+        <label className="field"><span>Pending 结束 ID</span><input autoCapitalize="off" autoCorrect="off" value={filter.end} disabled={locked} onChange={event => setFilter(current => ({...current,end:event.target.value}))} /></label>
+        <label className="field"><span>Pending 消费者过滤</span><input autoCapitalize="off" autoCorrect="off" value={filter.consumer} disabled={locked} placeholder="留空查看所有消费者" onChange={event => setFilter(current => ({...current,consumer:event.target.value}))} /></label>
+        <label className="field"><span>Pending 每页数量</span><input autoCapitalize="off" autoCorrect="off" type="number" min={1} max={500} value={filter.count} disabled={locked} onChange={event => setFilter(current => ({...current,count:Number(event.target.value)}))} /></label>
       </div>
       <button type="button" className="button button-secondary" disabled={locked} onClick={applyFilter}>应用 Pending 范围</button>
       <p className="panel-hint">当前范围 {applied.start} 至 {applied.end} · {applied.consumer || "全部消费者"} · 第 {history.length} 页</p>
       <div className="stream-table-wrap"><table className="stream-groups-table" aria-label="Pending 范围结果">
         <thead><tr><th>选择</th><th>ID</th><th>消费者</th><th>空闲（毫秒）</th><th>投递次数</th></tr></thead>
         <tbody>{page.entries.map(entry => <tr key={entry.id}>
-          <td><input type="checkbox" aria-label={`高级选择 Pending ${entry.id}`} disabled={locked} checked={selected.includes(entry.id)} onChange={() => setSelected(current => current.includes(entry.id) ? current.filter(id => id !== entry.id) : [...current,entry.id])}/></td>
+          <td><input autoCapitalize="off" autoCorrect="off" type="checkbox" aria-label={`高级选择 Pending ${entry.id}`} disabled={locked} checked={selected.includes(entry.id)} onChange={() => setSelected(current => current.includes(entry.id) ? current.filter(id => id !== entry.id) : [...current,entry.id])}/></td>
           <td><code>{entry.id}</code></td><td>{entry.consumer}</td><td>{entry.idle_ms}</td><td>{entry.deliveries}</td>
         </tr>)}</tbody>
       </table></div>
@@ -161,14 +161,14 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
       </div>
       <h4>高级 Claim</h4>
       <div className="form-grid">
-        <label className="field"><span>高级转移目标消费者</span><input value={consumer} disabled={locked} onChange={event => setConsumer(event.target.value)} /></label>
-        <label className="field"><span>最小空闲时间（毫秒）</span><input inputMode="numeric" value={minIdle} disabled={locked} onChange={event => setMinIdle(event.target.value)} /></label>
+        <label className="field"><span>高级转移目标消费者</span><input autoCapitalize="off" autoCorrect="off" value={consumer} disabled={locked} onChange={event => setConsumer(event.target.value)} /></label>
+        <label className="field"><span>最小空闲时间（毫秒）</span><input autoCapitalize="off" autoCorrect="off" inputMode="numeric" value={minIdle} disabled={locked} onChange={event => setMinIdle(event.target.value)} /></label>
         <label className="field"><span>投递时间设置</span><Select value={timeMode} disabled={locked} onChange={event => setTimeMode(event.target.value)}><option value="default">使用当前时间</option><option value="idle">IDLE 相对空闲时间</option><option value="time">TIME Unix 时间</option></Select></label>
-        {timeMode !== "default" && <label className="field"><span>{timeMode === "idle" ? "IDLE 空闲毫秒" : "TIME Unix 毫秒"}</span><input value={deliveryTime} disabled={locked} onChange={event => setDeliveryTime(event.target.value)} /></label>}
-        <label className="field"><span>RETRYCOUNT 投递次数</span><input value={retryCount} disabled={locked} placeholder="留空保留当前次数" onChange={event => setRetryCount(event.target.value)} /></label>
+        {timeMode !== "default" && <label className="field"><span>{timeMode === "idle" ? "IDLE 空闲毫秒" : "TIME Unix 毫秒"}</span><input autoCapitalize="off" autoCorrect="off" value={deliveryTime} disabled={locked} onChange={event => setDeliveryTime(event.target.value)} /></label>}
+        <label className="field"><span>RETRYCOUNT 投递次数</span><input autoCapitalize="off" autoCorrect="off" value={retryCount} disabled={locked} placeholder="留空保留当前次数" onChange={event => setRetryCount(event.target.value)} /></label>
       </div>
-      <label className="field"><span>补充消息 ID</span><textarea value={explicitIds} disabled={locked} placeholder="可填写未在当前页的消息 ID，以空格、逗号或换行分隔" onChange={event => setExplicitIds(event.target.value)} /></label>
-      <label className="field settings-checkbox"><span><input type="checkbox" checked={force} disabled={locked} onChange={event => setForce(event.target.checked)} />FORCE 创建 Pending 记录</span></label>
+      <label className="field"><span>补充消息 ID</span><textarea autoCapitalize="off" autoCorrect="off" value={explicitIds} disabled={locked} placeholder="可填写未在当前页的消息 ID，以空格、逗号或换行分隔" onChange={event => setExplicitIds(event.target.value)} /></label>
+      <label className="field settings-checkbox"><span><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={force} disabled={locked} onChange={event => setForce(event.target.checked)} />FORCE 创建 Pending 记录</span></label>
       <p className="panel-hint">Claim 会改变消息所属消费者与空闲时间。{force ? "启用 FORCE 后，消息即使不在 Pending 中，只要仍存在于 Stream，也会为其创建 Pending 记录。" : "仅转移满足最小空闲时间的现有 Pending 消息。"}</p>
       <button type="button" className="button button-primary" disabled={locked || (!selected.length && !explicitIds.trim())} onClick={claim}>执行高级 Claim</button>
       {error && <p role="alert" className="feedback feedback-error">{error}</p>}

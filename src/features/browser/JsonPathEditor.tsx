@@ -219,6 +219,8 @@ export function JsonPathEditor({
       <label className="field">
         <span>JSON Path</span>
         <input
+          autoCapitalize="off"
+          autoCorrect="off"
           aria-label="JSON Path"
           value={path}
           onChange={(event) => {
@@ -237,6 +239,8 @@ export function JsonPathEditor({
       <label className="field">
         <span>路径 JSON 值</span>
         <textarea
+          autoCapitalize="off"
+          autoCorrect="off"
           aria-label="路径 JSON 值"
           value={jsonDraft}
           onChange={(event) => {

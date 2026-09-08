@@ -601,7 +601,7 @@ function SlowLogPanel({
         <p className="panel-hint observability-panel-hint">
           Redis 服务器维护环形慢日志；清空后只会影响当前实例的 Slow Log。
         </p>
-        <label className="field"><span>筛选慢日志</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="命令、来源或客户端" /></label>
+        <label className="field"><span>筛选慢日志</span><input autoCapitalize="off" autoCorrect="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="命令、来源或客户端" /></label>
         <p className="panel-hint">仅导出当前筛选结果。命令参数可能包含敏感数据，请妥善保管导出文件。</p>
 
         {loading ? (
@@ -654,6 +654,8 @@ function SlowLogPanel({
           <label className="field">
             <span>slowlog-max-len</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               type="number"
               min="0"
               step="1"
@@ -666,6 +668,8 @@ function SlowLogPanel({
           <label className="field">
             <span>slowlog-log-slower-than</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               type="number"
               step="1"
               value={slowerThan}
@@ -745,6 +749,8 @@ function PubSubPanel({
           <label className="field">
             <span>频道或模式（每行一个）</span>
             <textarea
+              autoCapitalize="off"
+              autoCorrect="off"
               aria-label="频道或模式"
               value={topicText}
               onChange={(event) => onTopicTextChange(event.target.value)}
@@ -756,6 +762,8 @@ function PubSubPanel({
           <div className="pubsub-subscribe-actions">
             <label className="checkbox-field">
               <input
+                autoCapitalize="off"
+                autoCorrect="off"
                 type="checkbox"
                 checked={pattern}
                 onChange={(event) => onPatternChange(event.target.checked)}
@@ -792,6 +800,8 @@ function PubSubPanel({
           <label className="field">
             <span>频道</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               value={publishChannel}
               onChange={(event) => onPublishChannelChange(event.target.value)}
               disabled={busy}
@@ -800,6 +810,8 @@ function PubSubPanel({
           <label className="field pubsub-message-field">
             <span>消息</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               value={publishMessage}
               onChange={(event) => onPublishMessageChange(event.target.value)}
               onKeyDown={(event) => {
@@ -837,7 +849,7 @@ function PubSubPanel({
             </button>
           </div>
         </div>
-        <label className="field"><span>筛选消息</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="频道、模式或消息内容" /></label>
+        <label className="field"><span>筛选消息</span><input autoCapitalize="off" autoCorrect="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="频道、模式或消息内容" /></label>
         <p className="panel-hint">{feed.paused ? "已暂停显示；后台继续接收，恢复后显示最新缓存。" : "缓存最多保留最新 5000 条消息。"} 仅导出当前筛选的可见快照，消息可能含敏感数据；不会自动保存。</p>
         {filteredMessages.length === 0 ? (
           <p className="empty-state-compact">启动订阅后，收到的频道消息会显示在这里。</p>
@@ -953,7 +965,7 @@ function ProfilerPanel({
             </button>
           </div>
         </div>
-        <label className="field"><span>筛选命令</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="命令、来源或 DB 编号" /></label>
+        <label className="field"><span>筛选命令</span><input autoCapitalize="off" autoCorrect="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="命令、来源或 DB 编号" /></label>
         <p className="panel-hint">{feed.paused ? "已暂停显示；后台继续接收，MONITOR 仍在运行。恢复后显示最新缓存。" : "缓存最多保留最新 10000 条命令。"} 导出仅包含当前筛选的可见快照。</p>
         {filteredEvents.length === 0 ? (
           <p className="empty-state-compact">开始监控后，当前实例收到的命令会显示在这里。</p>

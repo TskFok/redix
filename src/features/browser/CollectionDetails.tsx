@@ -113,7 +113,7 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
     <div className="detail-title"><h3>{typeName}</h3><span>总项数：{page?.total ?? "—"} · 当前页：{page?.entries.length ?? 0} 项</span></div>
     <p className="muted">{kind === "list" ? "按索引分页。其他客户端修改 List 时索引可能移动，编辑前请刷新。" : "SCAN 每次请求 100 项；数量是提示，最多接受 2,000 项 / 4 MiB。空页也可能有下一页。并发修改时可能重复或遗漏，请刷新重新扫描。"}</p>
     {kind !== "list" && <form className="module-toolbar" onSubmit={(event) => { event.preventDefault(); if (!blocked && new TextEncoder().encode(pattern).length <= 4096) void load("0", pattern, []); }}>
-      <label>{kind === "hash" ? "字段匹配模式" : "成员匹配模式"}<input aria-label={kind === "hash" ? "字段匹配模式" : "成员匹配模式"} value={pattern} maxLength={4096} disabled={blocked} onChange={(event) => setPattern(event.target.value)} /></label>
+      <label>{kind === "hash" ? "字段匹配模式" : "成员匹配模式"}<input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段匹配模式" : "成员匹配模式"} value={pattern} maxLength={4096} disabled={blocked} onChange={(event) => setPattern(event.target.value)} /></label>
       <button type="submit" disabled={blocked}>搜索</button>
     </form>}
     {error && <p role="alert" className="error-text">{error}</p>}
@@ -136,10 +136,10 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
     </div>
     <form className="module-form" onSubmit={(event) => { event.preventDefault(); save(); }}>
       <h4>{editing ? `编辑 ${kind === "list" ? "索引" : "项"} ${editing.id}` : "添加一项"}</h4>
-      {kind !== "list" && <label>{kind === "hash" ? "字段名" : "成员"}<input aria-label={kind === "hash" ? "字段名" : "成员"} value={entryName} disabled={blocked || editing !== null} onChange={(event) => setEntryName(event.target.value)} /></label>}
-      {(kind === "hash" || kind === "list") && <label>值<textarea aria-label="值" value={value} disabled={blocked} onChange={(event) => setValue(event.target.value)} /></label>}
-      {kind === "zset" && <label>分数<input aria-label="分数" value={score} disabled={blocked} onChange={(event) => setScore(event.target.value)} /></label>}
-      {kind === "list" && !editing && <label><input type="checkbox" checked={prepend} disabled={blocked} onChange={(event) => setPrepend(event.target.checked)} />添加到头部（默认尾部）</label>}
+      {kind !== "list" && <label>{kind === "hash" ? "字段名" : "成员"}<input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段名" : "成员"} value={entryName} disabled={blocked || editing !== null} onChange={(event) => setEntryName(event.target.value)} /></label>}
+      {(kind === "hash" || kind === "list") && <label>值<textarea autoCapitalize="off" autoCorrect="off" aria-label="值" value={value} disabled={blocked} onChange={(event) => setValue(event.target.value)} /></label>}
+      {kind === "zset" && <label>分数<input autoCapitalize="off" autoCorrect="off" aria-label="分数" value={score} disabled={blocked} onChange={(event) => setScore(event.target.value)} /></label>}
+      {kind === "list" && !editing && <label><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={prepend} disabled={blocked} onChange={(event) => setPrepend(event.target.checked)} />添加到头部（默认尾部）</label>}
       <button type="submit" disabled={blocked}>{editing ? "保存此项" : "添加"}</button>
       {editing && <button type="button" disabled={blocked} onClick={() => { setEditing(null); setEntryName(""); setValue(""); }}>取消编辑</button>}
     </form>

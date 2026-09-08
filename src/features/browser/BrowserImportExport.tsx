@@ -126,6 +126,8 @@ export function BrowserImportExport({
       <label className="button button-secondary browser-file-input-label">
         导入 JSON 文件
         <input
+          autoCapitalize="off"
+          autoCorrect="off"
           ref={inputRef}
           className="browser-file-input"
           type="file"

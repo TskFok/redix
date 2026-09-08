@@ -125,7 +125,7 @@ function StringValueEditorScope({ connectionId, keyName, disabled = false, onBus
     {format === "msgpack" && <p className="feedback">支持标准 MessagePack 与 MessagePack-CSharp LZ4；解码结果只读，原始字节可在 Hex / Base64 中编辑。</p>}
     {format === "php" && <p className="feedback">PHP 对象、枚举、引用和自定义序列化内容按带标记的数据展示，不创建类实例或展开引用。gzcompress 数据可选择 Zlib 解压；原始字节可在 Hex / Base64 中查看。</p>}
     {loading && <p>正在读取和解码 String…</p>}
-    {hasDecoded && <label className="field"><span>String 值</span><textarea aria-label="String 值" rows={12} value={draft} spellCheck={false} readOnly={!!readOnly} disabled={disabled || busy} onChange={(event) => { setDraft(event.target.value); setError(null); setNotice(null); }} /></label>}
+    {hasDecoded && <label className="field"><span>String 值</span><textarea autoCapitalize="off" autoCorrect="off" aria-label="String 值" rows={12} value={draft} spellCheck={false} readOnly={!!readOnly} disabled={disabled || busy} onChange={(event) => { setDraft(event.target.value); setError(null); setNotice(null); }} /></label>}
     {dirty && <p className="feedback">草稿未保存；保存或放弃修改后可切换格式。</p>}
     {error && <p className="feedback feedback-error" role="alert">{error}</p>}
     {notice && <p className="feedback" role="status">{notice}</p>}

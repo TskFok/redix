@@ -297,6 +297,8 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
           <label className="field">
             <span>匹配模式</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               value={state.input.pattern}
               onChange={(event) =>
                 setState((current) => ({
@@ -310,6 +312,8 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
           <label className="field">
             <span>命名空间分隔符</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               value={state.input.delimiter}
               onChange={(event) =>
                 setState((current) => ({
@@ -323,6 +327,8 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
           <label className="field">
             <span>最大扫描键数</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               aria-label="最大扫描键数"
               type="number"
               min={1000}
@@ -338,7 +344,7 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
               }
             />
           </label>
-          <label className="field"><span>任务超时（秒）</span><input aria-label="任务超时（秒）" type="number" min={1} max={900} step={1} value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(Number(event.target.value))} /></label>
+          <label className="field"><span>任务超时（秒）</span><input autoCapitalize="off" autoCorrect="off" aria-label="任务超时（秒）" type="number" min={1} max={900} step={1} value={timeoutSeconds} onChange={(event) => setTimeoutSeconds(Number(event.target.value))} /></label>
         </div>
         </fieldset>
       </section>

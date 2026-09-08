@@ -27,11 +27,11 @@ export function SearchQueryBuilder({ attributes, disabled, onApply }: Props) {
             const field = fields.find((item) => item.name === event.target.value);
             if (field) setFilters((current) => current.map((item, position) => position === index ? { field: field.name, type: field.type, value: "", unit: "km" } : item));
           }}>{fields.map((field) => <option value={field.name} key={field.name}>{field.name} · {field.type}</option>)}</Select></label>
-          <label className="field"><span>{filter.type === "NUMERIC" ? "下限（可留空）" : filter.type === "GEO" ? "经度" : "值"}</span><input aria-label={`条件 ${index + 1} 值`} value={filter.value} onChange={(event) => update(index, { value: event.target.value })} /></label>
-          {filter.type === "NUMERIC" ? <label className="field"><span>上限（可留空）</span><input aria-label={`条件 ${index + 1} 上限`} value={filter.upper ?? ""} onChange={(event) => update(index, { upper: event.target.value })} /></label> : null}
+          <label className="field"><span>{filter.type === "NUMERIC" ? "下限（可留空）" : filter.type === "GEO" ? "经度" : "值"}</span><input autoCapitalize="off" autoCorrect="off" aria-label={`条件 ${index + 1} 值`} value={filter.value} onChange={(event) => update(index, { value: event.target.value })} /></label>
+          {filter.type === "NUMERIC" ? <label className="field"><span>上限（可留空）</span><input autoCapitalize="off" autoCorrect="off" aria-label={`条件 ${index + 1} 上限`} value={filter.upper ?? ""} onChange={(event) => update(index, { upper: event.target.value })} /></label> : null}
           {filter.type === "GEO" ? <>
-            <label className="field"><span>纬度</span><input aria-label={`条件 ${index + 1} 纬度`} value={filter.latitude ?? ""} onChange={(event) => update(index, { latitude: event.target.value })} /></label>
-            <label className="field"><span>半径</span><input aria-label={`条件 ${index + 1} 半径`} value={filter.radius ?? ""} onChange={(event) => update(index, { radius: event.target.value })} /></label>
+            <label className="field"><span>纬度</span><input autoCapitalize="off" autoCorrect="off" aria-label={`条件 ${index + 1} 纬度`} value={filter.latitude ?? ""} onChange={(event) => update(index, { latitude: event.target.value })} /></label>
+            <label className="field"><span>半径</span><input autoCapitalize="off" autoCorrect="off" aria-label={`条件 ${index + 1} 半径`} value={filter.radius ?? ""} onChange={(event) => update(index, { radius: event.target.value })} /></label>
             <label className="field"><span>单位</span><Select aria-label={`条件 ${index + 1} 单位`} value={filter.unit} onChange={(event) => update(index, { unit: event.target.value })}>{["m", "km", "mi", "ft"].map((unit) => <option key={unit}>{unit}</option>)}</Select></label>
           </> : null}
           <button type="button" className="button button-quiet" aria-label={`删除条件 ${index + 1}`} onClick={() => setFilters((current) => current.filter((_, position) => position !== index))}>删除条件</button>

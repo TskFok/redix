@@ -104,7 +104,7 @@ function CliSessionView({ connectionId, database, isCluster = false, onRestart }
       </div>)}
     </div>
     <form className="cli-input" onSubmit={(event) => { event.preventDefault(); void execute(); }}>
-      <label className="field"><span>CLI 命令</span><input ref={inputRef} value={command} onChange={(event) => setCommand(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void execute(); } }} disabled={status !== "ready" || busy} spellCheck={false} autoComplete="off" placeholder="输入 Redis 命令，按 Enter 执行" /></label>
+      <label className="field"><span>CLI 命令</span><input autoCapitalize="off" autoCorrect="off" ref={inputRef} value={command} onChange={(event) => setCommand(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void execute(); } }} disabled={status !== "ready" || busy} spellCheck={false} autoComplete="off" placeholder="输入 Redis 命令，按 Enter 执行" /></label>
       <button type="submit" className="button button-primary" disabled={status !== "ready" || busy || !command.trim()}>{busy ? "执行中…" : "执行命令"}</button>
     </form>
   </section>;

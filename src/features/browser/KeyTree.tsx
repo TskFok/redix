@@ -24,7 +24,7 @@ export function KeyRow({ summary, selected, checked, loading, onSelect, onToggle
   label?: string;
 }) {
   return <div className={`key-row${selected ? " key-row-selected" : ""}`}>
-    <input className="key-row-checkbox" type="checkbox" aria-label={`选择键 ${summary.key}`}
+    <input autoCapitalize="off" autoCorrect="off" className="key-row-checkbox" type="checkbox" aria-label={`选择键 ${summary.key}`}
       checked={checked} onChange={() => onToggleSelect(summary.key)} disabled={loading} />
     <button type="button" className="key-row-open" aria-label={summary.key || "（空键）"}
       aria-pressed={selected} onClick={() => onSelect(summary.key)} disabled={loading}>

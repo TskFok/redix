@@ -75,21 +75,21 @@ function AggregateEditor({ connectionId, index, enabled = true }: Props) {
     <div className="database-panel-heading"><div><p className="eyebrow">FT.AGGREGATE</p><h3 id="aggregate-title">聚合查询</h3></div><span className="panel-hint">只读 · 每页 {PAGE_SIZE} 行</span></div>
     <p className="browser-helper">选择字段、分组与聚合函数。字段名不带 @，多个字段用逗号分隔；分组和聚合所需字段会自动加载，不支持 LOAD * 或任意管道。</p>
     <div className="aggregate-fields">
-      <label className="field aggregate-query"><span>聚合查询语句</span><input value={draft.query} disabled={disabled} maxLength={4096} spellCheck={false} onChange={(event) => change({ query: event.target.value })} /></label>
-      <label className="field"><span>加载字段</span><input value={draft.load} disabled={disabled} maxLength={4096} placeholder="price, category（可选）" onChange={(event) => change({ load: event.target.value })} /></label>
-      <label className="field"><span>分组字段</span><input value={draft.groups} disabled={disabled} maxLength={2048} placeholder="category（留空为整体聚合）" onChange={(event) => change({ groups: event.target.value })} /></label>
+      <label className="field aggregate-query"><span>聚合查询语句</span><input autoCapitalize="off" autoCorrect="off" value={draft.query} disabled={disabled} maxLength={4096} spellCheck={false} onChange={(event) => change({ query: event.target.value })} /></label>
+      <label className="field"><span>加载字段</span><input autoCapitalize="off" autoCorrect="off" value={draft.load} disabled={disabled} maxLength={4096} placeholder="price, category（可选）" onChange={(event) => change({ load: event.target.value })} /></label>
+      <label className="field"><span>分组字段</span><input autoCapitalize="off" autoCorrect="off" value={draft.groups} disabled={disabled} maxLength={2048} placeholder="category（留空为整体聚合）" onChange={(event) => change({ groups: event.target.value })} /></label>
     </div>
     <div className="aggregate-reducers">
       {draft.reducers.map((reducer, position) => <div className="aggregate-reducer" key={position}>
         <label className="field"><span>聚合函数 {position + 1}</span><Select value={reducer.function} disabled={disabled} onChange={(event) => changeReducer(position, { function: event.target.value as AggregateFunction, field: event.target.value === "count" ? null : reducer.field ?? "" })}>{["count", "sum", "min", "max", "avg"].map((value) => <option key={value} value={value}>{value.toUpperCase()}</option>)}</Select></label>
-        <label className="field"><span>聚合字段 {position + 1}</span><input value={reducer.field ?? ""} disabled={disabled || reducer.function === "count"} maxLength={256} placeholder={reducer.function === "count" ? "COUNT 无需字段" : "数值字段"} onChange={(event) => changeReducer(position, { field: event.target.value })} /></label>
-        <label className="field"><span>聚合别名 {position + 1}</span><input value={reducer.alias} disabled={disabled} maxLength={256} onChange={(event) => changeReducer(position, { alias: event.target.value })} /></label>
+        <label className="field"><span>聚合字段 {position + 1}</span><input autoCapitalize="off" autoCorrect="off" value={reducer.field ?? ""} disabled={disabled || reducer.function === "count"} maxLength={256} placeholder={reducer.function === "count" ? "COUNT 无需字段" : "数值字段"} onChange={(event) => changeReducer(position, { field: event.target.value })} /></label>
+        <label className="field"><span>聚合别名 {position + 1}</span><input autoCapitalize="off" autoCorrect="off" value={reducer.alias} disabled={disabled} maxLength={256} onChange={(event) => changeReducer(position, { alias: event.target.value })} /></label>
         <button type="button" className="button button-secondary" aria-label={`删除聚合 ${position + 1}`} disabled={disabled} onClick={() => change({ reducers: draft.reducers.filter((_value, index) => index !== position) })}>删除</button>
       </div>)}
       <button type="button" className="button button-secondary" disabled={disabled || draft.reducers.length >= 8} onClick={() => change({ reducers: [...draft.reducers, { function: "count", field: null, alias: `count_${draft.reducers.length + 1}` }] })}>添加聚合函数</button>
     </div>
     <div className="aggregate-fields">
-      <label className="field"><span>排序字段</span><input value={draft.sort} disabled={disabled} maxLength={256} placeholder="输出分组字段或聚合别名（可选）" onChange={(event) => change({ sort: event.target.value })} /></label>
+      <label className="field"><span>排序字段</span><input autoCapitalize="off" autoCorrect="off" value={draft.sort} disabled={disabled} maxLength={256} placeholder="输出分组字段或聚合别名（可选）" onChange={(event) => change({ sort: event.target.value })} /></label>
       <label className="field"><span>排序方向</span><Select value={draft.direction} disabled={disabled || !draft.sort.trim()} onChange={(event) => change({ direction: event.target.value as "asc" | "desc" })}><option value="asc">升序</option><option value="desc">降序</option></Select></label>
     </div>
     <p className="browser-helper">最多 16 个加载字段、8 个分组、8 个聚合函数；响应最多 2 MiB、32 列、64 KiB/单元格。LIMIT 分页不是快照，数据变化或排序值相同时可能重复或遗漏；偏移上限 10,000。请求最多等待 5 秒，服务器仍可能继续执行。</p>

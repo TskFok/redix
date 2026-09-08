@@ -556,7 +556,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
               <div className="form-grid search-create-grid">
                 <label className="field">
                   <span>索引名称</span>
-                  <input aria-label="索引名称" value={createDraft.index} onChange={(event) => setCreateDraft((current) => ({ ...current, index: event.target.value }))} disabled={mutationBusy} spellCheck={false} />
+                  <input autoCapitalize="off" autoCorrect="off" aria-label="索引名称" value={createDraft.index} onChange={(event) => setCreateDraft((current) => ({ ...current, index: event.target.value }))} disabled={mutationBusy} spellCheck={false} />
                 </label>
                 <label className="field">
                   <span>键类型</span>
@@ -567,7 +567,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                 </label>
                 <label className="field field-wide">
                   <span>键前缀</span>
-                  <input aria-label="键前缀" value={createDraft.prefixes} onChange={(event) => setCreateDraft((current) => ({ ...current, prefixes: event.target.value }))} disabled={mutationBusy} placeholder="多个前缀用逗号分隔，可留空" spellCheck={false} />
+                  <input autoCapitalize="off" autoCorrect="off" aria-label="键前缀" value={createDraft.prefixes} onChange={(event) => setCreateDraft((current) => ({ ...current, prefixes: event.target.value }))} disabled={mutationBusy} placeholder="多个前缀用逗号分隔，可留空" spellCheck={false} />
                   <small>留空表示匹配该类型的全部键。</small>
                 </label>
               </div>
@@ -578,7 +578,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                     <div className="search-field-row" key={`field-${fieldIndex}`}>
                       <label className="field">
                         <span>字段 {fieldIndex + 1}</span>
-                        <input aria-label={`字段 ${fieldIndex + 1}`} value={field.name} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, name: event.target.value } : item) }))} disabled={mutationBusy} spellCheck={false} />
+                        <input autoCapitalize="off" autoCorrect="off" aria-label={`字段 ${fieldIndex + 1}`} value={field.name} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, name: event.target.value } : item) }))} disabled={mutationBusy} spellCheck={false} />
                       </label>
                       <label className="field">
                         <span>字段类型</span>
@@ -588,7 +588,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                       </label>
                       <label className="field">
                         <span>查询别名（可选）</span>
-                        <input aria-label={`字段 ${fieldIndex + 1} 查询别名`} value={field.alias ?? ""} placeholder={field.field_type === "vector" ? "建议：embedding" : "例如 name"} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, alias: event.target.value || undefined } : item) }))} disabled={mutationBusy} spellCheck={false} />
+                        <input autoCapitalize="off" autoCorrect="off" aria-label={`字段 ${fieldIndex + 1} 查询别名`} value={field.alias ?? ""} placeholder={field.field_type === "vector" ? "建议：embedding" : "例如 name"} onChange={(event) => setCreateDraft((current) => ({ ...current, fields: current.fields.map((item, index) => index === fieldIndex ? { ...item, alias: event.target.value || undefined } : item) }))} disabled={mutationBusy} spellCheck={false} />
                         <small>{field.field_type === "vector" ? "JSONPath 或含标点字段请显式填写，如 embedding；原字段路径保持不变。" : "AS 别名仅用于查询；留空保留原字段名称。"}</small>
                       </label>
                       <button type="button" className="button button-quiet" onClick={() => setCreateDraft((current) => ({ ...current, fields: current.fields.length > 1 ? current.fields.filter((_, index) => index !== fieldIndex) : current.fields }))} disabled={mutationBusy || createDraft.fields.length === 1}>
@@ -651,7 +651,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
               <div className="search-query-form">
                 <label className="field">
                   <span>查询语句</span>
-                  <input aria-label="查询语句" value={state.query} onChange={(event) => changeQuery({ query: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") void runSearch(0); }} disabled={!state.selectedIndex || state.loading || mutationBusy} spellCheck={false} />
+                  <input autoCapitalize="off" autoCorrect="off" aria-label="查询语句" value={state.query} onChange={(event) => changeQuery({ query: event.target.value })} onKeyDown={(event) => { if (event.key === "Enter") void runSearch(0); }} disabled={!state.selectedIndex || state.loading || mutationBusy} spellCheck={false} />
                   <small>示例：*、@name:Alice、@age:[18 30]</small>
                 </label>
                 <button type="button" className="button button-primary" onClick={() => void runSearch(0)} disabled={!state.selectedIndex || state.loading || mutationBusy}>
@@ -659,7 +659,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                 </button>
               </div>
               <label className="search-content-toggle">
-                <input type="checkbox" checked={state.includeContent} onChange={(event) => changeQuery({ includeContent: event.target.checked })} disabled={!state.selectedIndex || mutationBusy} />
+                <input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={state.includeContent} onChange={(event) => changeQuery({ includeContent: event.target.checked })} disabled={!state.selectedIndex || mutationBusy} />
                 返回文档内容
               </label>
               {state.includeContent ? <p className="browser-helper">最多 64 个字段/文档、256 KiB/字段、4 MiB/响应；支持 UTF-8 文本及 JSON，过大或二进制文档请使用仅键名模式。</p> : null}

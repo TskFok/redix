@@ -294,6 +294,8 @@ export function KeyEditor({
         <label className="field">
           <span>字符串值</span>
           <textarea
+            autoCapitalize="off"
+            autoCorrect="off"
             value={draft.String.value}
             onChange={(event) => updateString(event.target.value)}
             disabled={busy}
@@ -311,6 +313,8 @@ export function KeyEditor({
                 <label className="field">
                   <span>字段 {index + 1}</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label={`字段 ${index + 1}`}
                     value={entry.field}
                     onChange={(event) => updateHashField(index, "field", event.target.value)}
@@ -320,6 +324,8 @@ export function KeyEditor({
                 <label className="field">
                   <span>值 {index + 1}</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label={`值 ${index + 1}`}
                     value={entry.value}
                     onChange={(event) => updateHashField(index, "value", event.target.value)}
@@ -353,6 +359,8 @@ export function KeyEditor({
                 <label className="field">
                   <span>元素 {index + 1}</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label={`元素 ${index + 1}`}
                     value={item}
                     onChange={(event) => updateListItem(index, event.target.value)}
@@ -386,6 +394,8 @@ export function KeyEditor({
                 <label className="field">
                   <span>成员 {index + 1}</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label={`成员 ${index + 1}`}
                     value={member}
                     onChange={(event) => updateSetMember(index, event.target.value)}
@@ -424,6 +434,8 @@ export function KeyEditor({
                 <label className="field">
                   <span>成员 {index + 1}</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label={`成员 ${index + 1}`}
                     value={entry.member}
                     onChange={(event) =>
@@ -435,6 +447,8 @@ export function KeyEditor({
                 <label className="field">
                   <span>分数 {index + 1}</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     type="text"
                     inputMode="decimal"
                     aria-label={`分数 ${index + 1}`}
@@ -472,6 +486,8 @@ export function KeyEditor({
         <label className="field">
           <span>JSON 文档</span>
           <textarea
+            autoCapitalize="off"
+            autoCorrect="off"
             aria-label="JSON 文档"
             value={jsonDraft}
             onChange={(event) => {
@@ -494,6 +510,8 @@ export function KeyEditor({
                 <label className="field">
                   <span>ID</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label={`Stream 条目 ${entryIndex + 1} ID`}
                     value={entry.id}
                     onChange={(event) => updateStreamEntryId(entryIndex, event.target.value)}
@@ -505,6 +523,8 @@ export function KeyEditor({
                     <label className="field">
                       <span>字段 {fieldIndex + 1} 名称</span>
                       <input
+                        autoCapitalize="off"
+                        autoCorrect="off"
                         aria-label={`Stream 字段 ${fieldIndex + 1} 名称`}
                         value={field.field}
                         onChange={(event) => updateStreamEntry(entryIndex, fieldIndex, "field", event.target.value)}
@@ -514,6 +534,8 @@ export function KeyEditor({
                     <label className="field">
                       <span>字段 {fieldIndex + 1} 值</span>
                       <input
+                        autoCapitalize="off"
+                        autoCorrect="off"
                         aria-label={`Stream 字段 ${fieldIndex + 1} 值`}
                         value={field.value}
                         onChange={(event) => updateStreamEntry(entryIndex, fieldIndex, "value", event.target.value)}
@@ -588,6 +610,8 @@ export function KeyEditor({
         <label className="field">
           <span>TTL（毫秒）</span>
           <input
+            autoCapitalize="off"
+            autoCorrect="off"
             type="number"
             min="0"
             step="1"

@@ -342,6 +342,8 @@ export function StreamConsumerGroups({
         <label className="field">
           <span>Consumer Group 名称</span>
           <input
+            autoCapitalize="off"
+            autoCorrect="off"
             aria-label="Consumer Group 名称"
             value={groupName}
             onChange={(event) => setGroupName(event.target.value)}
@@ -353,6 +355,8 @@ export function StreamConsumerGroups({
         <label className="field">
           <span>起始 ID</span>
           <input
+            autoCapitalize="off"
+            autoCorrect="off"
             aria-label="起始 ID"
             value={lastDeliveredId}
             onChange={(event) => setLastDeliveredId(event.target.value)}
@@ -502,11 +506,11 @@ export function StreamConsumerGroups({
           </div>
           <div className="stream-group-create">
             <label className="field"><span>目标消费者</span>
-              <input aria-label="目标消费者" value={claimConsumer} maxLength={256}
+              <input autoCapitalize="off" autoCorrect="off" aria-label="目标消费者" value={claimConsumer} maxLength={256}
                 onChange={(event) => setClaimConsumer(event.target.value)} disabled={busy} />
             </label>
             <label className="field"><span>最小空闲时间（毫秒）</span>
-              <input aria-label="最小空闲时间（毫秒）" type="number" min="0" step="1" value={claimIdle}
+              <input autoCapitalize="off" autoCorrect="off" aria-label="最小空闲时间（毫秒）" type="number" min="0" step="1" value={claimIdle}
                 onChange={(event) => setClaimIdle(event.target.value)} disabled={busy} />
             </label>
             <button type="button" className="button button-secondary" onClick={() => void handleClaim()}
@@ -536,6 +540,8 @@ export function StreamConsumerGroups({
                     <tr key={entry.id}>
                       <td>
                         <input
+                          autoCapitalize="off"
+                          autoCorrect="off"
                           type="checkbox"
                           aria-label={`选择 Pending ${entry.id}`}
                           checked={selectedPendingIds.includes(entry.id)}

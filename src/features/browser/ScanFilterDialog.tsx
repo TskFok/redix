@@ -72,7 +72,7 @@ export default function ScanFilterDialog({
         </div>
         <label className="browser-filter field">
           <span>键过滤</span>
-          <input ref={input} value={pattern} onChange={(event) => onPatternChange(event.target.value)}
+          <input autoCapitalize="off" autoCorrect="off" ref={input} value={pattern} onChange={(event) => onPatternChange(event.target.value)}
             onKeyDown={onPatternKeyDown} aria-describedby="key-filter-hint" disabled={loading} spellCheck={false} />
         </label>
         <p id="key-filter-hint" className="browser-helper">
@@ -96,7 +96,7 @@ export default function ScanFilterDialog({
         {showSeparator ? (
           <label className="field browser-filter">
             <span>键树分隔符</span>
-            <input value={separator} maxLength={16} onChange={(event) => onSeparatorChange(event.target.value)} placeholder="留空显示完整键名" />
+            <input autoCapitalize="off" autoCorrect="off" value={separator} maxLength={16} onChange={(event) => onSeparatorChange(event.target.value)} placeholder="留空显示完整键名" />
           </label>
         ) : null}
       </section>

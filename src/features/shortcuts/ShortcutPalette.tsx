@@ -137,7 +137,7 @@ export default function ShortcutPalette({ actions }: { actions: ShortcutAction[]
           <h2 id={`${baseId}-title`}>快捷键与操作</h2>
           <button type="button" className="button button-quiet" aria-label="关闭操作面板" onClick={() => close()}>关闭 <kbd>Esc</kbd></button>
         </div>
-        <input ref={input} className="shortcuts-search" role="combobox" aria-label="搜索操作"
+        <input autoCapitalize="off" autoCorrect="off" ref={input} className="shortcuts-search" role="combobox" aria-label="搜索操作"
           aria-controls={listId} aria-expanded="true" aria-autocomplete="list"
           aria-activedescendant={selected ? optionId(selected.id) : undefined}
           value={query} placeholder="搜索工作区或操作…" autoComplete="off" maxLength={256}

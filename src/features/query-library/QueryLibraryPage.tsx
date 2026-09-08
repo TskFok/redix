@@ -179,6 +179,8 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
       <label className="field query-library-search">
         <span>搜索</span>
         <input
+          autoCapitalize="off"
+          autoCorrect="off"
           aria-label="搜索已保存查询"
           value={state.query}
           placeholder="按名称、命令或标签搜索"
@@ -260,6 +262,8 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
           <label className="field">
             <span>查询名称</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               value={draft.name}
               onChange={(event) =>
                 setDraft((current) => (current ? { ...current, name: event.target.value } : current))
@@ -269,6 +273,8 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
           <label className="field">
             <span>Redis 命令</span>
             <textarea
+              autoCapitalize="off"
+              autoCorrect="off"
               value={draft.command}
               rows={4}
               onChange={(event) =>
@@ -281,6 +287,8 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
           <label className="field">
             <span>标签</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               value={draft.tags.join(", ")}
               placeholder="例如：用户, 读取"
               onChange={(event) =>

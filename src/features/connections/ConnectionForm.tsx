@@ -336,6 +336,8 @@ export function ConnectionForm({
           <label className="field">
             <span>连接名称</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               autoComplete="off"
               value={values.name}
               onChange={(event) => updateValue("name", event.target.value)}
@@ -348,6 +350,8 @@ export function ConnectionForm({
           {values.topology === "standalone" && <label className="field">
             <span>主机</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               autoComplete="off"
               value={values.host}
               onChange={(event) => updateValue("host", event.target.value)}
@@ -360,6 +364,8 @@ export function ConnectionForm({
           {values.topology === "standalone" && <label className="field">
             <span>端口</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               type="number"
               inputMode="numeric"
               min={1}
@@ -374,6 +380,8 @@ export function ConnectionForm({
           <label className="field">
             <span>用户名</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               autoComplete="username"
               value={values.username}
               onChange={(event) => updateValue("username", event.target.value)}
@@ -385,6 +393,8 @@ export function ConnectionForm({
           <label className="field">
             <span>数据库</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               type="number"
               inputMode="numeric"
               min={0}
@@ -399,6 +409,8 @@ export function ConnectionForm({
           <label className="field">
             <span>密码</span>
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               type="password"
               autoComplete={initial ? "new-password" : "current-password"}
               value={values.password}
@@ -410,46 +422,46 @@ export function ConnectionForm({
         </div>
 
         <section className="connection-tls-panel" aria-label="SSH 配置">
-          <label className="checkbox-field"><input type="checkbox" checked={values.ssh_enabled} onChange={(event) => updateBoolean("ssh_enabled", event.target.checked)} disabled={busy || values.topology === "cluster"} /><span>启用 SSH 隧道</span></label>
+          <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.ssh_enabled} onChange={(event) => updateBoolean("ssh_enabled", event.target.checked)} disabled={busy || values.topology === "cluster"} /><span>启用 SSH 隧道</span></label>
           {values.topology === "cluster" && <p className="field-hint">Cluster 暂不支持 SSH 隧道；请使用可直达各节点的网络。</p>}
           {values.ssh_enabled && <>
             <p>支持 Standalone / Sentinel 与 TLS 组合。请先通过可信渠道核验主机密钥并写入 known_hosts；应用不会自动信任未知主机。切换认证方式会清除其他方式的凭据。</p>
             <div className="form-grid">
-              <label className="field"><span>SSH 主机</span><input value={values.ssh_host} onChange={(event) => updateValue("ssh_host", event.target.value)} disabled={busy} /></label>
-              <label className="field"><span>SSH 端口</span><input type="number" min={1} max={65535} value={values.ssh_port} onChange={(event) => updateValue("ssh_port", event.target.value)} disabled={busy} /></label>
-              <label className="field"><span>SSH 用户名</span><input autoComplete="username" value={values.ssh_username} onChange={(event) => updateValue("ssh_username", event.target.value)} disabled={busy} /></label>
+              <label className="field"><span>SSH 主机</span><input autoCapitalize="off" autoCorrect="off" value={values.ssh_host} onChange={(event) => updateValue("ssh_host", event.target.value)} disabled={busy} /></label>
+              <label className="field"><span>SSH 端口</span><input autoCapitalize="off" autoCorrect="off" type="number" min={1} max={65535} value={values.ssh_port} onChange={(event) => updateValue("ssh_port", event.target.value)} disabled={busy} /></label>
+              <label className="field"><span>SSH 用户名</span><input autoCapitalize="off" autoCorrect="off" autoComplete="username" value={values.ssh_username} onChange={(event) => updateValue("ssh_username", event.target.value)} disabled={busy} /></label>
               <label className="field"><span>SSH 认证方式</span><Select value={values.ssh_auth_method} onChange={(event) => updateValue("ssh_auth_method", event.target.value)} disabled={busy}><option value="agent">Agent</option><option value="password">Password</option><option value="private_key">Private Key</option></Select></label>
-              {values.ssh_auth_method === "password" && <label className="field"><span>SSH 密码</span><input type="password" autoComplete="new-password" value={values.ssh_password} onChange={(event) => updateValue("ssh_password", event.target.value)} disabled={busy} placeholder="已保存时留空保留" /></label>}
+              {values.ssh_auth_method === "password" && <label className="field"><span>SSH 密码</span><input autoCapitalize="off" autoCorrect="off" type="password" autoComplete="new-password" value={values.ssh_password} onChange={(event) => updateValue("ssh_password", event.target.value)} disabled={busy} placeholder="已保存时留空保留" /></label>}
               {values.ssh_auth_method === "private_key" && <>
-                <label className="field"><span>SSH 私钥文件路径</span><input value={values.ssh_identity_file} onChange={(event) => updateValue("ssh_identity_file", event.target.value)} placeholder="绝对路径，与私钥内容二选一" disabled={busy} /></label>
-                <label className="field"><span>SSH 私钥内容</span><textarea value={values.ssh_private_key} onChange={(event) => updateValue("ssh_private_key", event.target.value)} disabled={busy} rows={3} autoComplete="off" /></label>
-                <label className="field"><span>SSH 私钥口令</span><input type="password" autoComplete="new-password" value={values.ssh_passphrase} onChange={(event) => updateValue("ssh_passphrase", event.target.value)} disabled={busy} /></label>
+                <label className="field"><span>SSH 私钥文件路径</span><input autoCapitalize="off" autoCorrect="off" value={values.ssh_identity_file} onChange={(event) => updateValue("ssh_identity_file", event.target.value)} placeholder="绝对路径，与私钥内容二选一" disabled={busy} /></label>
+                <label className="field"><span>SSH 私钥内容</span><textarea autoCapitalize="off" autoCorrect="off" value={values.ssh_private_key} onChange={(event) => updateValue("ssh_private_key", event.target.value)} disabled={busy} rows={3} autoComplete="off" /></label>
+                <label className="field"><span>SSH 私钥口令</span><input autoCapitalize="off" autoCorrect="off" type="password" autoComplete="new-password" value={values.ssh_passphrase} onChange={(event) => updateValue("ssh_passphrase", event.target.value)} disabled={busy} /></label>
               </>}
-              <label className="field"><span>SSH 已知主机文件路径</span><input value={values.ssh_known_hosts_file} onChange={(event) => updateValue("ssh_known_hosts_file", event.target.value)} placeholder="可选，默认 ~/.ssh/known_hosts" disabled={busy} /></label>
+              <label className="field"><span>SSH 已知主机文件路径</span><input autoCapitalize="off" autoCorrect="off" value={values.ssh_known_hosts_file} onChange={(event) => updateValue("ssh_known_hosts_file", event.target.value)} placeholder="可选，默认 ~/.ssh/known_hosts" disabled={busy} /></label>
             </div>
             {initial?.ssh && <>
               <p className="field-hint">{values.clear_ssh_secrets ? "已选择清除旧材料，可填写替换材料。known_hosts 路径和私钥口令也会清除，请按需重新填写。" : "已保存材料仅显示状态，留空保留当前认证方式的材料。切换私钥内容与文件路径来源前，请先勾选清除。"}</p>
               {!values.clear_ssh_secrets && <p className="field-hint">{initial.ssh.auth_method === values.ssh_auth_method && [initial.ssh.has_password && "密码已保存", initial.ssh.has_private_key && "私钥已保存", initial.ssh.has_identity_file && "私钥路径已保存", initial.ssh.has_passphrase && "私钥口令已保存"].filter(Boolean).join(" · ")}{initial.ssh.has_known_hosts_file ? " · 已知主机路径已保存" : ""}</p>}
-              <label className="checkbox-field"><input type="checkbox" checked={values.clear_ssh_secrets} onChange={(event) => updateBoolean("clear_ssh_secrets", event.target.checked)} disabled={busy} /><span>清除已保存的 SSH 凭据和路径</span></label>
+              <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.clear_ssh_secrets} onChange={(event) => updateBoolean("clear_ssh_secrets", event.target.checked)} disabled={busy} /><span>清除已保存的 SSH 凭据和路径</span></label>
             </>}
           </>}
         </section>
         {values.topology === "cluster" && <section className="connection-tls-panel" aria-label="Cluster 配置">
           <h3>Cluster</h3><p>数据库固定为 DB 0。种子用于发现完整拓扑，每行一个节点。</p>
-          <label className="field"><span>Cluster 种子节点</span><textarea value={values.cluster_nodes} onChange={(event) => updateValue("cluster_nodes", event.target.value)} disabled={busy} rows={4} /></label>
-          <label className="checkbox-field"><input type="checkbox" checked={values.cluster_read_from_replicas} onChange={(event) => updateBoolean("cluster_read_from_replicas", event.target.checked)} disabled={busy} /><span>允许从副本读取</span></label>
+          <label className="field"><span>Cluster 种子节点</span><textarea autoCapitalize="off" autoCorrect="off" value={values.cluster_nodes} onChange={(event) => updateValue("cluster_nodes", event.target.value)} disabled={busy} rows={4} /></label>
+          <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.cluster_read_from_replicas} onChange={(event) => updateBoolean("cluster_read_from_replicas", event.target.checked)} disabled={busy} /><span>允许从副本读取</span></label>
         </section>}
         {values.topology === "sentinel" && <section className="connection-tls-panel" aria-label="Sentinel 配置">
           <h3>Sentinel</h3>
           <p>重新连接时发现当前主节点；主从切换后请重新连接，正在运行的会话不会自动迁移。</p>
           <div className="form-grid">
-            <label className="field"><span>Sentinel 主节点名称</span><input value={values.sentinel_master_name} onChange={(event) => updateValue("sentinel_master_name", event.target.value)} disabled={busy} placeholder="mymaster" /></label>
-            <label className="field"><span>Sentinel 种子节点</span><textarea value={values.sentinel_nodes} onChange={(event) => updateValue("sentinel_nodes", event.target.value)} disabled={busy} rows={3} /></label>
-            <label className="field"><span>Sentinel 用户名</span><input autoComplete="username" value={values.sentinel_username} onChange={(event) => updateValue("sentinel_username", event.target.value)} disabled={busy} placeholder="可选，与 Redis 用户名独立" /></label>
-            <label className="field"><span>Sentinel 密码</span><input type="password" autoComplete="new-password" value={values.sentinel_password} onChange={(event) => updateValue("sentinel_password", event.target.value)} disabled={busy} placeholder={initial?.sentinel?.has_password ? "留空保留已保存密码" : "可选"} /></label>
+            <label className="field"><span>Sentinel 主节点名称</span><input autoCapitalize="off" autoCorrect="off" value={values.sentinel_master_name} onChange={(event) => updateValue("sentinel_master_name", event.target.value)} disabled={busy} placeholder="mymaster" /></label>
+            <label className="field"><span>Sentinel 种子节点</span><textarea autoCapitalize="off" autoCorrect="off" value={values.sentinel_nodes} onChange={(event) => updateValue("sentinel_nodes", event.target.value)} disabled={busy} rows={3} /></label>
+            <label className="field"><span>Sentinel 用户名</span><input autoCapitalize="off" autoCorrect="off" autoComplete="username" value={values.sentinel_username} onChange={(event) => updateValue("sentinel_username", event.target.value)} disabled={busy} placeholder="可选，与 Redis 用户名独立" /></label>
+            <label className="field"><span>Sentinel 密码</span><input autoCapitalize="off" autoCorrect="off" type="password" autoComplete="new-password" value={values.sentinel_password} onChange={(event) => updateValue("sentinel_password", event.target.value)} disabled={busy} placeholder={initial?.sentinel?.has_password ? "留空保留已保存密码" : "可选"} /></label>
           </div>
-          {initial?.sentinel?.has_password && <label className="checkbox-field"><input type="checkbox" checked={values.clear_sentinel_password} onChange={(event) => updateBoolean("clear_sentinel_password", event.target.checked)} disabled={busy} /><span>清除已保存的 Sentinel 密码</span></label>}
-          <label className="checkbox-field"><input type="checkbox" checked={values.sentinel_tls} onChange={(event) => updateBoolean("sentinel_tls", event.target.checked)} disabled={busy} /><span>Sentinel 启用 TLS</span></label>
+          {initial?.sentinel?.has_password && <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.clear_sentinel_password} onChange={(event) => updateBoolean("clear_sentinel_password", event.target.checked)} disabled={busy} /><span>清除已保存的 Sentinel 密码</span></label>}
+          <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.sentinel_tls} onChange={(event) => updateBoolean("sentinel_tls", event.target.checked)} disabled={busy} /><span>Sentinel 启用 TLS</span></label>
           <p className="field-hint">上方用户名和密码用于 Redis 主节点。Sentinel TLS 与主节点 TLS 独立启用，共用下方证书和校验设置。</p>
         </section>}
         <section className="connection-tls-panel" aria-labelledby="tls-panel-title">
@@ -463,6 +475,8 @@ export function ConnectionForm({
 
           <label className="checkbox-field">
             <input
+              autoCapitalize="off"
+              autoCorrect="off"
               type="checkbox"
               aria-label="启用 TLS"
               checked={values.tls}
@@ -476,6 +490,8 @@ export function ConnectionForm({
             <div className="connection-tls-fields">
               <label className="checkbox-field">
                 <input
+                  autoCapitalize="off"
+                  autoCorrect="off"
                   type="checkbox"
                   aria-label="验证服务端证书"
                   checked={values.verify_server_cert}
@@ -496,6 +512,8 @@ export function ConnectionForm({
                 <label className="field">
                   <span>CA 名称</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     autoComplete="off"
                     aria-label="CA 名称"
                     value={values.ca_certificate_name}
@@ -510,6 +528,8 @@ export function ConnectionForm({
                 <label className="field field-wide">
                   <span>CA 证书</span>
                   <textarea
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label="CA 证书"
                     value={values.ca_certificate}
                     onChange={(event) =>
@@ -529,6 +549,8 @@ export function ConnectionForm({
               {initial?.has_ca_certificate ? (
                 <label className="checkbox-field">
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     type="checkbox"
                     aria-label="清除已有 CA 证书"
                     checked={values.clear_ca_certificate}
@@ -545,6 +567,8 @@ export function ConnectionForm({
                 <label className="field">
                   <span>客户端证书名称</span>
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     autoComplete="off"
                     aria-label="客户端证书名称"
                     value={values.client_certificate_name}
@@ -559,6 +583,8 @@ export function ConnectionForm({
                 <label className="field field-wide">
                   <span>客户端证书</span>
                   <textarea
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label="客户端证书"
                     value={values.client_certificate}
                     onChange={(event) =>
@@ -577,6 +603,8 @@ export function ConnectionForm({
                 <label className="field field-wide">
                   <span>客户端私钥</span>
                   <textarea
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     aria-label="客户端私钥"
                     value={values.client_key}
                     onChange={(event) => updateValue("client_key", event.target.value)}
@@ -594,6 +622,8 @@ export function ConnectionForm({
               {initial?.has_client_certificate ? (
                 <label className="checkbox-field">
                   <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
                     type="checkbox"
                     aria-label="清除已有客户端证书"
                     checked={values.clear_client_certificate}

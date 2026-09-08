@@ -61,10 +61,10 @@ function VectorSearchForm({ connectionId, index, attributes, enabled }: Props) {
     {!enabled ? <p className="browser-helper">等待索引详情和 RedisSearch 2.4 或更高版本连接就绪。</p> : null}
     <div className="form-grid">
       <label className="field"><span>向量字段</span><Select aria-label="向量字段" value={fieldName} disabled={!enabled || !fields.length} onChange={(event) => change(() => setFieldName(event.target.value))}>{fields.map((field) => <option key={nameOf(field)} value={nameOf(field)}>{nameOf(field)} · {field.vector!.data_type} · {field.vector!.dimension} 维 · {field.vector!.distance_metric}</option>)}</Select></label>
-      <label className="field"><span>Top K</span><input aria-label="Top K" type="number" min="1" max="200" step="1" value={count} onChange={(event) => change(() => setCount(event.target.value))} /></label>
+      <label className="field"><span>Top K</span><input autoCapitalize="off" autoCorrect="off" aria-label="Top K" type="number" min="1" max="200" step="1" value={count} onChange={(event) => change(() => setCount(event.target.value))} /></label>
     </div>
-    <label className="field"><span>查询向量（JSON 数组）</span><textarea aria-label="查询向量（JSON 数组）" rows={4} maxLength={1_048_576} value={source} placeholder="[0.12, -0.34, ...]" onChange={(event) => change(() => setSource(event.target.value))} spellCheck={false} /></label>
-    <label className="field"><span>向量过滤条件</span><input aria-label="向量过滤条件" value={filter} maxLength={4096} onChange={(event) => change(() => setFilter(event.target.value))} spellCheck={false} /><small>使用原生 RediSearch 过滤语法，例如 @tag:&#123;book&#125;；括号需配对，不包含额外查询后缀。* 表示全部文档。</small></label>
+    <label className="field"><span>查询向量（JSON 数组）</span><textarea autoCapitalize="off" autoCorrect="off" aria-label="查询向量（JSON 数组）" rows={4} maxLength={1_048_576} value={source} placeholder="[0.12, -0.34, ...]" onChange={(event) => change(() => setSource(event.target.value))} spellCheck={false} /></label>
+    <label className="field"><span>向量过滤条件</span><input autoCapitalize="off" autoCorrect="off" aria-label="向量过滤条件" value={filter} maxLength={4096} onChange={(event) => change(() => setFilter(event.target.value))} spellCheck={false} /><small>使用原生 RediSearch 过滤语法，例如 @tag:&#123;book&#125;；括号需配对，不包含额外查询后缀。* 表示全部文档。</small></label>
     {validation && source ? <p role="status" className="browser-helper">{validation}</p> : null}
     {!validCount ? <p role="status">Top K 必须是 1–200 的整数。</p> : null}
     {!validFilter ? <p role="status">过滤条件不能为空，最多 4096 字节且不能包含控制字符。</p> : null}
