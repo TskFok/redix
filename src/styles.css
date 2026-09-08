@@ -1519,6 +1519,22 @@ input[type="checkbox"]:hover:not(:disabled) {
   margin-bottom: 12px;
 }
 
+.browser-auto-refresh {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-muted);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.browser-auto-refresh > .app-select-control {
+  width: 108px;
+  flex: 0 0 auto;
+}
+
 .browser-file-actions {
   display: flex;
   flex-wrap: wrap;
