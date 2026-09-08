@@ -110,38 +110,42 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
   const typeName = { hash: "Hash", list: "List", set: "Set", zset: "Sorted Set" }[kind];
 
   return <section className="module-details collection-details" aria-label={`${typeName} 分页详情`}>
-    <div className="detail-title"><h3>{typeName}</h3><span>总项数：{page?.total ?? "—"} · 当前页：{page?.entries.length ?? 0} 项</span></div>
-    <p className="muted">{kind === "list" ? "按索引分页。其他客户端修改 List 时索引可能移动，编辑前请刷新。" : "SCAN 每次请求 100 项；数量是提示，最多接受 2,000 项 / 4 MiB。空页也可能有下一页。并发修改时可能重复或遗漏，请刷新重新扫描。"}</p>
-    {kind !== "list" && <form className="module-toolbar" onSubmit={(event) => { event.preventDefault(); if (!blocked && new TextEncoder().encode(pattern).length <= 4096) void load("0", pattern, []); }}>
-      <label>{kind === "hash" ? "字段匹配模式" : "成员匹配模式"}<input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段匹配模式" : "成员匹配模式"} value={pattern} maxLength={4096} disabled={blocked} onChange={(event) => setPattern(event.target.value)} /></label>
-      <button type="submit" disabled={blocked}>搜索</button>
+    <div className="module-details-heading"><h3>{typeName}</h3><span className="form-help">总项数：{page?.total ?? "—"} · 当前页：{page?.entries.length ?? 0} 项</span></div>
+    <p className="form-help">{kind === "list" ? "按索引分页。其他客户端修改 List 时索引可能移动，编辑前请刷新。" : "SCAN 每次请求 100 项；数量是提示，最多接受 2,000 项 / 4 MiB。空页也可能有下一页。并发修改时可能重复或遗漏，请刷新重新扫描。"}</p>
+    {kind !== "list" && <form className="module-toolbar collection-search" onSubmit={(event) => { event.preventDefault(); if (!blocked && new TextEncoder().encode(pattern).length <= 4096) void load("0", pattern, []); }}>
+      <label className="field"><span>{kind === "hash" ? "字段匹配模式" : "成员匹配模式"}</span><input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段匹配模式" : "成员匹配模式"} value={pattern} maxLength={4096} disabled={blocked} onChange={(event) => setPattern(event.target.value)} /></label>
+      <button type="submit" className="button button-primary" disabled={blocked}>搜索</button>
     </form>}
-    {error && <p role="alert" className="error-text">{error}</p>}
-    {busy && <p role="status">正在处理集合数据…</p>}
-    <div className="module-table-wrap"><table className="data-table"><thead><tr>
-      {(kind === "hash" || kind === "list") && <th>{kind === "hash" ? "字段" : "索引"}</th>}
-      <th>{kind === "set" || kind === "zset" ? "成员" : "值"}</th>{kind === "zset" && <th>分数</th>}<th>操作</th>
+    {error && <p role="alert" className="feedback feedback-error">{error}</p>}
+    {busy && <p role="status" className="loading-state">正在处理集合数据…</p>}
+    <div className="module-table-wrap"><table className="module-table"><thead><tr>
+      {(kind === "hash" || kind === "list") && <th scope="col">{kind === "hash" ? "字段" : "索引"}</th>}
+      <th scope="col">{kind === "set" || kind === "zset" ? "成员" : "值"}</th>{kind === "zset" && <th scope="col">分数</th>}<th scope="col">操作</th>
     </tr></thead><tbody>{page?.entries.map((entry, index) => <tr key={`${index}:${entry.id}`}>
-      {(kind === "hash" || kind === "list") && <td><code>{entry.id}</code></td>}
-      <td><pre>{entry.value}</pre></td>{kind === "zset" && <td>{entry.score}</td>}
-      <td>{kind !== "set" && <button disabled={blocked} aria-label={`编辑 ${entry.id}`} onClick={() => edit(entry)}>编辑</button>}
-        {kind !== "list" && <button disabled={blocked} aria-label={`删除 ${entry.id}`} onClick={() => remove(entry)}>删除</button>}</td>
+      {(kind === "hash" || kind === "list") && <td><code className="module-value">{entry.id}</code></td>}
+      <td><code className="module-value">{entry.value}</code></td>{kind === "zset" && <td><code>{entry.score}</code></td>}
+      <td><div className="module-row-actions">{kind !== "set" && <button type="button" className="button button-quiet" disabled={blocked} aria-label={`编辑 ${entry.id}`} onClick={() => edit(entry)}>编辑</button>}
+        {kind !== "list" && <button type="button" className="button button-danger" disabled={blocked} aria-label={`删除 ${entry.id}`} onClick={() => remove(entry)}>删除</button>}</div></td>
     </tr>)}</tbody></table></div>
-    {page && page.entries.length === 0 && <p>本页没有匹配项。</p>}
-    <div className="module-toolbar">
-      <button disabled={blocked || cursor === "0"} onClick={() => void load("0", appliedPattern, [])}>首页</button>
-      <button disabled={blocked || history.length === 0} onClick={() => void load(history[history.length - 1], appliedPattern, history.slice(0, -1))}>上一页</button>
-      <button disabled={blocked || !page?.has_more} onClick={() => page && void load(page.next_cursor, appliedPattern, [...history, cursor].slice(-100))}>下一页</button>
-      <button disabled={blocked} onClick={() => void load("0", appliedPattern, [])}>刷新</button>
+    {page && page.entries.length === 0 && <p className="module-empty-state">本页没有匹配项。</p>}
+    <div className="module-row-actions">
+      <button type="button" className="button button-secondary" disabled={blocked || cursor === "0"} onClick={() => void load("0", appliedPattern, [])}>首页</button>
+      <button type="button" className="button button-secondary" disabled={blocked || history.length === 0} onClick={() => void load(history[history.length - 1], appliedPattern, history.slice(0, -1))}>上一页</button>
+      <button type="button" className="button button-secondary" disabled={blocked || !page?.has_more} onClick={() => page && void load(page.next_cursor, appliedPattern, [...history, cursor].slice(-100))}>下一页</button>
+      <button type="button" className="button button-secondary" disabled={blocked} onClick={() => void load("0", appliedPattern, [])}>刷新</button>
     </div>
-    <form className="module-form" onSubmit={(event) => { event.preventDefault(); save(); }}>
-      <h4>{editing ? `编辑 ${kind === "list" ? "索引" : "项"} ${editing.id}` : "添加一项"}</h4>
-      {kind !== "list" && <label>{kind === "hash" ? "字段名" : "成员"}<input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段名" : "成员"} value={entryName} disabled={blocked || editing !== null} onChange={(event) => setEntryName(event.target.value)} /></label>}
-      {(kind === "hash" || kind === "list") && <label>值<textarea autoCapitalize="off" autoCorrect="off" aria-label="值" value={value} disabled={blocked} onChange={(event) => setValue(event.target.value)} /></label>}
-      {kind === "zset" && <label>分数<input autoCapitalize="off" autoCorrect="off" aria-label="分数" value={score} disabled={blocked} onChange={(event) => setScore(event.target.value)} /></label>}
-      {kind === "list" && !editing && <label><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={prepend} disabled={blocked} onChange={(event) => setPrepend(event.target.checked)} />添加到头部（默认尾部）</label>}
-      <button type="submit" disabled={blocked}>{editing ? "保存此项" : "添加"}</button>
-      {editing && <button type="button" disabled={blocked} onClick={() => { setEditing(null); setEntryName(""); setValue(""); }}>取消编辑</button>}
+    <form className="module-action-card" onSubmit={(event) => { event.preventDefault(); save(); }}>
+      <div className="module-card-heading"><h4>{editing ? `编辑 ${kind === "list" ? "索引" : "项"} ${editing.id}` : "添加一项"}</h4></div>
+      <div className={kind === "zset" ? "module-form-grid" : "module-tab-content"}>
+        {kind !== "list" && <label className="field"><span>{kind === "hash" ? "字段名" : "成员"}</span><input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段名" : "成员"} value={entryName} disabled={blocked || editing !== null} onChange={(event) => setEntryName(event.target.value)} /></label>}
+        {(kind === "hash" || kind === "list") && <label className="field"><span>值</span><textarea autoCapitalize="off" autoCorrect="off" aria-label="值" value={value} disabled={blocked} onChange={(event) => setValue(event.target.value)} /></label>}
+        {kind === "zset" && <label className="field"><span>分数</span><input autoCapitalize="off" autoCorrect="off" aria-label="分数" value={score} disabled={blocked} onChange={(event) => setScore(event.target.value)} /></label>}
+      </div>
+      {kind === "list" && !editing && <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={prepend} disabled={blocked} onChange={(event) => setPrepend(event.target.checked)} />添加到头部（默认尾部）</label>}
+      <div className="module-row-actions">
+        <button type="submit" className="button button-primary" disabled={blocked}>{editing ? "保存此项" : "添加"}</button>
+        {editing && <button type="button" className="button button-secondary" disabled={blocked} onClick={() => { setEditing(null); setEntryName(""); setValue(""); }}>取消编辑</button>}
+      </div>
     </form>
   </section>;
 }

@@ -2139,6 +2139,23 @@ input[type="checkbox"]:hover:not(:disabled) {
   gap: 10px;
 }
 
+.collection-search {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.collection-details {
+  min-width: 0;
+}
+
+.collection-details .module-details-heading {
+  flex-wrap: wrap;
+}
+
+.collection-details .module-card-heading h4 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .module-form-grid-wide {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
