@@ -3701,11 +3701,7 @@ fn percent_encode(value: &str) -> String {
 }
 
 fn map_connection_error(error: ::redis::RedisError) -> AppError {
-    if error.kind() == ::redis::ErrorKind::AuthenticationFailed {
-        AppError::AuthenticationFailed
-    } else {
-        AppError::ConnectionFailed
-    }
+    super::standalone_transport::map_connection_error(error)
 }
 
 fn validate_connection_id(connection_id: &str) -> Result<(), AppError> {

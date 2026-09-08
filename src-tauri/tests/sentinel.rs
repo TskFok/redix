@@ -215,17 +215,21 @@ async fn routed_topologies_and_ssh_tls_fail_closed_without_silent_standalone_dow
         Arc::new(Secrets(ConnectionSecrets::default())),
     );
     for (index, profile) in profiles.into_iter().enumerate() {
+        let error = service
+            .test_connection(&profile, &ConnectionSecrets::default())
+            .await
+            .unwrap_err();
         assert_eq!(
-            service
-                .test_connection(&profile, &ConnectionSecrets::default())
-                .await
-                .unwrap_err(),
+            error.code(),
             if index == 0 {
-                AppError::ConnectionFailed
+                "CONNECTION_FAILED"
             } else {
-                AppError::SshTunnelFailed
+                "SSH_TUNNEL_FAILED"
             }
         );
+        if index == 0 {
+            assert!(error.diagnostics().unwrap().contains("DNS"));
+        }
     }
 }
 

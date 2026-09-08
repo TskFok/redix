@@ -509,6 +509,33 @@ describe("Redis 连接管理页面", () => {
     expect(saveConnectionMock).not.toHaveBeenCalled();
   });
 
+  it.each(["测试连接", "保存", "保存并连接"])("%s 失败保留详细诊断与连接上下文，直到手动关闭", async (action) => {
+    const failure = {
+      code: "CONNECTION_FAILED",
+      message: "无法连接到 Redis 服务器",
+      diagnostics: "TCP 连接被拒绝，请确认 Redis 已启动并监听目标端口。",
+    };
+    if (action === "测试连接") testConnectionMock.mockRejectedValue(failure);
+    if (action === "保存") saveConnectionMock.mockRejectedValue(failure);
+    if (action === "保存并连接") openConnectionMock.mockRejectedValue(failure);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm();
+    fillStandaloneForm();
+    vi.useFakeTimers();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: action })));
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(failure.diagnostics);
+    expect(alert).toHaveTextContent("CONNECTION_FAILED");
+    expect(alert).toHaveTextContent("127.0.0.1:6379");
+    expect(alert).toHaveTextContent("数据库：0");
+    expect(alert).toHaveTextContent("TLS：未启用");
+    if (action === "保存并连接") expect(alert).toHaveTextContent("已保存连接，但打开失败");
+    act(() => vi.advanceTimersByTime(10000));
+    expect(alert).toBeInTheDocument();
+    fireEvent.click(within(alert).getByRole("button", { name: "关闭提示" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("重复触发相同同步校验错误会重新开始 Toast 计时", async () => {
     vi.useFakeTimers();
     render(<ConnectionForm onSaved={vi.fn()} onCancel={vi.fn()} />);

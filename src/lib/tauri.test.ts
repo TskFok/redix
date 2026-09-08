@@ -924,4 +924,18 @@ describe("Tauri IPC bridge", () => {
       message: "IPC 调用失败",
     });
   });
+
+  it("保留后端生成的连接诊断并丢弃其他错误字段", async () => {
+    invokeMock.mockRejectedValue({
+      code: "CONNECTION_FAILED",
+      message: "无法连接到 Redis 服务器",
+      diagnostics: "TCP 连接被拒绝，请确认 Redis 已启动并监听目标端口。",
+      password: "secret-value",
+    });
+    await expect(testConnection(connectionInput)).rejects.toEqual({
+      code: "CONNECTION_FAILED",
+      message: "无法连接到 Redis 服务器",
+      diagnostics: "TCP 连接被拒绝，请确认 Redis 已启动并监听目标端口。",
+    });
+  });
 });

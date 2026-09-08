@@ -39,6 +39,14 @@ it("手动关闭只移除对应通知，取消其计时器且不抢焦点", () =
   expect(onClose).toHaveBeenCalledOnce();
 });
 
+it("详细诊断可以保持显示，直到用户手动关闭", () => {
+  render(<Toast kind="error" message="连接失败" details={["TCP 连接被拒绝"]} durationMs={null} />);
+  act(() => vi.advanceTimersByTime(10000));
+  expect(screen.getByRole("alert")).toHaveTextContent("TCP 连接被拒绝");
+  fireEvent.click(screen.getByRole("button", { name: "关闭提示" }));
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
 it("同文案新操作重置计时，普通重渲染不会延长通知", () => {
   const first = {};
   const second = {};

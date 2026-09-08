@@ -124,6 +124,9 @@ function normalizeError(error: unknown): IpcError {
     return {
       code: error.code,
       message: error.message,
+      ...(typeof error.diagnostics === "string" && error.diagnostics.trim()
+        ? { diagnostics: error.diagnostics.trim() }
+        : {}),
     };
   }
 

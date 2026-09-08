@@ -1362,10 +1362,9 @@ mod tests {
         broken.port = unavailable_port;
         profiles.save(&[broken]).unwrap();
 
-        assert_eq!(
-            open_connection_inner(&state, "local").await,
-            Err(AppError::ConnectionFailed)
-        );
+        let error = open_connection_inner(&state, "local").await.unwrap_err();
+        assert_eq!(error.code(), "CONNECTION_FAILED");
+        assert!(error.diagnostics().unwrap().contains("连接被拒绝"));
         assert_eq!(
             state
                 .cli

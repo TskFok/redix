@@ -800,10 +800,9 @@ async fn failed_cluster_open_never_publishes_a_standalone_handle() {
         Arc::new(EmptySecrets),
     );
 
-    assert_eq!(
-        service.open_connection("cluster").await,
-        Err(AppError::ConnectionFailed)
-    );
+    let error = service.open_connection("cluster").await.unwrap_err();
+    assert_eq!(error.code(), "CONNECTION_FAILED");
+    assert!(error.diagnostics().unwrap().contains("连接被拒绝"));
     assert_eq!(
         service.execute_command("cluster", "PING").await,
         Err(AppError::ConnectionFailed)

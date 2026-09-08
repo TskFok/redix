@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 import Toast from "../../components/Toast";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
+import { useFeedbackState } from "../../components/useFeedbackState";
 
 import {
   closeConnection,
@@ -27,6 +28,8 @@ import {
   replaceProfile,
   savedButOpenFailedMessage,
   toUserFacingError,
+  connectionFailureFeedback,
+  type ConnectionFailureFeedback,
   type ConnectionPageState,
 } from "./connectionState";
 
@@ -85,6 +88,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
     ...initialConnectionPageState,
   }));
   const [formOpen, setFormOpen] = useState(false);
+  const [failure, setFailure, failureToken] = useFeedbackState<ConnectionFailureFeedback | null>(null);
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferFeedback, setTransferFeedback, transferFeedbackToken] = useTransientFeedback<TransferFeedback>();
   const [tags, setTags] = useState<ConnectionTags | null>(null);
@@ -166,6 +170,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
   };
 
   const handleOpen = async (profile: ConnectionProfile, openFailedMessage?: string) => {
+    setFailure(null);
     const previousActiveId = activeId;
     setState((current) => ({
       ...current,
@@ -196,10 +201,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
       }
       handleOpened(profile);
     } catch (caught) {
-      setState((current) => ({
-        ...current,
-        error: openFailedMessage ?? toUserFacingError(caught, "打开连接失败，请稍后重试。"),
-      }));
+      setFailure(connectionFailureFeedback(caught, profile, "打开连接失败，请稍后重试。", openFailedMessage));
     } finally {
       setState((current) => ({ ...current, openingId: null }));
     }
@@ -250,6 +252,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
   };
 
   const handleAdd = () => {
+    setFailure(null);
     setState((current) => ({
       ...current,
       editingProfile: null,
@@ -259,6 +262,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
   };
 
   const handleEdit = (profile: ConnectionProfile) => {
+    setFailure(null);
     setState((current) => ({
       ...current,
       editingProfile: profile,
@@ -398,6 +402,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
           </div>
 
           {state.error ? <Toast kind="error" message={state.error} resetKey={state} onClose={() => setState((current) => ({ ...current, error: null }))} /> : null}
+          {failure ? <Toast kind="error" message={failure.message} details={failure.details} durationMs={null} resetKey={failureToken} onClose={() => setFailure(null)} /> : null}
 
           {transferFeedback ? <Toast kind={transferFeedback.kind} message={transferFeedback.message} details={transferFeedback.details} resetKey={transferFeedbackToken} onClose={() => setTransferFeedback(null)} /> : null}
 

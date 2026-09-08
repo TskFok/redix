@@ -4,7 +4,10 @@ use futures_util::StreamExt;
 use redis::aio::ConnectionLike;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::{domain::ConnectionEndpoint, error::AppError};
+use crate::{
+    domain::ConnectionEndpoint,
+    error::{AppError, ConnectionFailureReason},
+};
 
 use super::{
     monitor_transport::{self, MonitorLineStream},
@@ -193,8 +196,8 @@ impl TunneledClient {
             )),
         )
         .await
-        .map_err(|_| AppError::ConnectionFailed)?
-        .map_err(|_| AppError::ConnectionFailed)?;
+        .map_err(|_| AppError::ConnectionDiagnostic(ConnectionFailureReason::Timeout))?
+        .map_err(|error| map_connection_error(error.into()))?;
         let Some(tls) = &self.tls else {
             return Ok(Box::pin(stream));
         };
@@ -207,8 +210,15 @@ impl TunneledClient {
             connector.connect(server_name, stream),
         )
         .await
-        .map_err(|_| AppError::ConnectionFailed)?
-        .map_err(|_| AppError::ConnectionFailed)?;
+        .map_err(|_| AppError::ConnectionDiagnostic(ConnectionFailureReason::TlsTimeout))?
+        .map_err(|error| {
+            let mapped = map_connection_error(error.into());
+            if mapped.diagnostics().is_some() {
+                mapped
+            } else {
+                AppError::ConnectionDiagnostic(ConnectionFailureReason::TlsHandshake)
+            }
+        })?;
         Ok(Box::pin(stream))
     }
 
@@ -225,7 +235,7 @@ impl TunneledClient {
             ),
         )
         .await
-        .map_err(|_| AppError::ConnectionFailed)?
+        .map_err(|_| AppError::ConnectionDiagnostic(ConnectionFailureReason::Timeout))?
         .map_err(map_connection_error)?;
         let driver = tokio::spawn(driver);
         Ok(ManagedMultiplexedConnection::custom(connection, driver))
@@ -399,17 +409,266 @@ impl StandaloneClient {
     }
 }
 
-pub(crate) fn map_connection_error(error: redis::RedisError) -> AppError {
-    if error.kind() == redis::ErrorKind::AuthenticationFailed {
-        AppError::AuthenticationFailed
-    } else {
-        AppError::ConnectionFailed
+fn transport_failure_reason(
+    error: &(dyn std::error::Error + 'static),
+) -> Option<ConnectionFailureReason> {
+    let mut source = Some(error);
+    while let Some(cause) = source {
+        // redis-rs wraps transport errors in Arc before exposing the source.
+        if let Some(wrapped) = cause.downcast_ref::<Arc<dyn std::error::Error + Send + Sync>>() {
+            source = Some(wrapped.as_ref());
+            continue;
+        }
+        if let Some(tls) = cause.downcast_ref::<rustls::Error>() {
+            return Some(match tls {
+                rustls::Error::InvalidCertificate(_) => ConnectionFailureReason::TlsCertificate,
+                _ => ConnectionFailureReason::TlsHandshake,
+            });
+        }
+        if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+            if matches!(
+                io.kind(),
+                std::io::ErrorKind::NetworkUnreachable
+                    | std::io::ErrorKind::HostUnreachable
+                    | std::io::ErrorKind::NetworkDown
+            ) {
+                return Some(ConnectionFailureReason::NetworkUnreachable);
+            }
+            if let Some(inner) = io.get_ref() {
+                source = Some(inner);
+                continue;
+            }
+        }
+        source = cause.source();
     }
+    None
+}
+
+pub(crate) fn map_connection_error(error: redis::RedisError) -> AppError {
+    use redis::{ErrorKind, ServerErrorKind};
+
+    if error.kind() == ErrorKind::AuthenticationFailed
+        || matches!(error.code(), Some("NOAUTH" | "WRONGPASS"))
+    {
+        return AppError::AuthenticationFailed;
+    }
+    // redis-rs flattens the first cluster seed failure into this specific wrapper.
+    // Recover only known categories; the wrapped text must never enter IPC output.
+    if error.kind() == ErrorKind::Io
+        && error
+            .to_string()
+            .starts_with("Failed to create initial connections - Io")
+    {
+        if let Some(detail) = error.detail().map(str::to_ascii_lowercase) {
+            if detail.starts_with("password authentication failed - authenticationfailed")
+                || detail.starts_with("\"wrongpass\"")
+                || detail.starts_with("\"noauth\"")
+            {
+                return AppError::AuthenticationFailed;
+            }
+            let reason = if detail.contains("connection refused") {
+                Some(ConnectionFailureReason::Refused)
+            } else if detail.contains("timed out") || detail.contains("deadline has elapsed") {
+                Some(ConnectionFailureReason::Timeout)
+            } else if detail.contains("network is unreachable")
+                || detail.contains("host is unreachable")
+                || detail.contains("no route to host")
+            {
+                Some(ConnectionFailureReason::NetworkUnreachable)
+            } else if detail.contains("received corrupt message") {
+                Some(ConnectionFailureReason::TlsHandshake)
+            } else if [
+                "connection reset",
+                "connection aborted",
+                "broken pipe",
+                "unexpected eof",
+            ]
+            .iter()
+            .any(|pattern| detail.contains(pattern))
+            {
+                Some(ConnectionFailureReason::Closed)
+            } else {
+                None
+            };
+            if let Some(reason) = reason {
+                return AppError::ConnectionDiagnostic(reason);
+            }
+        }
+    }
+    let reason = if error.is_connection_refusal() {
+        ConnectionFailureReason::Refused
+    } else if error.is_timeout() {
+        ConnectionFailureReason::Timeout
+    } else if let Some(reason) = transport_failure_reason(&error) {
+        reason
+    } else if matches!(error.kind(), ErrorKind::Io | ErrorKind::Client) {
+        // Only classify known transport messages. Never return this text: it can contain
+        // hostnames, credentials or details supplied by a remote server.
+        let description = error.to_string().to_ascii_lowercase();
+        if description.contains("certificate") {
+            ConnectionFailureReason::TlsCertificate
+        } else if description.contains("tls") || description.contains("handshake") {
+            ConnectionFailureReason::TlsHandshake
+        } else if [
+            "failed to lookup address",
+            "name or service not known",
+            "nodename nor servname",
+            "no such host",
+            "temporary failure in name resolution",
+        ]
+        .iter()
+        .any(|pattern| description.contains(pattern))
+        {
+            ConnectionFailureReason::DnsResolution
+        } else if error.is_connection_dropped() && std::error::Error::source(&error).is_some() {
+            ConnectionFailureReason::Closed
+        } else {
+            return AppError::ConnectionFailed;
+        }
+    } else {
+        match error.kind() {
+            ErrorKind::Parse | ErrorKind::UnexpectedReturnType | ErrorKind::RESP3NotSupported => {
+                ConnectionFailureReason::Protocol
+            }
+            ErrorKind::Server(ServerErrorKind::NoPerm) => ConnectionFailureReason::PermissionDenied,
+            ErrorKind::Server(
+                ServerErrorKind::BusyLoading
+                | ServerErrorKind::ClusterDown
+                | ServerErrorKind::MasterDown,
+            ) => ConnectionFailureReason::ServerUnavailable,
+            _ => return AppError::ConnectionFailed,
+        }
+    };
+    AppError::ConnectionDiagnostic(reason)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_errors_include_safe_specific_diagnostics() {
+        let cases = [
+            (
+                redis::RedisError::from(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "private redis://operator:redis-secret@host",
+                )),
+                "连接被拒绝",
+            ),
+            (
+                redis::RedisError::from(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "private timeout detail",
+                )),
+                "超时",
+            ),
+            (
+                redis::RedisError::from(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionReset,
+                    "private reset detail",
+                )),
+                "连接已断开",
+            ),
+            (
+                redis::RedisError::from(std::io::Error::other(
+                    "failed to lookup address information: private hostname",
+                )),
+                "DNS",
+            ),
+            (
+                redis::RedisError::from((
+                    redis::ErrorKind::AuthenticationFailed,
+                    "private auth detail",
+                    "redis-secret".into(),
+                )),
+                "用户名和密码",
+            ),
+            (
+                redis::RedisError::from(rustls::Error::InvalidCertificate(
+                    rustls::CertificateError::UnknownIssuer,
+                )),
+                "证书",
+            ),
+            (
+                redis::RedisError::from((redis::ErrorKind::Parse, "private response detail")),
+                "Redis 协议",
+            ),
+            (
+                redis::RedisError::from((
+                    redis::ErrorKind::Server(redis::ServerErrorKind::NoPerm),
+                    "private ACL detail",
+                )),
+                "权限",
+            ),
+            (
+                redis::RedisError::from(std::io::Error::new(
+                    std::io::ErrorKind::NetworkUnreachable,
+                    "private network detail",
+                )),
+                "网络不可达",
+            ),
+            (
+                redis::RedisError::from(std::io::Error::new(
+                    std::io::ErrorKind::HostUnreachable,
+                    "private host detail",
+                )),
+                "网络不可达",
+            ),
+            (
+                redis::RedisError::from(rustls::Error::InvalidMessage(
+                    rustls::InvalidMessage::InvalidContentType,
+                )),
+                "TLS 握手",
+            ),
+        ];
+        for (error, expected) in cases {
+            let result = serde_json::to_value(map_connection_error(error)).unwrap();
+            let diagnostics = result["diagnostics"]
+                .as_str()
+                .expect("connection error must include diagnostic text");
+            assert!(diagnostics.contains(expected), "{result}");
+            assert!(!result.to_string().contains("private"), "{result}");
+            assert!(!result.to_string().contains("redis-secret"), "{result}");
+            assert!(!result.to_string().contains("redis://"), "{result}");
+        }
+    }
+
+    #[test]
+    fn cluster_initial_connection_wrappers_preserve_failure_categories_without_raw_details() {
+        let cases = [
+            (
+                "Connection refused (os error 61)",
+                "CONNECTION_FAILED",
+                "连接被拒绝",
+            ),
+            ("timed out", "CONNECTION_FAILED", "超时"),
+            (
+                "Password authentication failed - AuthenticationFailed: private-secret",
+                "AUTHENTICATION_FAILED",
+                "用户名和密码",
+            ),
+            (
+                "\"WRONGPASS\": invalid username-password pair: private-secret",
+                "AUTHENTICATION_FAILED",
+                "用户名和密码",
+            ),
+        ];
+        for (detail, code, expected) in cases {
+            let error = redis::RedisError::from((
+                redis::ErrorKind::Io,
+                "Failed to create initial connections",
+                detail.to_owned(),
+            ));
+            let result = serde_json::to_value(map_connection_error(error)).unwrap();
+            assert_eq!(result["code"], code, "{result}");
+            assert!(
+                result["diagnostics"].as_str().unwrap().contains(expected),
+                "{result}"
+            );
+            assert!(!result.to_string().contains("private-secret"), "{result}");
+        }
+    }
 
     #[test]
     fn ssh_forward_constructor_keeps_the_exact_arc_lifetime_type_private_to_redis() {

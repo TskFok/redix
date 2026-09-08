@@ -669,7 +669,7 @@ async fn cluster_builder_maps_invalid_tls_material_without_exposing_redis_errors
 }
 
 #[tokio::test]
-async fn cluster_builder_maps_an_unavailable_seed_to_a_fixed_connection_error() {
+async fn cluster_builder_maps_an_unavailable_seed_to_safe_connection_diagnostics() {
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
         .unwrap();
@@ -692,10 +692,9 @@ async fn cluster_builder_maps_an_unavailable_seed_to_a_fixed_connection_error() 
     )
     .await
     .expect("cluster seed error exceeded the configured connection timeout");
-    assert!(matches!(
-        result,
-        Err(redix_lib::error::AppError::ConnectionFailed)
-    ));
+    let error = result.err().expect("unavailable seed should fail");
+    assert_eq!(error.code(), "CONNECTION_FAILED");
+    assert!(error.diagnostics().unwrap().contains("连接被拒绝"));
 }
 
 #[tokio::test]
@@ -863,10 +862,13 @@ async fn tunneled_tls_secure_rejects_untrusted_and_wrong_ca_certificates() {
                 ..TlsClientMaterial::default()
             },
         );
-        assert!(matches!(
-            client.connection().await,
-            Err(redix_lib::error::AppError::ConnectionFailed)
-        ));
+        let error = client
+            .connection()
+            .await
+            .err()
+            .expect("untrusted certificate should fail");
+        assert_eq!(error.code(), "CONNECTION_FAILED");
+        assert!(error.diagnostics().unwrap().contains("证书验证失败"));
     }
 }
 

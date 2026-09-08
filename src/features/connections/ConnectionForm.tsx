@@ -14,7 +14,8 @@ import {
   formValuesFromProfile,
   parseSeedNodes,
   savedButOpenFailedMessage,
-  toUserFacingError,
+  connectionFailureFeedback,
+  type ConnectionFailureFeedback,
   type ConnectionFormValues,
 } from "./connectionState";
 
@@ -24,7 +25,7 @@ interface ConnectionFormProps {
   onCancel: () => void;
   onConnect?: (profile: ConnectionProfile) => Promise<void>;
   onOpened?: (profile: ConnectionProfile) => void;
-  onOpenFailed?: (profile: ConnectionProfile) => void;
+  onOpenFailed?: (profile: ConnectionProfile, error: unknown) => void;
   onTestingChange?: (testing: boolean) => void;
   onSavingChange?: (saving: boolean) => void;
 }
@@ -216,6 +217,7 @@ export function ConnectionForm({
     formValuesFromProfile(initial),
   );
   const [error, setError, errorToken] = useFeedbackState<string | null>(null);
+  const [failure, setFailure, failureToken] = useFeedbackState<ConnectionFailureFeedback | null>(null);
   const [testStatus, setTestStatus, testStatusToken] = useTransientFeedback();
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -226,12 +228,14 @@ export function ConnectionForm({
       ...(field === "ssh_auth_method" ? { ssh_password: "", ssh_private_key: "", ssh_identity_file: "", ssh_passphrase: "" } : {}),
     }));
     setError(null);
+    setFailure(null);
     setTestStatus(null);
   };
 
   const updateBoolean = (field: keyof ConnectionFormValues, value: boolean) => {
     setValues((current) => ({ ...current, [field]: value }));
     setError(null);
+    setFailure(null);
     setTestStatus(null);
   };
 
@@ -249,12 +253,13 @@ export function ConnectionForm({
     setTesting(true);
     onTestingChange?.(true);
     setError(null);
+    setFailure(null);
     setTestStatus(null);
     try {
       const info = await testConnection(validation.input);
       setTestStatus(`连接成功，Redis ${info.server_version}${info.resolved_endpoint ? `，主节点 ${info.resolved_endpoint.host}:${info.resolved_endpoint.port}` : ""}`);
     } catch (caught) {
-      setError(toUserFacingError(caught, "测试连接失败，请检查配置。"));
+      setFailure(connectionFailureFeedback(caught, validation.input.profile, "测试连接失败，请检查配置。"));
     } finally {
       setTesting(false);
       onTestingChange?.(false);
@@ -275,12 +280,13 @@ export function ConnectionForm({
     setSaving(true);
     onSavingChange?.(true);
     setError(null);
+    setFailure(null);
     setTestStatus(null);
     let saved: ConnectionProfile;
     try {
       saved = await saveConnection(validation.input);
     } catch (caught) {
-      setError(toUserFacingError(caught, "保存连接失败，请稍后重试。"));
+      setFailure(connectionFailureFeedback(caught, validation.input.profile, "保存连接失败，请稍后重试。"));
       setSaving(false);
       onSavingChange?.(false);
       return;
@@ -295,11 +301,11 @@ export function ConnectionForm({
           await openConnection(saved.id);
           onOpened?.(saved);
         }
-      } catch {
+      } catch (caught) {
         if (onOpenFailed) {
-          onOpenFailed(saved);
+          onOpenFailed(saved, caught);
         } else {
-          setError(savedButOpenFailedMessage);
+          setFailure(connectionFailureFeedback(caught, saved, "打开连接失败，请稍后重试。", savedButOpenFailedMessage));
         }
       }
     }
@@ -646,6 +652,7 @@ export function ConnectionForm({
         </section>
 
         {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
+        {failure ? <Toast kind="error" message={failure.message} details={failure.details} durationMs={null} resetKey={failureToken} onClose={() => setFailure(null)} /> : null}
         {testStatus ? <Toast kind="success" message={testStatus} resetKey={testStatusToken} onClose={() => setTestStatus(null)} /> : null}
 
         <div className="form-actions">

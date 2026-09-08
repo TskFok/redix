@@ -1110,6 +1110,7 @@ export interface SaveCommandHistoryInput {
 export interface IpcError {
   code: string;
   message: string;
+  diagnostics?: string;
 }
 
 export interface ClaimStreamPendingEntriesInput {

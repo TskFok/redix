@@ -8,6 +8,7 @@ interface ToastProps {
   details?: string[];
   onClose?: () => void;
   resetKey?: unknown;
+  durationMs?: number | null;
 }
 
 let region: HTMLDivElement | null = null;
@@ -34,7 +35,7 @@ function releaseRegion(target: HTMLDivElement) {
   }
 }
 
-export default function Toast({ kind, message, details, onClose, resetKey }: ToastProps) {
+export default function Toast({ kind, message, details, onClose, resetKey, durationMs = 3000 }: ToastProps) {
   const notification = useMemo(() => ({}), [kind, message, resetKey]);
   const [dismissed, setDismissed] = useState<object | null>(null);
   const [target, setTarget] = useState<HTMLDivElement | null>(null);
@@ -60,10 +61,10 @@ export default function Toast({ kind, message, details, onClose, resetKey }: Toa
   }, [visible]);
 
   useEffect(() => {
-    if (!visible) return;
-    const timer = window.setTimeout(close, 3000);
+    if (!visible || durationMs === null) return;
+    const timer = window.setTimeout(close, durationMs);
     return () => window.clearTimeout(timer);
-  }, [close, visible]);
+  }, [close, visible, durationMs]);
 
   if (!visible || !target) return null;
 

@@ -158,7 +158,10 @@ const errorMessages: Record<string, string> = {
   CONNECTION_FAILED: "无法连接到 Redis 服务器，请检查网络和凭据。",
   SSH_TUNNEL_FAILED: "SSH 隧道建立失败，请检查 ssh-agent、私钥和 known_hosts；应用不会自动信任未知主机。",
   AUTHENTICATION_FAILED: "Redis 身份验证失败，请检查用户名和密码。",
+  CLUSTER_TOPOLOGY_FAILED: "Redis 集群拓扑发现失败，请检查种子节点和集群配置。",
+  CLUSTER_NODE_UNAVAILABLE: "Redis 集群节点不可用，请检查节点地址和网络。",
   PERSISTENCE_FAILED: "本地连接保存失败，请稍后重试。",
+  INVALID_INPUT: "输入参数无效，请检查连接配置。",
   UNSUPPORTED_DATA_TYPE: "当前 Redis 数据类型暂不支持。",
   COMMAND_FAILED: "Redis 操作失败，请稍后重试。",
   IPC_ERROR: "桌面端调用失败，请稍后重试。",
@@ -175,4 +178,34 @@ export function toUserFacingError(error: unknown, fallback = "操作失败，请
   }
 
   return fallback;
+}
+
+export interface ConnectionFailureFeedback {
+  message: string;
+  details: string[];
+}
+
+export function connectionFailureFeedback(
+  error: unknown,
+  profile: ConnectionProfile,
+  fallback: string,
+  summary?: string,
+): ConnectionFailureFeedback {
+  const message = toUserFacingError(error, fallback);
+  const details: string[] = summary ? [message] : [];
+  if (typeof error === "object" && error !== null && "code" in error &&
+      typeof error.code === "string" && Object.hasOwn(errorMessages, error.code)) {
+    details.push(`错误码：${error.code}`);
+    // diagnostics 仅由后端按已知失败类型生成；任意 message/cause 不进入界面。
+    if ("diagnostics" in error && typeof error.diagnostics === "string" && error.diagnostics.trim()) {
+      details.push(`失败原因：${error.diagnostics.trim()}`);
+    }
+  }
+  details.push(`连接目标：${connectionAddress(profile)}`);
+  if (profile.sentinel) {
+    details.push(`Sentinel 节点：${profile.sentinel.nodes.map(formatEndpoint).join("、")}；TLS：${profile.sentinel.tls ? "已启用" : "未启用"}`);
+  }
+  details.push(`数据库：${profile.cluster ? 0 : profile.database}；TLS：${profile.tls ? (profile.verify_server_cert ? "已启用（校验证书）" : "已启用（不校验证书）") : "未启用"}`);
+  if (profile.ssh) details.push(`SSH 隧道：${formatEndpoint(profile.ssh)}`);
+  return { message: summary ?? message, details };
 }
