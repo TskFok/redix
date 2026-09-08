@@ -2601,19 +2601,26 @@ impl RedisOperations for RedisService {
 
         if let Ok(info) = info {
             let sections = parse_info_sections(&info);
-            let mut databases = sections
-                .get("Keyspace")
-                .map(|entries| {
-                    entries
-                        .iter()
-                        .filter(|(database, _)| database.starts_with("db"))
-                        .map(|(database, line)| parse_keyspace_line(database, line))
-                        .collect::<Result<Vec<_>, _>>()
-                })
-                .transpose()?
-                .unwrap_or_default();
-            databases.sort_by_key(|database| database.database);
-            return Ok(databases);
+            if let Some(entries) = sections.get("Keyspace") {
+                let mut databases = entries
+                    .iter()
+                    .filter(|(database, _)| database.starts_with("db"))
+                    .map(|(database, line)| parse_keyspace_line(database, line))
+                    .collect::<Result<Vec<_>, _>>()?
+                    .into_iter()
+                    .map(|overview| (overview.database, overview))
+                    .collect::<HashMap<_, _>>();
+                return Ok((0..=15)
+                    .map(|database| {
+                        databases.remove(&database).unwrap_or(DatabaseOverview {
+                            database,
+                            key_count: Some(0),
+                            expires: Some(0),
+                            avg_ttl_ms: Some(0),
+                        })
+                    })
+                    .collect());
+            }
         }
 
         let key_count: u64 = ::redis::cmd("DBSIZE")
@@ -4433,6 +4440,172 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
             *self.0.lock().unwrap() = None;
             Ok(())
         }
+    }
+
+    async fn spawn_keyspace_redis_fixture(keyspace: &'static str, dbsize: u64) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    let mut stream = BufReader::new(stream);
+                    loop {
+                        let mut line = String::new();
+                        if stream.read_line(&mut line).await.unwrap() == 0 {
+                            return;
+                        }
+                        let count: usize = line.trim().strip_prefix('*').unwrap().parse().unwrap();
+                        let mut args = Vec::with_capacity(count);
+                        for _ in 0..count {
+                            line.clear();
+                            stream.read_line(&mut line).await.unwrap();
+                            let length: usize =
+                                line.trim().strip_prefix('$').unwrap().parse().unwrap();
+                            let mut data = vec![0; length + 2];
+                            stream.read_exact(&mut data).await.unwrap();
+                            args.push(String::from_utf8(data[..length].to_vec()).unwrap());
+                        }
+                        let response = match args.as_slice() {
+                            [command] if command == "PING" => "+PONG\r\n".to_owned(),
+                            [command, section] if command == "INFO" && section == "server" => {
+                                let body = "# Server\r\nredis_version:7.2.5\r\n";
+                                format!("${}\r\n{}\r\n", body.len(), body)
+                            }
+                            [command, section] if command == "INFO" && section == "keyspace" => {
+                                if keyspace.starts_with('-') {
+                                    keyspace.to_owned()
+                                } else {
+                                    format!("${}\r\n{}\r\n", keyspace.len(), keyspace)
+                                }
+                            }
+                            [command] if command == "DBSIZE" => format!(":{dbsize}\r\n"),
+                            _ => "+OK\r\n".to_owned(),
+                        };
+                        stream.write_all(response.as_bytes()).await.unwrap();
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    async fn load_fixture_database_overview(
+        keyspace: &'static str,
+        dbsize: u64,
+        database: u8,
+    ) -> Result<Vec<crate::domain::DatabaseOverview>, AppError> {
+        let port = spawn_keyspace_redis_fixture(keyspace, dbsize).await;
+        let mut profile = valid_profile();
+        profile.port = port;
+        profile.database = database;
+        let service = RedisService::new(
+            Arc::new(MutableProfiles(Mutex::new(vec![profile]))),
+            Arc::new(EmptySecrets),
+        );
+        service.open_connection("local").await.unwrap();
+        service.get_database_overview("local").await
+    }
+
+    #[tokio::test]
+    async fn standalone_database_overview_fills_empty_databases_from_explicit_keyspace() {
+        let databases = load_fixture_database_overview(
+            "# Keyspace\r\ndb2:keys=7,expires=3,avg_ttl=1200\r\n",
+            7,
+            0,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(databases.len(), 16);
+        assert_eq!(
+            databases[0],
+            crate::domain::DatabaseOverview {
+                database: 0,
+                key_count: Some(0),
+                expires: Some(0),
+                avg_ttl_ms: Some(0),
+            }
+        );
+        assert_eq!(
+            databases[2],
+            crate::domain::DatabaseOverview {
+                database: 2,
+                key_count: Some(7),
+                expires: Some(3),
+                avg_ttl_ms: Some(1200),
+            }
+        );
+        assert_eq!(
+            databases[15],
+            crate::domain::DatabaseOverview {
+                database: 15,
+                key_count: Some(0),
+                expires: Some(0),
+                avg_ttl_ms: Some(0),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn standalone_database_overview_uses_current_dbsize_without_keyspace_section() {
+        let databases = load_fixture_database_overview("# Stats\r\nkeyspace_hits:9\r\n", 4, 5)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            databases,
+            vec![crate::domain::DatabaseOverview {
+                database: 5,
+                key_count: Some(4),
+                expires: None,
+                avg_ttl_ms: None,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn standalone_database_overview_fills_an_explicit_empty_keyspace() {
+        let databases = load_fixture_database_overview("# Keyspace\r\n", 99, 4)
+            .await
+            .unwrap();
+
+        assert_eq!(databases.len(), 16);
+        for (database, overview) in databases.iter().enumerate() {
+            assert_eq!(overview.database, database as u8);
+            assert_eq!(overview.key_count, Some(0));
+            assert_eq!(overview.expires, Some(0));
+            assert_eq!(overview.avg_ttl_ms, Some(0));
+        }
+    }
+
+    #[tokio::test]
+    async fn standalone_database_overview_uses_only_current_dbsize_when_info_is_denied() {
+        let databases = load_fixture_database_overview("-NOPERM keyspace access denied\r\n", 11, 6)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            databases,
+            vec![crate::domain::DatabaseOverview {
+                database: 6,
+                key_count: Some(11),
+                expires: None,
+                avg_ttl_ms: None,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn standalone_database_overview_rejects_malformed_keyspace_counts() {
+        let result = load_fixture_database_overview(
+            "# Keyspace\r\ndb2:keys=invalid,expires=3,avg_ttl=1200\r\n",
+            7,
+            0,
+        )
+        .await;
+
+        assert_eq!(result, Err(AppError::PersistenceFailed));
     }
 
     #[test]

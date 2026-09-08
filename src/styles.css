@@ -1735,7 +1735,11 @@ input[type="checkbox"]:hover:not(:disabled) {
   white-space: nowrap;
 }
 
-.browser-database-select > .app-select-control,
+.browser-database-select > .app-select-control {
+  width: 224px;
+  flex: 0 0 auto;
+}
+
 .browser-auto-refresh > .app-select-control {
   width: 108px;
   flex: 0 0 auto;

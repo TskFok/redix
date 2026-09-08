@@ -1,12 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { selectDatabase } from "../../lib/tauri";
-import type { ConnectionProfile } from "../../lib/types";
+import { getDatabaseOverview, selectDatabase } from "../../lib/tauri";
+import type { ConnectionProfile, DatabaseOverview } from "../../lib/types";
 import BrowserDatabaseSelect from "./BrowserDatabaseSelect";
 
-vi.mock("../../lib/tauri", () => ({ selectDatabase: vi.fn() }));
+vi.mock("../../lib/tauri", () => ({ getDatabaseOverview: vi.fn(), selectDatabase: vi.fn() }));
 
+const getDatabaseOverviewMock = vi.mocked(getDatabaseOverview);
 const selectDatabaseMock = vi.mocked(selectDatabase);
 const profile: ConnectionProfile = {
   id: "local", name: "本地 Redis", host: "127.0.0.1", port: 6379,
@@ -34,11 +35,101 @@ function defaultProps() {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  getDatabaseOverviewMock.mockImplementation(() => new Promise(() => {}));
   selectDatabaseMock.mockImplementation(async ({ database }) => ({ ...profile, database }));
 });
 afterEach(cleanup);
 
 describe("BrowserDatabaseSelect", () => {
+  it("显示各数据库的 key 总数、空库零值，并保留未知数量", async () => {
+    getDatabaseOverviewMock.mockResolvedValue([
+      { database: 0, key_count: 1234, expires: 20, avg_ttl_ms: 1000 },
+      { database: 1, key_count: 0, expires: 0, avg_ttl_ms: 0 },
+      { database: 2, key_count: null, expires: null, avg_ttl_ms: null },
+    ]);
+    render(<BrowserDatabaseSelect {...defaultProps()} />);
+
+    expect(await screen.findByRole("option", { name: "DB 0（1,234 keys）" })).toHaveValue("0");
+    expect(screen.getByRole("option", { name: "DB 1（0 keys）" })).toHaveValue("1");
+    expect(screen.getByRole("option", { name: "DB 2（—）" })).toHaveValue("2");
+    expect(screen.getByRole("option", { name: "DB 15（—）" })).toHaveValue("15");
+    expect(getDatabaseOverviewMock).toHaveBeenCalledWith("local");
+    expect(selectDatabaseMock).not.toHaveBeenCalled();
+  });
+
+  it("统计失败不会把未知库当作空库，也不阻止切库", async () => {
+    getDatabaseOverviewMock.mockRejectedValue(new Error("private server details"));
+    const props = defaultProps();
+    render(<BrowserDatabaseSelect {...props} />);
+    await act(async () => {});
+
+    const select = screen.getByRole("combobox", { name: "切换数据库" });
+    expect(select).toBeEnabled();
+    expect(screen.getByRole("option", { name: "DB 0（—）" })).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.change(select, { target: { value: "15" } });
+    await waitFor(() => expect(props.onProfileChanged).toHaveBeenCalledWith({ ...profile, database: 15 }));
+  });
+
+  it("刷新后更新数量，失败后清除旧统计并支持恢复", async () => {
+    const props = defaultProps();
+    getDatabaseOverviewMock.mockResolvedValueOnce([
+      { database: 0, key_count: 4, expires: 0, avg_ttl_ms: 0 },
+    ]).mockRejectedValueOnce(new Error("unavailable")).mockResolvedValueOnce([
+      { database: 0, key_count: 9, expires: 0, avg_ttl_ms: 0 },
+    ]);
+    const view = render(<BrowserDatabaseSelect {...props} refreshToken={0} />);
+    await screen.findByRole("option", { name: "DB 0（4 keys）" });
+    view.rerender(<BrowserDatabaseSelect {...props} refreshToken={1} />);
+    await screen.findByRole("option", { name: "DB 0（—）" });
+    view.rerender(<BrowserDatabaseSelect {...props} refreshToken={2} />);
+    await screen.findByRole("option", { name: "DB 0（9 keys）" });
+  });
+
+  it.each(["success", "failure"])("更换连接后忽略旧统计请求的 %s 结果", async (result) => {
+    let resolve!: (value: DatabaseOverview[]) => void;
+    let reject!: (reason: unknown) => void;
+    getDatabaseOverviewMock.mockReturnValueOnce(new Promise((success, failure) => {
+      resolve = success;
+      reject = failure;
+    })).mockResolvedValueOnce([
+      { database: 0, key_count: 8, expires: 0, avg_ttl_ms: 0 },
+    ]);
+    const props = defaultProps();
+    const view = render(<BrowserDatabaseSelect {...props} />);
+    view.rerender(<BrowserDatabaseSelect {...props} connectionId="next" />);
+    await screen.findByRole("option", { name: "DB 0（8 keys）" });
+    await act(async () => {
+      if (result === "success") resolve([{ database: 0, key_count: 99, expires: 0, avg_ttl_ms: 0 }]);
+      else reject(new Error("old connection failed"));
+    });
+    expect(screen.getByRole("option", { name: "DB 0（8 keys）" })).toBeInTheDocument();
+  });
+
+  it("切换当前库时重新加载统计，保留 fallback 以外库的未知状态", async () => {
+    getDatabaseOverviewMock.mockResolvedValueOnce([
+      { database: 0, key_count: 2, expires: null, avg_ttl_ms: null },
+    ]).mockResolvedValueOnce([
+      { database: 1, key_count: 6, expires: null, avg_ttl_ms: null },
+    ]);
+    const props = defaultProps();
+    const view = render(<BrowserDatabaseSelect {...props} />);
+    await screen.findByRole("option", { name: "DB 0（2 keys）" });
+    view.rerender(<BrowserDatabaseSelect {...props} activeDatabase={1} />);
+    await screen.findByRole("option", { name: "DB 1（6 keys）" });
+    expect(screen.getByRole("option", { name: "DB 0（—）" })).toBeInTheDocument();
+  });
+
+  it("Cluster 显示 DB 0 的汇总 key 数量并保持禁止切库", async () => {
+    getDatabaseOverviewMock.mockResolvedValue([
+      { database: 0, key_count: 2500, expires: null, avg_ttl_ms: null },
+    ]);
+    render(<BrowserDatabaseSelect {...defaultProps()} isCluster />);
+    await screen.findByRole("option", { name: "DB 0（2,500 keys）" });
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toBeDisabled();
+  });
+
   it("允许直接切换到空数据库，成功后通过 profile 回调同步当前 Db", async () => {
     const props = defaultProps();
     const pending = pendingSelection();
@@ -47,7 +138,7 @@ describe("BrowserDatabaseSelect", () => {
     const select = screen.getByRole("combobox", { name: "切换数据库" });
 
     expect(screen.getAllByRole("option")).toHaveLength(16);
-    expect(screen.getByRole("option", { name: "DB 15" })).toHaveValue("15");
+    expect(screen.getByRole("option", { name: /^DB 15/ })).toHaveValue("15");
     expect(select).toHaveValue("0");
     fireEvent.change(select, { target: { value: "15" } });
 

@@ -56,6 +56,7 @@ export function BrowserPage({
     message: string;
   }>();
   const [refreshSeconds, setRefreshSeconds] = useState(0);
+  const [databaseCountsRefreshToken, setDatabaseCountsRefreshToken] = useState(0);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
   const [localDatabaseSwitching, setDatabaseSwitching] = useState(false);
@@ -87,6 +88,12 @@ export function BrowserPage({
     Number.isInteger(scanCount) && scanCount >= 10 && scanCount <= 10000 ? scanCount : 100;
   const scanCountRef = useRef(normalizedScanCount);
   scanCountRef.current = normalizedScanCount;
+
+  const refreshDatabaseCounts = useCallback(() => {
+    if (mountedRef.current) {
+      setDatabaseCountsRefreshToken((current) => current + 1);
+    }
+  }, []);
 
   const scanPage = useCallback(
     async (
@@ -153,6 +160,12 @@ export function BrowserPage({
           nextCursor = page.cursor;
           replacePage = false;
         }
+        if (
+          replace && mountedRef.current && scanRequestRef.current === requestId
+          && connectionIdRef.current === connectionId
+        ) {
+          refreshDatabaseCounts();
+        }
       } catch (caught) {
         if (mountedRef.current && scanRequestRef.current === requestId) {
           setState((current) => ({
@@ -167,7 +180,7 @@ export function BrowserPage({
         }
       }
     },
-    [connectionId],
+    [connectionId, refreshDatabaseCounts],
   );
 
   const handleDatabaseSwitching = useCallback((switching: boolean) => {
@@ -336,6 +349,7 @@ export function BrowserPage({
     }
     setShowAddKey(false);
     setState((current) => applyCreatedKey(current, detail));
+    refreshDatabaseCounts();
   };
 
   useEffect(() => {
@@ -348,12 +362,13 @@ export function BrowserPage({
         kind: task.status === "completed" ? "success" : "error",
         message: "后台删除已结束，选择已清除；列表可能已变化，请刷新查看最新结果。",
       });
+      refreshDatabaseCounts();
     };
     window.addEventListener(BULK_TASK_FINISHED, completed);
     return () => {
       window.removeEventListener(BULK_TASK_FINISHED, completed);
     };
-  }, [connectionId, setBulkFeedback]);
+  }, [connectionId, refreshDatabaseCounts, setBulkFeedback]);
 
   const handleBulkDeleted = () => {
     void scanPage(0, state.pattern.trim() || "*", true);
@@ -417,6 +432,7 @@ export function BrowserPage({
           : summary,
       ),
     }, current.keyType));
+    refreshDatabaseCounts();
   };
 
   const handleRenamed = (previousKey: string, detail: KeyValue) => {
@@ -440,6 +456,7 @@ export function BrowserPage({
       ),
       error: null,
     }, current.keyType));
+    refreshDatabaseCounts();
   };
 
   const handleDeleted = (key: string) => {
@@ -458,6 +475,7 @@ export function BrowserPage({
       metadata: current.detail?.key === key ? null : current.metadata,
       error: null,
     }));
+    refreshDatabaseCounts();
   };
 
   const listBusy = state.loading || detailLoading || detailActionLoading || databaseSwitching
@@ -488,6 +506,7 @@ export function BrowserPage({
           connectionId={connectionId}
           activeDatabase={activeDatabase}
           isCluster={isCluster}
+          refreshToken={databaseCountsRefreshToken}
           disabled={listBusy || showAddKey || (state.pattern.trim() || "*") !== scannedPatternRef.current}
           onProfileChanged={onProfileChanged}
           onSwitchingChange={handleDatabaseSwitching}

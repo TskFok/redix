@@ -1,8 +1,8 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import Select from "../../components/Select";
 import Toast from "../../components/Toast";
-import { selectDatabase } from "../../lib/tauri";
+import { getDatabaseOverview, selectDatabase } from "../../lib/tauri";
 import type { ConnectionProfile } from "../../lib/types";
 
 interface BrowserDatabaseSelectProps {
@@ -10,6 +10,7 @@ interface BrowserDatabaseSelectProps {
   activeDatabase: number;
   isCluster?: boolean;
   disabled?: boolean;
+  refreshToken?: number;
   onProfileChanged: (profile: ConnectionProfile) => void;
   onSwitchingChange: (switching: boolean) => void;
 }
@@ -21,11 +22,13 @@ export default function BrowserDatabaseSelect({
   activeDatabase,
   isCluster = false,
   disabled = false,
+  refreshToken = 0,
   onProfileChanged,
   onSwitchingChange,
 }: BrowserDatabaseSelectProps) {
   const [switching, setSwitching] = useState(false);
   const [error, setError] = useState(false);
+  const [keyCounts, setKeyCounts] = useState<Map<number, number | null>>(new Map());
   const mountedRef = useRef(false);
   const requestRef = useRef<symbol | null>(null);
 
@@ -34,11 +37,27 @@ export default function BrowserDatabaseSelect({
     requestRef.current = null;
     setSwitching(false);
     setError(false);
+    setKeyCounts(new Map());
     return () => {
       mountedRef.current = false;
       requestRef.current = null;
     };
   }, [connectionId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getDatabaseOverview(connectionId)
+      .then((overview) => {
+        if (!cancelled) {
+          setKeyCounts(new Map(overview.map(({ database, key_count }) => [database, key_count])));
+        }
+      })
+      .catch(() => {
+        // Missing statistics must not look like empty databases or block SELECT.
+        if (!cancelled) setKeyCounts(new Map());
+      });
+    return () => { cancelled = true; };
+  }, [connectionId, activeDatabase, isCluster, refreshToken]);
 
   const handleChange = async (database: number) => {
     if (disabled || isCluster || requestRef.current !== null || database === activeDatabase
@@ -79,9 +98,12 @@ export default function BrowserDatabaseSelect({
           disabled={disabled || switching || isCluster}
           onChange={(event) => void handleChange(Number(event.target.value))}
         >
-          {(isCluster ? [0] : databases).map((database) => (
-            <option key={database} value={database}>DB {database}</option>
-          ))}
+          {(isCluster ? [0] : databases).map((database) => {
+            const keyCount = keyCounts.get(database);
+            return <option key={database} value={database}>
+              {`DB ${database}（${keyCount == null ? "—" : `${keyCount.toLocaleString("en-US")} keys`}）`}
+            </option>;
+          })}
         </Select>
       </label>
       {error && (

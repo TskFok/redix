@@ -20,6 +20,7 @@ const {
   acknowledgeStreamPendingEntriesMock,
   scanKeysMock,
   getKeyMock,
+  getDatabaseOverviewMock,
   getModuleCapabilitiesMock,
   getKeySearchIndexesMock,
   getJsonPathMock,
@@ -64,6 +65,7 @@ const {
   acknowledgeStreamPendingEntriesMock: vi.fn(),
   scanKeysMock: vi.fn(),
   getKeyMock: vi.fn(),
+  getDatabaseOverviewMock: vi.fn(),
   getModuleCapabilitiesMock: vi.fn(),
   getKeySearchIndexesMock: vi.fn(),
   getJsonPathMock: vi.fn(),
@@ -110,6 +112,7 @@ vi.mock("../../lib/tauri", () => ({
   scanKeys: scanKeysMock,
   getKey: getKeyMock,
   getBrowserKey: getKeyMock,
+  getDatabaseOverview: getDatabaseOverviewMock,
   getModuleCapabilities: getModuleCapabilitiesMock,
   getKeySearchIndexes: getKeySearchIndexesMock,
   getJsonPath: getJsonPathMock,
@@ -206,6 +209,7 @@ describe("Redis Browser", () => {
     vi.stubGlobal("confirm", vi.fn(() => true));
     scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     getKeyMock.mockResolvedValue(stringDetail);
+    getDatabaseOverviewMock.mockResolvedValue([]);
     getStringValueMock.mockResolvedValue({ base64: btoa("Alice"), total_bytes: 5, ttl_ms: -1, truncated: false });
     decodeStringValueMock.mockImplementation(async ({ base64 }) => ({ text: atob(base64), byte_length: atob(base64).length }));
     encodeStringValueMock.mockImplementation(async ({ text }) => btoa(text));
@@ -785,6 +789,73 @@ describe("Redis Browser", () => {
     expect(screen.queryByRole("button", { name: "profile" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "展开前缀 user:" })).not.toBeInTheDocument();
     expect(scanKeysMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("主动刷新完成后重新读取数据库 key 总数", async () => {
+    let keyCount = 2;
+    getDatabaseOverviewMock.mockImplementation(async () => [
+      { database: 0, key_count: keyCount, expires: 0, avg_ttl_ms: null },
+    ]);
+
+    render(<BrowserPage connectionId="local" onProfileChanged={vi.fn()} />);
+    await screen.findByRole("option", { name: "DB 0（2 keys）" });
+
+    keyCount = 7;
+    fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
+
+    expect(await screen.findByRole("option", { name: "DB 0（7 keys）" })).toBeInTheDocument();
+  });
+
+  it("新增和删除键成功后立即更新数据库 key 总数", async () => {
+    let keyCount = 0;
+    getDatabaseOverviewMock.mockImplementation(async () => [
+      { database: 0, key_count: keyCount, expires: 0, avg_ttl_ms: null },
+    ]);
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    createKeyMock.mockResolvedValue(stringDetail);
+
+    render(<BrowserPage connectionId="local" onProfileChanged={vi.fn()} />);
+    await screen.findByRole("option", { name: "DB 0（0 keys）" });
+    fireEvent.click(screen.getByRole("button", { name: "新增键" }));
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "user:1" } });
+    fireEvent.change(screen.getByLabelText("字符串值"), { target: { value: "Alice" } });
+    keyCount = 1;
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+
+    await screen.findByRole("option", { name: "DB 0（1 keys）" });
+    fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
+    fireEvent.click(screen.getByRole("button", { name: "user:1" }));
+    await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    keyCount = 0;
+    fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
+
+    expect(await screen.findByRole("option", { name: "DB 0（0 keys）" })).toBeInTheDocument();
+  });
+
+  it("连接切换后旧扫描完成不会刷新新连接的数据库统计", async () => {
+    const oldScan = deferred<ScanPage>();
+    scanKeysMock.mockReturnValueOnce(oldScan.promise).mockResolvedValue({
+      cursor: 0, keys: [], node_failures: [], has_more: false,
+    });
+    getDatabaseOverviewMock.mockImplementation(async (connectionId: string) => [
+      { database: 0, key_count: connectionId === "local" ? 3 : 8, expires: 0, avg_ttl_ms: null },
+    ]);
+    const onProfileChanged = vi.fn();
+    const view = render(<BrowserPage connectionId="local" onProfileChanged={onProfileChanged} />);
+
+    view.rerender(<BrowserPage connectionId="remote" onProfileChanged={onProfileChanged} />);
+    await screen.findByRole("option", { name: "DB 0（8 keys）" });
+    await waitFor(() => {
+      expect(getDatabaseOverviewMock.mock.calls.filter(([id]) => id === "remote")).toHaveLength(2);
+    });
+    await act(async () => {
+      oldScan.resolve({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    });
+
+    expect(getDatabaseOverviewMock.mock.calls.filter(([id]) => id === "remote")).toHaveLength(2);
+    expect(screen.getByRole("option", { name: "DB 0（8 keys）" })).toBeInTheDocument();
   });
 
   it.each([
