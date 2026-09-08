@@ -4,6 +4,7 @@ import {
   applyScanPage,
   browserErrorMessage,
   cloneRedisValue,
+  filterKeysByType,
   initialBrowserPageState,
   keyTypeLabel,
   redisValueKind,
@@ -40,9 +41,10 @@ describe("Browser 状态 helper", () => {
     expect(message).not.toContain("credential-secret");
     expect(browserErrorMessage({ code: "UNKNOWN", message: "credential-secret" }, "默认错误")).toBe("默认错误");
   });
-  it("按类型过滤扫描摘要并在刷新时清空选择", () => {
+  it("筛选状态下缓存所有类型摘要并在刷新时清空选择", () => {
     const state = {
       ...initialBrowserPageState,
+      keyType: "hash",
       selectedKeys: ["user:1"],
     };
     const next = applyScanPage(
@@ -56,11 +58,62 @@ describe("Browser 状态 helper", () => {
         ],
       },
       true,
-      "hash",
     );
 
-    expect(next.keys.map((key) => key.key)).toEqual(["user:2"]);
+    expect(next.keys.map((key) => key.key)).toEqual(["user:1", "user:2"]);
+    expect(next.keyType).toBe("hash");
+    expect(filterKeysByType(next.keys, next.keyType).map((key) => key.key)).toEqual(["user:2"]);
     expect(next.selectedKeys).toEqual([]);
+  });
+
+  it.each([
+    { keyType: " STREAM ", expected: ["stream:1"] },
+    { keyType: "json", expected: ["json:1", "json:2", "json:3"] },
+    { keyType: "zset", expected: ["sorted:1", "sorted:2", "sorted:3"] },
+    { keyType: "sortedset", expected: ["sorted:1", "sorted:2", "sorted:3"] },
+    { keyType: "sorted-set", expected: ["sorted:1", "sorted:2", "sorted:3"] },
+  ])("本地筛选 $keyType 识别类型别名，清空筛选后恢复全部缓存", ({ keyType, expected }) => {
+    const keys = [
+      { key: "string:1", key_type: "string", ttl_ms: -1, size: 1 },
+      { key: "stream:1", key_type: " Stream ", ttl_ms: -1, size: 1 },
+      { key: "json:1", key_type: "JSON", ttl_ms: -1, size: 1 },
+      { key: "json:2", key_type: "ReJSON-RL", ttl_ms: -1, size: 1 },
+      { key: "json:3", key_type: "ReJSON-RS", ttl_ms: -1, size: 1 },
+      { key: "sorted:1", key_type: "zset", ttl_ms: -1, size: 1 },
+      { key: "sorted:2", key_type: "SortedSet", ttl_ms: -1, size: 1 },
+      { key: "sorted:3", key_type: "sorted-set", ttl_ms: -1, size: 1 },
+    ];
+
+    expect(filterKeysByType(keys, keyType).map((key) => key.key)).toEqual(expected);
+    expect(filterKeysByType(keys, "")).toEqual(keys);
+    expect(keys).toHaveLength(8);
+  });
+
+  it("类型筛选期间分页重复键更新缓存，同时保留其他类型", () => {
+    const originalHash = { key: "hash:1", key_type: "hash", ttl_ms: -1, size: 1 };
+    const originalString = { key: "string:1", key_type: "string", ttl_ms: -1, size: 2 };
+    const updatedString = { ...originalString, ttl_ms: 5000, size: 3 };
+    const stream = { key: "stream:1", key_type: "stream", ttl_ms: -1, size: 4 };
+    const current = {
+      ...initialBrowserPageState,
+      keyType: "hash",
+      cursor: "cluster:next",
+      keys: [originalHash, originalString],
+    };
+
+    const next = applyScanPage(current, {
+      cursor: "cluster:done",
+      keys: [updatedString, stream],
+      has_more: false,
+      node_failures: [],
+    }, false);
+
+    expect(next.keys).toEqual([originalHash, updatedString, stream]);
+    expect(next.keyType).toBe("hash");
+    expect(next.cursor).toBe("cluster:done");
+    expect(filterKeysByType(next.keys, next.keyType)).toEqual([originalHash]);
+    expect(filterKeysByType(next.keys, "")).toEqual([originalHash, updatedString, stream]);
+    expect(current.keys).toEqual([originalHash, originalString]);
   });
 
   it("追加扫描时只保留当前列表中的选择", () => {
@@ -81,6 +134,27 @@ describe("Browser 状态 helper", () => {
     );
 
     expect(next.selectedKeys).toEqual(["user:1"]);
+  });
+
+  it("追加页更新键类型后清除已隐藏的选择和详情，但保留该键缓存", () => {
+    const original = { key: "user:1", key_type: "string", ttl_ms: -1, size: 1 };
+    const updated = { ...original, key_type: "hash" };
+    const next = applyScanPage({
+      ...initialBrowserPageState,
+      keyType: "string",
+      keys: [original],
+      selectedKey: "user:1",
+      selectedKeys: ["user:1"],
+      detail: { ...original, value: { String: { value: "Alice" } } },
+      metadata: { ...original, memory_bytes: 64, encoding: "embstr", idle_seconds: 1 },
+    }, { cursor: 0, keys: [updated], has_more: false, node_failures: [] }, false);
+
+    expect(next.keys).toEqual([updated]);
+    expect(filterKeysByType(next.keys, next.keyType)).toEqual([]);
+    expect(next.selectedKeys).toEqual([]);
+    expect(next.selectedKey).toBeNull();
+    expect(next.detail).toBeNull();
+    expect(next.metadata).toBeNull();
   });
 
   it("识别 JSON 和 Stream 类型并深拷贝其嵌套数据", () => {

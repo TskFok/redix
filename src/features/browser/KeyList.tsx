@@ -103,7 +103,9 @@ export function KeyList({
       ) : null}
 
       {keys.length === 0 && !loading ? (
-        <p className="browser-empty-list">没有匹配的键。</p>
+        <p className="browser-empty-list">
+          {hasMore ? "已加载的数据中暂无匹配项，可继续加载更多。" : "没有匹配的键。"}
+        </p>
       ) : view === "tree" ? (
         <KeyTree key={JSON.stringify([pattern, keyType, separator])} separator={separator} keys={keys} selectedKey={selectedKey}
           selectedKeys={selectedKeys} loading={controlsDisabled} onSelect={onSelect} onToggleSelect={onToggleSelect} />

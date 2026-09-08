@@ -17,6 +17,7 @@ export interface BrowserPageState {
   keyType: string;
   cursor: ScanCursor;
   nodeFailures: NodeFailure[];
+  // All scanned keys, including those hidden by the current type filter.
   keys: KeySummary[];
   selectedKey: string | null;
   selectedKeys: string[];
@@ -63,21 +64,34 @@ function matchesKeyType(summary: KeySummary, keyType: string): boolean {
   return actual === requested;
 }
 
+export function filterKeysByType(keys: KeySummary[], keyType: string): KeySummary[] {
+  return keys.filter((summary) => matchesKeyType(summary, keyType));
+}
+
+export function applyKeyTypeFilter(current: BrowserPageState, keyType: string): BrowserPageState {
+  const visibleNames = new Set(filterKeysByType(current.keys, keyType).map((key) => key.key));
+  const selectedKey = current.selectedKey !== null && visibleNames.has(current.selectedKey)
+    ? current.selectedKey : null;
+  return {
+    ...current,
+    keyType,
+    selectedKey,
+    selectedKeys: current.selectedKeys.filter((key) => visibleNames.has(key)),
+    detail: selectedKey === null ? null : current.detail,
+    metadata: selectedKey === null ? null : current.metadata,
+  };
+}
+
 export function applyScanPage(
   current: BrowserPageState,
   page: ScanPage,
   replace: boolean,
-  keyType = current.keyType,
 ): BrowserPageState {
-  const filteredPageKeys = page.keys.filter((summary) => matchesKeyType(summary, keyType));
-  const mergedKeys = replace ? filteredPageKeys : [...current.keys, ...filteredPageKeys];
+  const mergedKeys = replace ? page.keys : [...current.keys, ...page.keys];
   const keysByName = new Map<string, KeySummary>();
   for (const key of mergedKeys) {
     keysByName.set(key.key, key);
   }
-  const selectedKeys = replace
-    ? []
-    : current.selectedKeys.filter((key) => keysByName.has(key));
   // A successful page need not visit every failed node. Keep warnings until a
   // fresh scan or a complete traversal confirms recovery.
   const nodeFailures = new Map<string, NodeFailure>();
@@ -86,20 +100,19 @@ export function applyScanPage(
   }
   for (const failure of page.node_failures) nodeFailures.set(failure.node_id, failure);
 
-  return {
+  return applyKeyTypeFilter({
     ...current,
-    keyType,
     cursor: page.cursor,
     keys: [...keysByName.values()],
     selectedKey: replace ? null : current.selectedKey,
-    selectedKeys,
+    selectedKeys: replace ? [] : current.selectedKeys,
     detail: replace ? null : current.detail,
     metadata: replace ? null : current.metadata,
     hasMore: page.has_more,
     nodeFailures: [...nodeFailures.values()],
     loading: false,
     error: null,
-  };
+  }, current.keyType);
 }
 
 export function cloneRedisValue(value: RedisValue): RedisValue {
