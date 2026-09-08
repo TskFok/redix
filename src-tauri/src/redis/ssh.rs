@@ -1515,14 +1515,21 @@ mod tests {
             .await
             .unwrap();
         let endpoint = forward.local_endpoint();
+        assert_eq!(
+            tokio::net::TcpListener::bind((endpoint.host.as_str(), endpoint.port))
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AddrInUse,
+        );
         drop(forward);
+        // Windows 连接已关闭的端口可能等待数秒；重绑直接验证监听器已释放。
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if tokio::net::TcpStream::connect((endpoint.host.as_str(), endpoint.port))
-                    .await
-                    .is_err()
-                {
-                    break;
+                match tokio::net::TcpListener::bind((endpoint.host.as_str(), endpoint.port)).await {
+                    Ok(listener) => break listener,
+                    Err(error) if error.kind() == io::ErrorKind::AddrInUse => {}
+                    Err(error) => panic!("failed to rebind SSH forward listener: {error}"),
                 }
                 tokio::task::yield_now().await;
             }

@@ -803,11 +803,12 @@ mod tests {
         let new_stopped = Arc::new(AtomicUsize::new(0));
         let new_stopped_event = Arc::clone(&new_stopped);
         let (new_dropped_tx, new_dropped_rx) = tokio::sync::oneshot::channel();
+        // The replacement can be aborted before its first poll.
+        let new_drop_signal = DropSignal(Some(new_dropped_tx));
         let new_worker = tokio::spawn(async move {
-            let _drop = DropSignal(Some(new_dropped_tx));
+            let _drop = new_drop_signal;
             std::future::pending::<()>().await;
         });
-        tokio::task::yield_now().await;
         let displaced = tasks.insert(
             "local".into(),
             RegisteredTask {

@@ -4334,17 +4334,29 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
             .iter()
             .all(|target| target == &primary_endpoint));
 
+        assert_eq!(
+            tokio::net::TcpListener::bind((
+                primary_local_endpoint.host.as_str(),
+                primary_local_endpoint.port,
+            ))
+            .await
+            .unwrap_err()
+            .kind(),
+            std::io::ErrorKind::AddrInUse,
+        );
         service.close_connection("local").await.unwrap();
+        // Windows 连接已关闭的端口可能等待数秒；重绑直接验证监听器已释放。
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                if tokio::net::TcpStream::connect((
+                match tokio::net::TcpListener::bind((
                     primary_local_endpoint.host.as_str(),
                     primary_local_endpoint.port,
                 ))
                 .await
-                .is_err()
                 {
-                    break;
+                    Ok(listener) => break listener,
+                    Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {}
+                    Err(error) => panic!("failed to rebind primary SSH forward listener: {error}"),
                 }
                 tokio::task::yield_now().await;
             }

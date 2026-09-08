@@ -1140,7 +1140,8 @@ mod tests {
                     cmd: cmd.into(),
                     callback: tauri::ipc::CallbackFn(0),
                     error: tauri::ipc::CallbackFn(1),
-                    url: "tauri://localhost".parse().unwrap(),
+                    // Use Tauri's platform-specific local origin for IPC authorization.
+                    url: webview.url().unwrap(),
                     body: serde_json::json!({"input": input}).into(),
                     headers: Default::default(),
                     invoke_key: tauri::test::INVOKE_KEY.to_owned(),
