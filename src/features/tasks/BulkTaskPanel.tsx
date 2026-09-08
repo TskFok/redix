@@ -4,6 +4,7 @@ const labels: Record<BulkTask["status"], string> = { running: "运行中", compl
 export default function BulkTaskPanel() {
   const [tasks, setTasks] = useState<BulkTask[]>([]);
   const [error, setError] = useState("");
+  const [dismissed, setDismissed] = useState(false);
   const refreshRef = useRef<() => void>(() => {});
   useEffect(() => {
     let disposed = false;
@@ -40,7 +41,7 @@ export default function BulkTaskPanel() {
       }
     };
     refreshRef.current = () => void refresh();
-    const listener = () => { failures = 0; void refresh(); };
+    const listener = () => { setDismissed(false); failures = 0; void refresh(); };
     window.addEventListener(BULK_TASKS_CHANGED, listener);
     void refresh();
     return () => { disposed = true; clearTimeout(timer); window.removeEventListener(BULK_TASKS_CHANGED, listener); };
@@ -49,11 +50,14 @@ export default function BulkTaskPanel() {
     try { await cancelBulkTask(id); refreshRef.current(); }
     catch { setError("取消任务失败，请刷新后重试。"); }
   };
-  if (!tasks.length && !error) return null;
+  if (dismissed || (!error && tasks.every((task) => task.status === "completed"))) return null;
   return <details className="database-panel bulk-task-panel" open>
     <summary>后台任务（{tasks.length}）</summary>
     <p className="browser-helper">任务只保留在本次应用会话。取消会等待已发送的命令返回，已删除的键不会恢复；失败项可能已生效，请核对后再操作。</p>
-    <button className="button button-secondary" onClick={() => refreshRef.current()}>刷新任务</button>
+    <div className="form-actions">
+      <button type="button" className="button button-secondary" onClick={() => refreshRef.current()}>刷新任务</button>
+      <button type="button" className="button button-quiet" aria-label="关闭后台任务" title="关闭后任务继续在后台执行" onClick={() => setDismissed(true)}>关闭</button>
+    </div>
     {error && <p role="alert">{error}</p>}
     {tasks.slice().reverse().map((task) => <article key={task.id} aria-label={`批量删除任务 ${task.id}`}>
       <strong>{labels[task.status]}</strong> <span>连接：{task.connection_id}</span>
