@@ -9,6 +9,7 @@ import {
 
 interface KeyEditorProps {
   value: RedisValue;
+  showKeyActions?: boolean;
   ttlMs: number;
   busy: boolean;
   error: string | null;
@@ -46,6 +47,7 @@ function editorTitle(kind: RedisValueKind): string {
 
 export function KeyEditor({
   value,
+  showKeyActions = true,
   ttlMs,
   busy,
   error,
@@ -606,7 +608,7 @@ export function KeyEditor({
         </fieldset>
       ) : null}
 
-      <div className="ttl-editor">
+      {showKeyActions ? <div className="ttl-editor">
         <label className="field">
           <span>TTL（毫秒）</span>
           <input
@@ -633,7 +635,7 @@ export function KeyEditor({
         >
           设置 TTL
         </button>
-      </div>
+      </div> : null}
 
       {validationError || error ? (
         <p className="feedback feedback-error" role="alert">
@@ -642,14 +644,14 @@ export function KeyEditor({
       ) : null}
 
       <div className="editor-actions">
-        <button
+        {showKeyActions ? <button
           type="button"
           className="button button-danger"
           onClick={() => void onDelete()}
           disabled={busy}
         >
           {busy ? "处理中…" : "删除"}
-        </button>
+        </button> : null}
         <button type="submit" className="button button-primary" disabled={busy}>
           {busy ? "保存中…" : "保存"}
         </button>

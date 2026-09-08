@@ -43,7 +43,8 @@ describe("JSON路径编辑器生命周期", () => {
     const nativeConfirm = vi.spyOn(window, "confirm").mockReturnValue(false);
     deleteJsonPath.mockResolvedValue({ key: "profile:1", path, affected: 1, new_length: null, ttl_ms: -2 });
     render(<KeyDetails connectionId="local" detail={detail} loading={false} moduleProbe={probe()} {...callbacks} />);
-    fireEvent.change(screen.getByLabelText("JSON Path"), { target: { value: path } });
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), { target: { value: path } });
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
     expect(screen.getByRole("alertdialog")).toHaveTextContent("确定删除整个 JSON 键“profile:1”吗？");
     expect(deleteJsonPath).not.toHaveBeenCalled();
@@ -62,11 +63,12 @@ describe("JSON路径编辑器生命周期", () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
     const props = { connectionId: "local", detail, loading: false, moduleProbe: probe(), ...callbacks };
     const view = render(<KeyDetails {...props} />);
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
     const accept = within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" });
     if (change === "连接") view.rerender(<KeyDetails {...props} connectionId="remote" />);
     else if (change === "键") view.rerender(<KeyDetails {...props} detail={{ ...detail, key: "profile:2" }} />);
-    else if (change === "路径") fireEvent.change(screen.getByLabelText("JSON Path"), { target: { value: "$.name" } });
+    else if (change === "路径") fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), { target: { value: "$.name" } });
     else if (change === "数据") view.rerender(<KeyDetails {...props} detail={{ ...detail, value: { Json: { value: { name: "Bob" } } } }} />);
     else if (change === "加载") view.rerender(<KeyDetails {...props} loading />);
     else view.unmount();
@@ -79,11 +81,12 @@ describe("JSON路径编辑器生命周期", () => {
   it("确认接受后同批次切换路径也不发送过期根删除", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(false);
     render(<KeyDetails connectionId="local" detail={detail} loading={false} moduleProbe={probe()} {...callbacks} />);
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
     const accept = within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" });
     await act(async () => {
       fireEvent.click(accept);
-      fireEvent.change(screen.getByLabelText("JSON Path"), { target: { value: "$.name" } });
+      fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), { target: { value: "$.name" } });
     });
     expect(deleteJsonPath).not.toHaveBeenCalled();
   });
@@ -92,7 +95,8 @@ describe("JSON路径编辑器生命周期", () => {
     deleteJsonPath.mockResolvedValue({ key: "profile:1", path: "$.name", affected: 1, new_length: null, ttl_ms: 5000 });
     getBrowserKey.mockResolvedValue(detail);
     render(<KeyDetails connectionId="local" detail={detail} loading={false} moduleProbe={probe()} {...callbacks} />);
-    fireEvent.change(screen.getByLabelText("JSON Path"), { target: { value: "$.name" } });
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), { target: { value: "$.name" } });
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
     await waitFor(() => expect(callbacks.onDetailChange).toHaveBeenCalledWith(detail));
     expect(deleteJsonPath).toHaveBeenCalledExactlyOnceWith({ connection_id: "local", key: "profile:1", path: "$.name" });
@@ -106,7 +110,8 @@ describe("JSON路径编辑器生命周期", () => {
     const { rerender } = render(
       <KeyDetails connectionId="local" detail={detail} loading={false} moduleProbe={probe()} {...callbacks} />,
     );
-    const pathInput = screen.getByLabelText("JSON Path");
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
+    const pathInput = screen.getByRole("textbox", { name: "JSON Path" });
     fireEvent.change(pathInput, { target: { value: "$.name" } });
     fireEvent.change(screen.getByLabelText("路径 JSON 值"), { target: { value: '"Bob"' } });
     const refreshedDetail: KeyValue = {
@@ -117,7 +122,7 @@ describe("JSON路径编辑器生命周期", () => {
     rerender(
       <KeyDetails connectionId="local" detail={refreshedDetail} loading={false} moduleProbe={probe("20612")} {...callbacks} />,
     );
-    expect(screen.getByLabelText("JSON Path")).toBe(pathInput);
+    expect(screen.getByRole("textbox", { name: "JSON Path" })).toBe(pathInput);
     expect(pathInput).toHaveValue("$.name");
     expect(screen.getByLabelText("路径 JSON 值")).toHaveValue('"Bob"');
     fireEvent.click(screen.getByRole("button", { name: "保存路径" }));
@@ -130,17 +135,20 @@ describe("JSON路径编辑器生命周期", () => {
     const { rerender } = render(
       <KeyDetails connectionId="local" detail={detail} loading={false} moduleProbe={probe()} {...callbacks} />,
     );
-    fireEvent.change(screen.getByLabelText("JSON Path"), { target: { value: "$.name" } });
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), { target: { value: "$.name" } });
     fireEvent.change(screen.getByLabelText("路径 JSON 值"), { target: { value: '"Bob"' } });
     rerender(
       <KeyDetails connectionId="local" detail={{ ...detail, key: "profile:2" }} loading={false} moduleProbe={probe()} {...callbacks} />,
     );
-    expect(screen.getByLabelText("JSON Path")).toHaveValue("$");
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
+    expect(screen.getByRole("textbox", { name: "JSON Path" })).toHaveValue("$");
     expect(screen.getByLabelText("路径 JSON 值")).toHaveValue(JSON.stringify(value, null, 2));
-    fireEvent.change(screen.getByLabelText("JSON Path"), { target: { value: "$.tags" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), { target: { value: "$.tags" } });
     rerender(
       <KeyDetails connectionId="remote" detail={{ ...detail, key: "profile:2" }} loading={false} moduleProbe={probe()} {...callbacks} />,
     );
-    expect(screen.getByLabelText("JSON Path")).toHaveValue("$");
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
+    expect(screen.getByRole("textbox", { name: "JSON Path" })).toHaveValue("$");
   });
 });

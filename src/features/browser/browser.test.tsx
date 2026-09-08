@@ -735,6 +735,7 @@ describe("Redis Browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "string" } });
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.change(screen.getByLabelText(action === "设置 TTL" ? "TTL（毫秒）" : "新键名"), {
       target: { value: action === "设置 TTL" ? "60000" : "user:renamed" },
     });
@@ -982,6 +983,7 @@ describe("Redis Browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
 
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
     expect(deleteKeyMock).not.toHaveBeenCalled();
@@ -1009,6 +1011,7 @@ describe("Redis Browser", () => {
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
     const dialog = screen.getByRole("alertdialog", { name: "确认删除" });
@@ -1031,6 +1034,7 @@ describe("Redis Browser", () => {
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     expect(deleteKeyMock).not.toHaveBeenCalled();
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
@@ -1049,6 +1053,7 @@ describe("Redis Browser", () => {
     const props = { connectionId: "local", detail: stringDetail, loading: false, onDetailChange: vi.fn(), onDeleted };
     const { rerender } = render(<KeyDetails {...props} />);
     await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     const approve = within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" });
     rerender(<KeyDetails {...props} connectionId={scope === "连接" ? "other" : "local"} detail={scope === "键" ? { ...stringDetail, key: "other" } : stringDetail} />);
@@ -1074,6 +1079,7 @@ describe("Redis Browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
 
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.change(screen.getByLabelText("TTL（毫秒）"), {
       target: { value: "60000" },
     });
@@ -1101,6 +1107,7 @@ describe("Redis Browser", () => {
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.change(screen.getByLabelText("TTL（毫秒）"), {
       target: { value: "0" },
     });
@@ -1168,6 +1175,7 @@ describe("Redis Browser", () => {
       />,
     );
     await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.change(screen.getByLabelText("TTL（毫秒）"), {
       target: { value: "1000" },
     });
@@ -1195,6 +1203,7 @@ describe("Redis Browser", () => {
       />,
     );
     await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
     fireEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(deleteKeyMock).toHaveBeenCalledOnce());
@@ -1240,6 +1249,7 @@ describe("Redis Browser", () => {
       value: { SortedSet: { members: [] } },
     };
     const { rerender } = render(<KeyDetails connectionId="local" detail={detail} loading={false} onDetailChange={vi.fn()} onDeleted={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.change(screen.getByLabelText("TTL（毫秒）"), { target: { value: "60000" } });
     rerender(<KeyDetails connectionId="local" detail={{ ...detail, value: { SortedSet: { members: [] } } }} loading={false} onDetailChange={vi.fn()} onDeleted={vi.fn()} />);
     expect(screen.getByLabelText("TTL（毫秒）")).toHaveValue(60000);
@@ -1753,7 +1763,8 @@ describe("Redis Browser", () => {
     fireEvent.click(screen.getByRole("button", { name: "profile:1" }));
 
     expect(await screen.findByLabelText("JSON 文档")).toBeInTheDocument();
-    expect(screen.getByText("RedisJSON 路径编辑器暂不可用。")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "JSON Path" }));
+    expect(screen.getByText("RedisJSON 路径编辑器暂不可用。")).toBeVisible();
     expect(screen.queryByRole("button", { name: "读取路径" })).not.toBeInTheDocument();
   });
 
@@ -1787,8 +1798,9 @@ describe("Redis Browser", () => {
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 profile:" }));
     fireEvent.click(screen.getByRole("button", { name: "profile:1" }));
 
+    fireEvent.click(await screen.findByRole("tab", { name: "JSON Path" }));
     expect(await screen.findByRole("button", { name: "读取路径" })).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("JSON Path"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), {
       target: { value: "$.name" },
     });
     fireEvent.change(screen.getByLabelText("路径 JSON 值"), {
@@ -1812,7 +1824,7 @@ describe("Redis Browser", () => {
         JSON.stringify({ name: "Bob", tags: ["redis"] }, null, 2),
       );
     });
-    expect(screen.getByLabelText("JSON Path")).toHaveValue("$");
+    expect(screen.getByRole("textbox", { name: "JSON Path" })).toHaveValue("$");
     expect(screen.getByLabelText("路径 JSON 值")).toHaveValue(
       JSON.stringify({ name: "Bob", tags: ["redis"] }, null, 2),
     );
@@ -1842,9 +1854,10 @@ describe("Redis Browser", () => {
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 profile:" }));
     fireEvent.click(screen.getByRole("button", { name: "profile:1" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "JSON Path" }));
     await screen.findByRole("button", { name: "读取路径" });
 
-    fireEvent.change(screen.getByLabelText("JSON Path"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), {
       target: { value: "$" },
     });
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
@@ -1887,8 +1900,9 @@ describe("Redis Browser", () => {
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 profile:" }));
     fireEvent.click(screen.getByRole("button", { name: "profile:1" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "JSON Path" }));
     await screen.findByRole("button", { name: "读取路径" });
-    fireEvent.change(screen.getByLabelText("JSON Path"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), {
       target: { value: "$" },
     });
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
@@ -1953,8 +1967,9 @@ describe("Redis Browser", () => {
       />,
     );
 
+    fireEvent.click(await screen.findByRole("tab", { name: "JSON Path" }));
     await screen.findByRole("button", { name: "读取路径" });
-    fireEvent.change(screen.getByLabelText("JSON Path"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), {
       target: { value: "$" },
     });
     fireEvent.click(screen.getByRole("button", { name: "删除路径" }));
@@ -2003,8 +2018,9 @@ describe("Redis Browser", () => {
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 profile:" }));
     fireEvent.click(screen.getByRole("button", { name: "profile:1" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "JSON Path" }));
     await screen.findByRole("button", { name: "读取路径" });
-    fireEvent.change(screen.getByLabelText("JSON Path"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), {
       target: { value: "$.name" },
     });
     fireEvent.change(screen.getByLabelText("路径 JSON 值"), {
@@ -2025,7 +2041,7 @@ describe("Redis Browser", () => {
     });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "保存路径" })).toBeEnabled();
-    expect(screen.getByLabelText("JSON Path")).toHaveValue("$.name");
+    expect(screen.getByRole("textbox", { name: "JSON Path" })).toHaveValue("$.name");
     expect(screen.getByLabelText("路径 JSON 值")).toHaveValue('"Bob"');
   });
 
@@ -2056,9 +2072,10 @@ describe("Redis Browser", () => {
     render(<BrowserPage connectionId="local" />);
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 profile:" }));
     fireEvent.click(screen.getByRole("button", { name: "profile:1" }));
+    fireEvent.click(await screen.findByRole("tab", { name: "JSON Path" }));
     await screen.findByRole("button", { name: "读取路径" });
 
-    fireEvent.change(screen.getByLabelText("JSON Path"), {
+    fireEvent.change(screen.getByRole("textbox", { name: "JSON Path" }), {
       target: { value: "$.missing" },
     });
     fireEvent.click(screen.getByRole("button", { name: "读取路径" }));
@@ -2150,6 +2167,7 @@ describe("Redis Browser", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("tab", { name: "索引" }));
     expect(await screen.findByRole("heading", { name: "所属 RedisSearch 索引" })).toBeInTheDocument();
     expect(getKeySearchIndexesMock).toHaveBeenCalledWith({
       connection_id: "local",
@@ -2219,6 +2237,7 @@ describe("Redis Browser", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.change(screen.getByLabelText("新键名"), {
       target: { value: "user:renamed" },
     });
@@ -2243,6 +2262,7 @@ describe("Redis Browser", () => {
       />,
     );
 
+    fireEvent.click(screen.getByRole("tab", { name: "元数据" }));
     fireEvent.click(screen.getByRole("button", { name: "刷新元数据" }));
     await waitFor(() => {
       expect(getKeyInfoMock).toHaveBeenCalledWith({
@@ -2267,6 +2287,7 @@ describe("Redis Browser", () => {
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
     fireEvent.click(screen.getByRole("button", { name: "user:1" }));
     await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("tab", { name: "键操作" }));
     fireEvent.change(screen.getByLabelText("新键名"), {
       target: { value: "user:renamed" },
     });

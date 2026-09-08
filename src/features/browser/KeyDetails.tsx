@@ -30,6 +30,7 @@ import {
   type ModuleProbeState,
 } from "./browserState";
 import KeyEditor from "./KeyEditor";
+import KeyDetailsTabs from "./KeyDetailsTabs";
 import ArrayDetails from "./ArrayDetails";
 import JsonPathEditor, { type JsonPathMutation } from "./JsonPathEditor";
 import StreamConsumerGroups from "./StreamConsumerGroups";
@@ -87,7 +88,8 @@ export function KeyDetails({
   const [searchIndexesLoading, setSearchIndexesLoading] = useState(false);
   const [searchIndexesError, setSearchIndexesError] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState(detail?.key ?? "");
-  const [moduleTtlDraft, setModuleTtlDraft] = useState("");
+  const [keyTtlDraft, setKeyTtlDraft] = useState("");
+  const [detailTab, setDetailTab] = useState({ scope: "", id: "value" });
   const [localInfo, setLocalInfo] = useState<KeyInfo | null>(null);
   const mountedRef = useRef(false);
   const operationRef = useRef(0);
@@ -112,7 +114,6 @@ export function KeyDetails({
     setError(null);
     setJsonPathError(null);
     setRenameDraft(detail?.key ?? "");
-    setModuleTtlDraft(detail && detail.ttl_ms >= 0 ? String(detail.ttl_ms) : "");
     setLocalInfo(null);
     onMetadataChange?.(null);
     onBusyChange?.(false);
@@ -126,6 +127,18 @@ export function KeyDetails({
 
   const info = metadata === undefined ? localInfo : metadata;
   const detailKeyType = detail?.key_type.trim().toLowerCase() ?? "";
+  const detailScope = detail ? JSON.stringify([connectionId, detail.key, detailKeyType]) : null;
+
+  useEffect(() => {
+    if (detailScope !== null) {
+      setDetailTab((current) => current.scope === detailScope ? current : { scope: detailScope, id: "value" });
+    }
+  }, [detailScope]);
+
+  useEffect(() => {
+    setKeyTtlDraft(detail && detail.ttl_ms >= 0 ? String(detail.ttl_ms) : "");
+  }, [connectionId, detail?.key, detail?.ttl_ms]);
+
   const searchableKey =
     detailKeyType === "hash" ||
     detailKeyType === "json" ||
@@ -488,203 +501,244 @@ export function KeyDetails({
       <div className="detail-key-line">
         <span>键名</span>
         <code title={detail.key}>{detail.key}</code>
+        <span className="detail-ttl-summary" title="生存时间">
+          TTL {detail.ttl_ms < 0 ? "永久" : `${detail.ttl_ms} ms`}
+        </span>
       </div>
-      <div className="detail-rename-row">
-        <label className="field">
-          <span>重命名</span>
-          <input
-            autoCapitalize="off"
-            autoCorrect="off"
-            aria-label="新键名"
-            value={renameDraft}
-            onChange={(event) => {
-              setRenameDraft(event.target.value);
-              setError(null);
-            }}
-            disabled={uiBusy}
-            spellCheck={false}
-          />
-        </label>
-        <button type="button" className="button button-secondary" onClick={() => void handleRename()} disabled={uiBusy}>
-          重命名
-        </button>
-      </div>
-      <div className="detail-metadata" aria-label="键元数据">
-        <div>
-          <span>类型</span>
-          <strong>{keyTypeLabel(detail.key_type)}</strong>
-        </div>
-        <div>
-          <span>TTL</span>
-          <strong>{detail.ttl_ms < 0 ? "永久" : `${detail.ttl_ms} ms`}</strong>
-        </div>
-      </div>
-      <div className="detail-info-actions">
-        <button type="button" className="button button-quiet" onClick={() => void handleInfo()} disabled={uiBusy}>
-          刷新元数据
-        </button>
-      </div>
-      {info ? (
-        <dl className="detail-info-grid" aria-label="详细键元数据">
-          <div>
-            <dt>逻辑大小</dt>
-            <dd>{info.size === null ? "—" : info.size}</dd>
-          </div>
-          <div>
-            <dt>内存占用</dt>
-            <dd>{info.memory_bytes === null ? "—" : `${info.memory_bytes} B`}</dd>
-          </div>
-          <div>
-            <dt>编码</dt>
-            <dd>{info.encoding ?? "—"}</dd>
-          </div>
-          <div>
-            <dt>空闲时间</dt>
-            <dd>{info.idle_seconds === null ? "—" : `${info.idle_seconds} s`}</dd>
-          </div>
-        </dl>
-      ) : null}
-
-      {isModuleDetail ? (
-        <div className="module-common-actions">
-          <div className="ttl-editor">
-            <label className="field">
-              <span>TTL（毫秒）</span>
-              <input
-                autoCapitalize="off"
-                autoCorrect="off"
-                type="number"
-                min="0"
-                step="1"
-                inputMode="numeric"
-                value={moduleTtlDraft}
-                onChange={(event) => setModuleTtlDraft(event.target.value)}
-                placeholder={detail.ttl_ms < 0 ? "当前为永久" : undefined}
-                disabled={uiBusy}
-              />
-            </label>
-            <button
-              type="button"
-              className="button button-secondary"
-              onClick={() => {
-                const parsed = moduleTtlDraft.trim() === "" ? Number.NaN : Number(moduleTtlDraft);
-                if (!Number.isInteger(parsed) || parsed < 0) {
-                  setError("TTL 必须是大于等于 0 的整数毫秒。");
-                  return;
-                }
-                void handleSetTtl(parsed);
-              }}
-              disabled={uiBusy}
-            >
-              设置 TTL
-            </button>
-          </div>
-          <button type="button" className="button button-danger" onClick={() => void handleDelete()} disabled={uiBusy}>
-            {uiBusy ? "处理中…" : isStringDetail ? "删除" : "删除整个键"}
-          </button>
-        </div>
-      ) : (
-        <KeyEditor
-          key={JSON.stringify([detail.key, detail.ttl_ms, detail.value])}
-          value={detail.value}
-          ttlMs={detail.ttl_ms}
-          busy={uiBusy}
-          error={error}
-          onSave={handleSave}
-          onDelete={handleDelete}
-          onSetTtl={handleSetTtl}
-        />
-      )}
       {confirmationDialog}
-      {isModuleDetail && error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
-      {isStringDetail && <StringValueEditor connectionId={connectionId} keyName={detail.key} disabled={busy} onBusyChange={handleChildBusy} onSaved={(result) => {
-        // Keep the raw payload in the dedicated editor; the Browser DTO stays a preview.
-        onDetailChange({ ...detail, ttl_ms: result.ttl_ms });
-        setLocalInfo(null); onMetadataChange?.(null);
-      }} />}
-      {collectionKind && <CollectionDetails key={JSON.stringify([connectionId, detail.key, collectionKind])} connectionId={connectionId} keyName={detail.key} kind={collectionKind} disabled={busy} onBusyChange={handleChildBusy} />}
-      {isStreamDetail && <StreamEntries key={JSON.stringify([connectionId, detail.key])} connectionId={connectionId} streamKey={detail.key} disabled={busy} onBusyChange={handleChildBusy} />}
-      {isArrayDetail ? (
-        <ArrayDetails
-          key={`${connectionId}:${detail.key}`}
-          connectionId={connectionId}
-          keyName={detail.key}
-          initialSummary={arraySummary ? {
-            key: detail.key,
-            length: arraySummary.length,
-            count: arraySummary.count,
-            next_index: "0",
-          } : undefined}
-          disabled={busy}
-          onBusyChange={handleChildBusy}
-        />
-      ) : null}
-      {isVectorSetDetail ? (
-        <VectorSetDetails
-          key={`${connectionId}:${detail.key}`}
-          connectionId={connectionId}
-          keyName={detail.key}
-          initialSummary={vectorSetSummary ? {
-            key: detail.key,
-            total: vectorSetSummary.total,
-            dimension: vectorSetSummary.dimension,
-            quantization: vectorSetSummary.quantization,
-          } : undefined}
-          disabled={busy}
-          onBusyChange={handleChildBusy}
-        />
-      ) : null}
-      {jsonPathUnsupported ? (
-        <p className="json-path-unavailable" role="status">
-          {jsonPathUnsupported}
-        </p>
-      ) : null}
-      {showJsonPathEditor && "Json" in detail.value ? (
-        <JsonPathEditor
-          key={JSON.stringify([connectionId, detail.key])}
-          value={detail.value.Json.value}
-          busy={uiBusy || loading}
-          error={jsonPathError}
-          rootDeleteMessage={`确定删除整个 JSON 键“${detail.key}”吗？`}
-          onRead={handleJsonPathRead}
-          onMutate={handleJsonPathMutate}
-        />
-      ) : null}
-      {searchableKey && searchSupported ? (
-        <section className="key-search-indexes" aria-labelledby="key-search-indexes-title">
-          <div className="stream-subpanel-heading">
-            <div>
-              <p className="eyebrow">REDISEARCH</p>
-              <h3 id="key-search-indexes-title">所属 RedisSearch 索引</h3>
-            </div>
-            {searchIndexesLoading ? <span>读取中…</span> : null}
-          </div>
-          {searchIndexesError ? (
-            <p className="inline-error" role="alert">{searchIndexesError}</p>
-          ) : searchIndexes.length > 0 ? (
-            <ul className="key-search-index-list">
-              {searchIndexes.map((index) => (
-                <li key={index.name}>
-                  <code>{index.name}</code>
-                  <span>
-                    {index.key_type}
-                    {index.prefixes.length > 0 ? ` · ${index.prefixes.join(", ")}` : " · 全部键"}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          ) : searchIndexesLoading ? null : (
-            <p className="empty-state-compact">该键不属于已发现的 RedisSearch 索引。</p>
-          )}
-        </section>
-      ) : null}
-      {detail.key_type.toLowerCase() === "stream" ? (
-        <StreamConsumerGroups
-          key={`${connectionId}:${detail.key}`}
-          connectionId={connectionId}
-          streamKey={detail.key}
-        />
-      ) : null}
+      {error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
+      <KeyDetailsTabs
+        key={detailScope}
+        selectedTab={detailTab.scope === detailScope ? detailTab.id : "value"}
+        onSelectTab={(id) => setDetailTab({ scope: detailScope!, id })}
+        tabs={[
+          {
+            id: "value",
+            label: "值",
+            content: <>
+              {!isModuleDetail ? (
+                <KeyEditor
+                  key={JSON.stringify([detail.key, detail.ttl_ms, detail.value])}
+                  value={detail.value}
+                  showKeyActions={false}
+                  ttlMs={detail.ttl_ms}
+                  busy={uiBusy}
+                  error={null}
+                  onSave={handleSave}
+                  onDelete={handleDelete}
+                  onSetTtl={handleSetTtl}
+                />
+              ) : null}
+              {isStringDetail && <StringValueEditor connectionId={connectionId} keyName={detail.key} disabled={busy} onBusyChange={handleChildBusy} onSaved={(result) => {
+                // Keep the raw payload in the dedicated editor; the Browser DTO stays a preview.
+                onDetailChange({ ...detail, ttl_ms: result.ttl_ms });
+                setLocalInfo(null); onMetadataChange?.(null);
+              }} />}
+              {collectionKind && <CollectionDetails key={JSON.stringify([connectionId, detail.key, collectionKind])} connectionId={connectionId} keyName={detail.key} kind={collectionKind} disabled={busy} onBusyChange={handleChildBusy} />}
+              {isStreamDetail && <StreamEntries key={JSON.stringify([connectionId, detail.key])} connectionId={connectionId} streamKey={detail.key} disabled={busy} onBusyChange={handleChildBusy} />}
+              {isArrayDetail ? (
+                <ArrayDetails
+                  key={`${connectionId}:${detail.key}`}
+                  connectionId={connectionId}
+                  keyName={detail.key}
+                  initialSummary={arraySummary ? {
+                    key: detail.key,
+                    length: arraySummary.length,
+                    count: arraySummary.count,
+                    next_index: "0",
+                  } : undefined}
+                  disabled={busy}
+                  onBusyChange={handleChildBusy}
+                />
+              ) : null}
+              {isVectorSetDetail ? (
+                <VectorSetDetails
+                  key={`${connectionId}:${detail.key}`}
+                  connectionId={connectionId}
+                  keyName={detail.key}
+                  initialSummary={vectorSetSummary ? {
+                    key: detail.key,
+                    total: vectorSetSummary.total,
+                    dimension: vectorSetSummary.dimension,
+                    quantization: vectorSetSummary.quantization,
+                  } : undefined}
+                  disabled={busy}
+                  onBusyChange={handleChildBusy}
+                />
+              ) : null}
+            </>,
+          },
+          ...(isJsonDetail ? [{
+            id: "json-path",
+            label: "JSON Path",
+            content: <>
+              {jsonPathUnsupported ? (
+                <p className="json-path-unavailable" role="status">
+                  {jsonPathUnsupported}
+                </p>
+              ) : null}
+              {showJsonPathEditor && "Json" in detail.value ? (
+                <JsonPathEditor
+                  key={JSON.stringify([connectionId, detail.key])}
+                  value={detail.value.Json.value}
+                  busy={uiBusy || loading}
+                  error={jsonPathError}
+                  rootDeleteMessage={`确定删除整个 JSON 键“${detail.key}”吗？`}
+                  onRead={handleJsonPathRead}
+                  onMutate={handleJsonPathMutate}
+                />
+              ) : null}
+            </>,
+          }] : []),
+          ...(isStreamDetail ? [{
+            id: "consumers",
+            label: "消费者组",
+            content: (
+              <StreamConsumerGroups
+                key={`${connectionId}:${detail.key}`}
+                connectionId={connectionId}
+                streamKey={detail.key}
+              />
+            ),
+          }] : []),
+          ...(searchableKey && searchSupported ? [{
+            id: "indexes",
+            label: "索引",
+            content: (
+              <section className="key-search-indexes" aria-labelledby="key-search-indexes-title">
+                <div className="stream-subpanel-heading">
+                  <div>
+                    <p className="eyebrow">REDISEARCH</p>
+                    <h3 id="key-search-indexes-title">所属 RedisSearch 索引</h3>
+                  </div>
+                  {searchIndexesLoading ? <span>读取中…</span> : null}
+                </div>
+                {searchIndexesError ? (
+                  <p className="inline-error" role="alert">{searchIndexesError}</p>
+                ) : searchIndexes.length > 0 ? (
+                  <ul className="key-search-index-list">
+                    {searchIndexes.map((index) => (
+                      <li key={index.name}>
+                        <code>{index.name}</code>
+                        <span>
+                          {index.key_type}
+                          {index.prefixes.length > 0 ? ` · ${index.prefixes.join(", ")}` : " · 全部键"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : searchIndexesLoading ? null : (
+                  <p className="empty-state-compact">该键不属于已发现的 RedisSearch 索引。</p>
+                )}
+              </section>
+            ),
+          }] : []),
+          {
+            id: "metadata",
+            label: "元数据",
+            content: <>
+              <div className="detail-metadata" aria-label="键元数据">
+                <div>
+                  <span>类型</span>
+                  <strong>{keyTypeLabel(detail.key_type)}</strong>
+                </div>
+                <div>
+                  <span>TTL</span>
+                  <strong>{detail.ttl_ms < 0 ? "永久" : `${detail.ttl_ms} ms`}</strong>
+                </div>
+              </div>
+              <div className="detail-info-actions">
+                <button type="button" className="button button-quiet" onClick={() => void handleInfo()} disabled={uiBusy}>
+                  刷新元数据
+                </button>
+              </div>
+              {info ? (
+                <dl className="detail-info-grid" aria-label="详细键元数据">
+                  <div>
+                    <dt>逻辑大小</dt>
+                    <dd>{info.size === null ? "—" : info.size}</dd>
+                  </div>
+                  <div>
+                    <dt>内存占用</dt>
+                    <dd>{info.memory_bytes === null ? "—" : `${info.memory_bytes} B`}</dd>
+                  </div>
+                  <div>
+                    <dt>编码</dt>
+                    <dd>{info.encoding ?? "—"}</dd>
+                  </div>
+                  <div>
+                    <dt>空闲时间</dt>
+                    <dd>{info.idle_seconds === null ? "—" : `${info.idle_seconds} s`}</dd>
+                  </div>
+                </dl>
+              ) : null}
+            </>,
+          },
+          {
+            id: "actions",
+            label: "键操作",
+            content: <>
+              <div className="detail-rename-row">
+                <label className="field">
+                  <span>重命名</span>
+                  <input
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    aria-label="新键名"
+                    value={renameDraft}
+                    onChange={(event) => {
+                      setRenameDraft(event.target.value);
+                      setError(null);
+                    }}
+                    disabled={uiBusy}
+                    spellCheck={false}
+                  />
+                </label>
+                <button type="button" className="button button-secondary" onClick={() => void handleRename()} disabled={uiBusy}>
+                  重命名
+                </button>
+              </div>
+              <div className="module-common-actions">
+                <div className="ttl-editor">
+                  <label className="field">
+                    <span>TTL（毫秒）</span>
+                    <input
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      type="number"
+                      min="0"
+                      step="1"
+                      inputMode="numeric"
+                      value={keyTtlDraft}
+                      onChange={(event) => setKeyTtlDraft(event.target.value)}
+                      placeholder={detail.ttl_ms < 0 ? "当前为永久" : undefined}
+                      disabled={uiBusy}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="button button-secondary"
+                    onClick={() => {
+                      const parsed = keyTtlDraft.trim() === "" ? Number.NaN : Number(keyTtlDraft);
+                      if (!Number.isInteger(parsed) || parsed < 0) {
+                        setError("TTL 必须是大于等于 0 的整数毫秒。");
+                        return;
+                      }
+                      void handleSetTtl(parsed);
+                    }}
+                    disabled={uiBusy}
+                  >
+                    设置 TTL
+                  </button>
+                </div>
+                <button type="button" className="button button-danger" onClick={() => void handleDelete()} disabled={uiBusy}>
+                  {uiBusy ? "处理中…" : isStringDetail || !isModuleDetail ? "删除" : "删除整个键"}
+                </button>
+              </div>
+            </>,
+          },
+        ]}
+      />
     </section>
   );
 }
