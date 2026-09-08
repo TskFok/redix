@@ -257,14 +257,20 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
 
   useEffect(() => {
     setBulkChanged(false);
+    let noticeTimer: number | undefined;
     const completed = (event: Event) => {
       const task = (event as CustomEvent<BulkTask>).detail;
       if (task.connection_id !== connectionId) return;
       setState((current) => ({ ...current, selectedKeys: [] }));
       setBulkChanged(true);
+      window.clearTimeout(noticeTimer);
+      noticeTimer = window.setTimeout(() => setBulkChanged(false), 2000);
     };
     window.addEventListener(BULK_TASK_FINISHED, completed);
-    return () => window.removeEventListener(BULK_TASK_FINISHED, completed);
+    return () => {
+      window.removeEventListener(BULK_TASK_FINISHED, completed);
+      window.clearTimeout(noticeTimer);
+    };
   }, [connectionId]);
 
   const handleBulkDeleted = () => {
