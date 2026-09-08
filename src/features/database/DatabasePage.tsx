@@ -128,11 +128,12 @@ export function DatabasePage({
         connection_id: connectionId,
         database,
       });
+      // The connection changed even if this page was left while awaiting it.
+      onProfileChanged(profile);
       if (!mountedRef.current || requestRef.current !== requestId) {
         return;
       }
       setState((current) => ({ ...current, switching: false, switchError: null }));
-      onProfileChanged(profile);
     } catch (error) {
       if (!mountedRef.current || requestRef.current !== requestId) {
         return;

@@ -82,6 +82,89 @@ export function applyKeyTypeFilter(current: BrowserPageState, keyType: string): 
   };
 }
 
+function matchesRedisPattern(pattern: string, key: string): boolean {
+  // Redis glob operators match bytes, so a UTF-8 character can occupy multiple
+  // question marks. Avoid translating user input into a regular expression.
+  const encoder = new TextEncoder();
+  const patternBytes = encoder.encode(pattern);
+  const keyBytes = encoder.encode(key);
+  let patternIndex = 0;
+  let keyIndex = 0;
+  let starPattern = -1;
+  let starKey = 0;
+
+  while (keyIndex < keyBytes.length) {
+    const token = patternBytes[patternIndex];
+    if (token === 42) { // *
+      starPattern = ++patternIndex;
+      starKey = keyIndex;
+      continue;
+    }
+
+    let nextPattern = patternIndex + 1;
+    let matches = token === 63 || token === keyBytes[keyIndex]; // ? or literal
+    if (token === 92 && nextPattern < patternBytes.length) { // escaped literal
+      matches = patternBytes[nextPattern++] === keyBytes[keyIndex];
+    } else if (token === 91) { // character class
+      const negated = patternBytes[nextPattern] === 94; // ^
+      if (negated) nextPattern++;
+      matches = false;
+      while (nextPattern < patternBytes.length && patternBytes[nextPattern] !== 93) {
+        const start = patternBytes[nextPattern];
+        if (start === 92 && nextPattern + 1 < patternBytes.length) {
+          matches ||= patternBytes[nextPattern + 1] === keyBytes[keyIndex];
+          nextPattern += 2;
+        } else if (nextPattern + 2 < patternBytes.length && patternBytes[nextPattern + 1] === 45) {
+          const end = patternBytes[nextPattern + 2];
+          matches ||= keyBytes[keyIndex] >= Math.min(start, end)
+            && keyBytes[keyIndex] <= Math.max(start, end);
+          nextPattern += 3;
+        } else {
+          matches ||= start === keyBytes[keyIndex];
+          nextPattern++;
+        }
+      }
+      if (nextPattern < patternBytes.length) nextPattern++;
+      if (negated) matches = !matches;
+    }
+
+    if (matches) {
+      patternIndex = nextPattern;
+      keyIndex++;
+    } else if (starPattern !== -1) {
+      // Retry only the latest star, without recursion or exponential backtracking.
+      patternIndex = starPattern;
+      keyIndex = ++starKey;
+    } else {
+      return false;
+    }
+  }
+
+  while (patternBytes[patternIndex] === 42) patternIndex++;
+  return patternIndex === patternBytes.length;
+}
+
+export function applyCreatedKey(current: BrowserPageState, detail: KeyValue): BrowserPageState {
+  if (!matchesRedisPattern(current.pattern.trim() || "*", detail.key)) {
+    return current;
+  }
+
+  const keysByName = new Map(current.keys.map((summary) => [summary.key, summary]));
+  keysByName.set(detail.key, {
+    key: detail.key,
+    key_type: detail.key_type,
+    ttl_ms: detail.ttl_ms,
+    size: null,
+  });
+  const selected = current.selectedKey === detail.key;
+  return applyKeyTypeFilter({
+    ...current,
+    keys: [...keysByName.values()],
+    detail: selected ? detail : current.detail,
+    metadata: selected ? null : current.metadata,
+  }, current.keyType);
+}
+
 export function applyScanPage(
   current: BrowserPageState,
   page: ScanPage,

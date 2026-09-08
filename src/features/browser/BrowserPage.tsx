@@ -12,6 +12,7 @@ import AddKey from "./AddKey";
 import BulkKeyActions from "./BulkKeyActions";
 import BrowserImportExport from "./BrowserImportExport";
 import {
+  applyCreatedKey,
   applyScanPage,
   applyKeyTypeFilter,
   browserErrorMessage,
@@ -24,11 +25,12 @@ import {
 interface BrowserPageProps {
   connectionId: string;
   scanCount?: number;
+  active?: boolean;
 }
 
 const FILTER_DEBOUNCE_MS = 320;
 
-export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps) {
+export function BrowserPage({ connectionId, scanCount = 100, active = true }: BrowserPageProps) {
   const [state, setState] = useState<BrowserPageState>(() => ({
     ...initialBrowserPageState,
   }));
@@ -37,8 +39,6 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
   const [showAddKey, setShowAddKey] = useState(false);
-  const addKeyButtonRef = useRef<HTMLButtonElement>(null);
-  const restoreAddKeyFocusRef = useRef(false);
   const [moduleProbe, setModuleProbe] = useState<ModuleProbeState>({
     status: "loading",
     capabilities: null,
@@ -56,6 +56,8 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   const visibleKeys = useMemo(() => filterKeysByType(state.keys, state.keyType), [state.keys, state.keyType]);
   const normalizedScanCount =
     Number.isInteger(scanCount) && scanCount >= 10 && scanCount <= 1000 ? scanCount : 100;
+  const scanCountRef = useRef(normalizedScanCount);
+  scanCountRef.current = normalizedScanCount;
 
   const scanPage = useCallback(
     async (
@@ -69,6 +71,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
 
       scanLoadingRef.current = true;
       const requestedKeyType = keyTypeRef.current;
+      const requestedScanCount = scanCountRef.current;
       const requestId = scanRequestRef.current + 1;
       scanRequestRef.current = requestId;
       if (replace) {
@@ -98,7 +101,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
             connection_id: connectionId,
             cursor: nextCursor,
             pattern: requestedPattern,
-            count: normalizedScanCount,
+            count: requestedScanCount,
             key_type: null,
           });
           if (!mountedRef.current || scanRequestRef.current !== requestId) return;
@@ -130,7 +133,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
         }
       }
     },
-    [connectionId, normalizedScanCount],
+    [connectionId],
   );
 
   useEffect(() => {
@@ -140,7 +143,6 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
     skipDebounceForPatternRef.current = "*";
     setDetailActionLoading(false);
     setShowAddKey(false);
-    restoreAddKeyFocusRef.current = false;
     setState({
       ...initialBrowserPageState,
       pattern: "*",
@@ -274,10 +276,12 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
     }));
   };
 
-  const handleCreated = () => {
-    restoreAddKeyFocusRef.current = true;
+  const handleCreated = (detail: KeyValue) => {
+    if (!mountedRef.current || connectionIdRef.current !== connectionId) {
+      return;
+    }
     setShowAddKey(false);
-    void scanPage(0, state.pattern.trim() || "*", true);
+    setState((current) => applyCreatedKey(current, detail));
   };
 
   useEffect(() => {
@@ -404,25 +408,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   };
 
   const listBusy = state.loading || detailLoading || detailActionLoading;
-  useEffect(() => {
-    if (showAddKey || !restoreAddKeyFocusRef.current) return;
-    if (!listBusy) {
-      restoreAddKeyFocusRef.current = false;
-      if (document.activeElement === document.body) {
-        addKeyButtonRef.current?.focus({ preventScroll: true });
-      }
-      return;
-    }
-    // The trigger is disabled during the scan; do not overwrite a later focus choice.
-    const cancelRestore = (event: FocusEvent) => {
-      if (event.target !== addKeyButtonRef.current && event.target !== document.body) {
-        restoreAddKeyFocusRef.current = false;
-      }
-    };
-    document.addEventListener("focusin", cancelRestore);
-    return () => document.removeEventListener("focusin", cancelRestore);
-  }, [listBusy, showAddKey]);
-  useAutoRefresh(refreshSeconds, listBusy || showAddKey || state.selectedKey !== null || state.selectedKeys.length > 0, () => {
+  useAutoRefresh(refreshSeconds, !active || listBusy || showAddKey || state.selectedKey !== null || state.selectedKeys.length > 0, () => {
     void scanPage(0, state.pattern.trim() || "*", true);
   });
   const arraySupported =
@@ -431,7 +417,8 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
     moduleProbe.status === "ready" && moduleProbe.capabilities.vector_set_supported;
 
   return (
-    <section className="browser-page" aria-labelledby="browser-page-title" aria-busy={listBusy}>
+    <section className="browser-page" aria-labelledby="browser-page-title" aria-busy={listBusy}
+      hidden={!active} style={active ? undefined : { display: "none" }}>
       <h2 id="browser-page-title" className="sr-only">数据浏览</h2>
 
       {state.error ? (
@@ -443,7 +430,6 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
 
       <div className="browser-actions" aria-label="Browser 操作">
         <button
-          ref={addKeyButtonRef}
           type="button"
           className="button button-secondary"
           onClick={() => setShowAddKey(true)}

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  applyCreatedKey,
   applyScanPage,
   browserErrorMessage,
   cloneRedisValue,
@@ -9,9 +10,152 @@ import {
   keyTypeLabel,
   redisValueKind,
 } from "./browserState";
-import type { RedisValue } from "../../lib/types";
+import type { KeyValue, RedisValue } from "../../lib/types";
 
 describe("Browser 状态 helper", () => {
+  it("新增键直接追加摘要并保留扫描进度、选择、详情和筛选", () => {
+    const selected = { key: "user:1", key_type: "string", ttl_ms: -1, size: 10 };
+    const current = {
+      ...initialBrowserPageState,
+      pattern: "user:*",
+      keyType: "string",
+      cursor: "cluster:next",
+      hasMore: true,
+      nodeFailures: [{ node_id: "node-a", code: "CLUSTER_NODE_UNAVAILABLE" }],
+      keys: [selected],
+      selectedKey: selected.key,
+      selectedKeys: [selected.key],
+      detail: { ...selected, value: { String: { value: "Alice" } } },
+      metadata: { ...selected, memory_bytes: 64, encoding: "embstr", idle_seconds: 1 },
+      loading: true,
+      error: "已有提示",
+    };
+    const created: KeyValue = {
+      key: "user:2", key_type: "string", ttl_ms: 5000, value: { String: { value: "Bob" } },
+    };
+
+    const next = applyCreatedKey(current, created);
+
+    expect(next).toEqual({
+      ...current,
+      keys: [selected, { key: "user:2", key_type: "string", ttl_ms: 5000, size: null }],
+    });
+    expect(current.keys).toEqual([selected]);
+  });
+
+  it("同名新增结果更新摘要和已选详情，去重且清空过期元信息", () => {
+    const original = { key: "user:1", key_type: "string", ttl_ms: -1, size: 10 };
+    const another = { key: "user:2", key_type: "hash", ttl_ms: -1, size: 2 };
+    const created: KeyValue = {
+      key: "user:1", key_type: "string", ttl_ms: 5000, value: { String: { value: "Updated" } },
+    };
+    const current = {
+      ...initialBrowserPageState,
+      keys: [original, another, original],
+      selectedKey: original.key,
+      selectedKeys: [original.key, another.key],
+      detail: { ...original, value: { String: { value: "Old" } } },
+      metadata: { ...original, memory_bytes: 64, encoding: "embstr", idle_seconds: 1 },
+    };
+
+    const next = applyCreatedKey(current, created);
+
+    expect(next.keys).toEqual([
+      { key: "user:1", key_type: "string", ttl_ms: 5000, size: null }, another,
+    ]);
+    expect(next.selectedKey).toBe("user:1");
+    expect(next.selectedKeys).toEqual(["user:1", "user:2"]);
+    expect(next.detail).toEqual(created);
+    expect(next.metadata).toBeNull();
+  });
+
+  it("匹配名称但不匹配类型的新键加入缓存，清空类型筛选后可见", () => {
+    const original = { key: "user:1", key_type: "string", ttl_ms: -1, size: 10 };
+    const next = applyCreatedKey({
+      ...initialBrowserPageState,
+      pattern: "user:*",
+      keyType: "string",
+      keys: [original],
+      selectedKey: original.key,
+      selectedKeys: [original.key],
+    }, {
+      key: "user:2", key_type: "hash", ttl_ms: -1, value: { Hash: { fields: [] } },
+    });
+
+    expect(next.keys).toEqual([
+      original, { key: "user:2", key_type: "hash", ttl_ms: -1, size: null },
+    ]);
+    expect(filterKeysByType(next.keys, next.keyType)).toEqual([original]);
+    expect(filterKeysByType(next.keys, "").map((key) => key.key)).toEqual(["user:1", "user:2"]);
+    expect(next.selectedKey).toBe("user:1");
+    expect(next.selectedKeys).toEqual(["user:1"]);
+  });
+
+  it("同名键类型改变后移除隐藏选择和详情并保留缓存", () => {
+    const original = { key: "user:1", key_type: "string", ttl_ms: -1, size: 10 };
+    const next = applyCreatedKey({
+      ...initialBrowserPageState,
+      keyType: "string",
+      keys: [original],
+      selectedKey: original.key,
+      selectedKeys: [original.key],
+      detail: { ...original, value: { String: { value: "Old" } } },
+      metadata: { ...original, memory_bytes: 64, encoding: "embstr", idle_seconds: 1 },
+    }, {
+      key: "user:1", key_type: "hash", ttl_ms: -1, value: { Hash: { fields: [] } },
+    });
+
+    expect(next.keys).toEqual([{ key: "user:1", key_type: "hash", ttl_ms: -1, size: null }]);
+    expect(next.selectedKey).toBeNull();
+    expect(next.selectedKeys).toEqual([]);
+    expect(next.detail).toBeNull();
+    expect(next.metadata).toBeNull();
+  });
+
+  it.each([
+    { pattern: "user:*", key: "user:1", matches: true },
+    { pattern: "user:*", key: "other:1", matches: false },
+    { pattern: "user:*", key: "user:", matches: true },
+    { pattern: "user:*", key: "user:\n1", matches: true },
+    { pattern: "user:*:active", key: "user:a:active:b:active", matches: true },
+    { pattern: "a**?c*", key: "abbcd", matches: true },
+    { pattern: "a*b*c", key: "abbxd", matches: false },
+    { pattern: "user:?", key: "user:1", matches: true },
+    { pattern: "user:?", key: "user:12", matches: false },
+    { pattern: "user:[1-3]", key: "user:2", matches: true },
+    { pattern: "user:[3-1]", key: "user:2", matches: true },
+    { pattern: "user:[1-3]", key: "user:4", matches: false },
+    { pattern: "user:[^1-3]", key: "user:4", matches: true },
+    { pattern: "user:[^1-3]", key: "user:2", matches: false },
+    { pattern: "user:[!ab]", key: "user:!", matches: true },
+    { pattern: "user:[ab", key: "user:a", matches: true },
+    { pattern: "user:[]", key: "user:a", matches: false },
+    { pattern: String.raw`user:\*`, key: "user:*", matches: true },
+    { pattern: String.raw`user:\*`, key: "user:1", matches: false },
+    { pattern: String.raw`user:\?\[\]`, key: "user:?[]", matches: true },
+    { pattern: String.raw`user:[\]]`, key: "user:]", matches: true },
+    { pattern: String.raw`user:[\-]`, key: "user:-", matches: true },
+    { pattern: "user:\\", key: "user:\\", matches: true },
+    { pattern: "user.(a)+{1}^$|", key: "user.(a)+{1}^$|", matches: true },
+    { pattern: "user.(a)+{1}^$|", key: "userXa", matches: false },
+    { pattern: "用户:*", key: "用户:张三😀", matches: true },
+    { pattern: "用户:张三😀", key: "用户:张三😀", matches: true },
+    { pattern: "用户:???", key: "用户:张", matches: true },
+    { pattern: "用户:?", key: "用户:张", matches: false },
+    { pattern: "", key: "any:1", matches: true },
+    { pattern: "   ", key: "any:1", matches: true },
+    { pattern: " user:* ", key: "user:1", matches: true },
+  ])("新增 $key 按 Redis 模式 $pattern 决定是否缓存：$matches", ({ pattern, key, matches }) => {
+    const current = { ...initialBrowserPageState, pattern };
+    const next = applyCreatedKey(current, {
+      key, key_type: "string", ttl_ms: -1, value: { String: { value: "value" } },
+    });
+
+    expect(next.keys.map((summary) => summary.key)).toEqual(matches ? [key] : []);
+    expect(next.pattern).toBe(pattern);
+    if (!matches) expect(next).toBe(current);
+  });
+
   it("保留不透明游标并以 has_more 为完成依据", () => {
     const next = applyScanPage(initialBrowserPageState, {
       cursor: "cluster:complete", keys: [], has_more: false, node_failures: [],

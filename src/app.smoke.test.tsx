@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 
@@ -350,13 +350,176 @@ describe("Redix 应用壳", () => {
     expect(openConnectionMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["Workbench", "设置"])("切换到 %s 再返回时保留键列表、筛选、选择和分页游标", async (section) => {
+    const summary = { key: "user:1", key_type: "string", ttl_ms: -1, size: 5 };
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    scanKeysMock.mockImplementation(async ({ cursor, pattern }) => {
+      if (pattern === "*") {
+        return { cursor: 11, keys: [summary], node_failures: [], has_more: true };
+      }
+      if (cursor === 0) {
+        return {
+          cursor: 41,
+          keys: [summary, { ...summary, key: "user:profile", key_type: "hash" }],
+          node_failures: [],
+          has_more: true,
+        };
+      }
+      if (cursor === 41) {
+        return { cursor: 82, keys: [{ ...summary, key: "user:2" }], node_failures: [], has_more: true };
+      }
+      return { cursor: 0, keys: [{ ...summary, key: "user:3" }], node_failures: [], has_more: false };
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByRole("button", { name: "展开前缀 user:" });
+    fireEvent.click(screen.getByRole("button", { name: "平铺" }));
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    const pattern = screen.getByLabelText("键过滤");
+    fireEvent.change(pattern, { target: { value: "user:*" } });
+    fireEvent.keyDown(pattern, { key: "Enter" });
+    await screen.findByRole("button", { name: "user:profile" });
+    fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "string" } });
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    await screen.findByRole("button", { name: "user:2" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 user:2" }));
+    expect(scanKeysMock).toHaveBeenCalledTimes(3);
+
+    fireEvent.click(screen.getByRole("button", { name: section }));
+    expect(screen.queryByRole("heading", { name: "数据浏览" })).not.toBeInTheDocument();
+    if (section === "Workbench") {
+      await screen.findByRole("textbox", { name: "Redis 命令" });
+    } else {
+      await screen.findByRole("button", { name: "保存设置" });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Browser" }));
+    await screen.findByRole("heading", { name: "数据浏览" });
+
+    expect(scanKeysMock).toHaveBeenCalledTimes(3);
+    expect(screen.getByRole("button", { name: "平铺" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "user:2" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "user:profile" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择键 user:2" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "批量删除（1）" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    expect(screen.getByLabelText("键过滤")).toHaveValue("user:*");
+    expect(screen.getByLabelText("类型过滤")).toHaveValue("string");
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    await screen.findByRole("button", { name: "user:3" });
+    expect(scanKeysMock).toHaveBeenCalledTimes(4);
+    expect(scanKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", cursor: 82, pattern: "user:*", count: 100, key_type: null,
+    });
+    expect(screen.getByRole("checkbox", { name: "选择键 user:2" })).toBeChecked();
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+  });
+
+  it("切换逻辑数据库后重新加载对应键列表并清除旧列表状态", async () => {
+    let database = 0;
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    getDatabaseOverviewMock.mockResolvedValue([
+      { database: 0, key_count: 1, expires: 0, avg_ttl_ms: 0 },
+      { database: 1, key_count: 1, expires: 0, avg_ttl_ms: 0 },
+    ]);
+    scanKeysMock.mockImplementation(async () => ({
+      cursor: database === 0 ? 41 : 0,
+      keys: [{ key: database === 0 ? "db-zero" : "db-one", key_type: "string", ttl_ms: -1, size: 5 }],
+      node_failures: [],
+      has_more: database === 0,
+    }));
+    selectDatabaseMock.mockImplementation(async (input) => {
+      database = input.database;
+      return { ...localProfile, database };
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByRole("button", { name: "db-zero" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 db-zero" }));
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "string" } });
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Database" }));
+    fireEvent.click(await screen.findByRole("button", { name: "切换到数据库 1" }));
+    await screen.findByText("当前数据库：1");
+    fireEvent.click(screen.getByRole("button", { name: "Browser" }));
+
+    expect(await screen.findByRole("button", { name: "db-one" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "db-zero" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择键 db-one" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "批量删除" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    expect(screen.getByLabelText("键过滤")).toHaveValue("*");
+    expect(screen.getByLabelText("类型过滤")).toHaveValue("");
+    expect(selectDatabaseMock).toHaveBeenCalledWith({ connection_id: "local", database: 1 });
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", cursor: 0, pattern: "*", count: 100, key_type: null,
+    });
+  });
+
+  it("数据库切换尚未完成就返回 Browser，完成后仍加载新数据库并清除旧选择", async () => {
+    let database = 0;
+    let finishSwitch!: (profile: typeof localProfile) => void;
+    const switching = new Promise<typeof localProfile>((resolve) => { finishSwitch = resolve; });
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    getDatabaseOverviewMock.mockResolvedValue([
+      { database: 0, key_count: 1, expires: 0, avg_ttl_ms: 0 },
+      { database: 1, key_count: 1, expires: 0, avg_ttl_ms: 0 },
+    ]);
+    scanKeysMock.mockImplementation(async () => ({
+      cursor: 0,
+      keys: [{ key: database === 0 ? "db-zero" : "db-one", key_type: "string", ttl_ms: -1, size: 5 }],
+      node_failures: [],
+      has_more: false,
+    }));
+    selectDatabaseMock.mockReturnValue(switching);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByRole("button", { name: "db-zero" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 db-zero" }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Database" }));
+    fireEvent.click(await screen.findByRole("button", { name: "切换到数据库 1" }));
+    expect(selectDatabaseMock).toHaveBeenCalledWith({ connection_id: "local", database: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Browser" }));
+    expect(screen.getByRole("checkbox", { name: "选择键 db-zero" })).toBeChecked();
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      database = 1;
+      finishSwitch({ ...localProfile, database: 1 });
+      await switching;
+    });
+
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(await screen.findByRole("button", { name: "db-one" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "db-zero" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择键 db-one" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "批量删除" })).toBeDisabled();
+    expect(scanKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", cursor: 0, pattern: "*", count: 100, key_type: null,
+    });
+  });
+
   it("从其他工作区也能通过快捷键返回，切换连接后使用新连接", async () => {
     const remoteProfile = { ...localProfile, id: "remote", name: "远程 Redis", host: "192.0.2.10" };
     listConnectionsMock.mockResolvedValue([localProfile, remoteProfile]);
+    scanKeysMock.mockImplementation(async ({ connection_id }) => ({
+      cursor: 0,
+      keys: [{ key: connection_id === "local" ? "local-key" : "remote-key", key_type: "string", ttl_ms: -1, size: 5 }],
+      node_failures: [],
+      has_more: false,
+    }));
     render(<App />);
 
     fireEvent.click((await screen.findAllByRole("button", { name: "连接" }))[0]);
-    await screen.findByRole("heading", { name: "数据浏览" });
+    await screen.findByRole("button", { name: "local-key" });
     fireEvent.click(screen.getByRole("button", { name: "Workbench" }));
     await screen.findByRole("textbox", { name: "Redis 命令" });
     fireEvent.keyDown(window, { key: "1", metaKey: true });
@@ -368,6 +531,8 @@ describe("Redix 应用壳", () => {
     await screen.findByRole("heading", { name: "数据浏览" });
     expect(closeConnectionMock).toHaveBeenCalledWith("local");
     expect(screen.getByText(/当前连接：/)).toHaveTextContent("远程 Redis · 192.0.2.10:6379");
+    expect(await screen.findByRole("button", { name: "remote-key" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "local-key" })).not.toBeInTheDocument();
     await waitFor(() => expect(scanKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ connection_id: "remote" })));
   });
 

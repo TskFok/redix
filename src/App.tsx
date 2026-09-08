@@ -404,8 +404,13 @@ export default function App() {
               {`当前连接：${activeProfile.name} · ${connectionAddress(activeProfile)}`}
             </p>
           ) : null}
-          {canAccessWorkspace && activeProfile && activeSection === "browser" ? (
-            <BrowserPage connectionId={activeProfile.id} scanCount={settings.scan_count} />
+          {canAccessWorkspace && activeProfile ? (
+            <BrowserPage
+              key={JSON.stringify([activeProfile.id, activeProfile.database])}
+              connectionId={activeProfile.id}
+              scanCount={settings.scan_count}
+              active={activeSection === "browser"}
+            />
           ) : null}
           {canAccessWorkspace && activeProfile && activeSection === "search-query" ? (
             <SearchPage connectionId={activeProfile.id} />

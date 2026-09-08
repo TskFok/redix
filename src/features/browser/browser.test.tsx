@@ -1402,18 +1402,12 @@ describe("Redis Browser", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("新增 String 键并在创建完成后刷新列表", async () => {
+  it("新增 String 键后直接加入列表，不重新扫描", async () => {
     const created = {
       ...stringDetail,
       key: "new:user",
     };
-    scanKeysMock
-      .mockResolvedValueOnce({ cursor: 0, keys: [], node_failures: [], has_more: false })
-      .mockResolvedValueOnce({
-        cursor: 0,
-        keys: [{ ...stringSummary, key: "new:user" }],
-        node_failures: [], has_more: false,
-      });
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     createKeyMock.mockResolvedValue(created);
 
     render(<BrowserPage connectionId="local" />);
@@ -1434,18 +1428,15 @@ describe("Redis Browser", () => {
         value: { String: { value: "Alice" } },
         ttl_ms: null,
       });
-      expect(scanKeysMock).toHaveBeenCalledTimes(2);
     });
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 new:" }));
     expect(screen.getByRole("button", { name: "new:user" })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "新增键" })).not.toBeInTheDocument();
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
   });
 
-  it.each([false, true])("新增键成功刷新后恢复入口焦点，尊重用户主动移焦（%s）", async (focusMoved) => {
-    const refresh = deferred<ScanPage>();
-    scanKeysMock
-      .mockResolvedValueOnce({ cursor: 0, keys: [], node_failures: [], has_more: false })
-      .mockReturnValueOnce(refresh.promise);
+  it("新增键成功后立即恢复入口焦点且不触发加载", async () => {
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
     createKeyMock.mockResolvedValue({ ...stringDetail, key: "new:user" });
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("没有匹配的键。");
@@ -1458,20 +1449,86 @@ describe("Redis Browser", () => {
     fireEvent.click(submit);
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "新增键" })).not.toBeInTheDocument());
-    expect(trigger).toBeDisabled();
-    // jsdom neither blurs newly disabled buttons nor allows blur() while disabled.
-    (trigger as HTMLButtonElement).disabled = false;
-    trigger.blur();
-    (trigger as HTMLButtonElement).disabled = true;
-    if (focusMoved) {
-      const otherControl = screen.getByLabelText("键列表自动刷新");
-      otherControl.focus();
-      otherControl.blur();
-    }
-    expect(document.body).toHaveFocus();
-    await act(async () => refresh.resolve({ cursor: 0, keys: [], node_failures: [], has_more: false }));
     expect(trigger).toBeEnabled();
-    expect(focusMoved ? document.body : trigger).toHaveFocus();
+    expect(trigger).toHaveFocus();
+    expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument();
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("新增键保留已加载分页、展开状态、勾选和当前详情", async () => {
+    scanKeysMock.mockReset()
+      .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true })
+      .mockResolvedValueOnce({ cursor: 84, keys: [{ ...stringSummary, key: "user:2" }], node_failures: [], has_more: true })
+      .mockResolvedValue({ cursor: 0, keys: [{ ...stringSummary, key: "user:4" }], node_failures: [], has_more: false });
+    createKeyMock.mockResolvedValue({ ...stringDetail, key: "user:3" });
+    render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    await screen.findByRole("button", { name: "user:2" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 user:2" }));
+    fireEvent.click(screen.getByRole("button", { name: "user:1" }));
+    await screen.findByDisplayValue("Alice");
+    fireEvent.click(screen.getByRole("button", { name: "新增键" }));
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "user:3" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+
+    expect(await screen.findByRole("button", { name: "user:3" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(screen.getByRole("checkbox", { name: "选择键 user:2" })).toBeChecked();
+    expect(screen.getByDisplayValue("Alice")).toBeInTheDocument();
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(getKeyMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    expect(await screen.findByRole("button", { name: "user:4" })).toBeEnabled();
+    expect(scanKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 84 }));
+    expect(screen.getByRole("button", { name: "user:3" })).toBeEnabled();
+  });
+
+  it("页面隐藏时暂停自动刷新，返回页面沿用列表", async () => {
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [stringSummary], node_failures: [], has_more: false });
+    const { rerender } = render(<BrowserPage connectionId="local" />);
+    fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
+    vi.useFakeTimers();
+    fireEvent.change(screen.getByLabelText("键列表自动刷新"), { target: { value: "2" } });
+    rerender(<BrowserPage connectionId="local" active={false} />);
+    await act(async () => { await vi.advanceTimersByTimeAsync(6000); });
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("heading", { name: "键列表" })).not.toBeInTheDocument();
+
+    rerender(<BrowserPage connectionId="local" active />);
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("调整扫描批量大小保留列表，下次加载更多才使用新大小", async () => {
+    scanKeysMock.mockReset()
+      .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true })
+      .mockResolvedValue({ cursor: 0, keys: [{ ...stringSummary, key: "user:2" }], node_failures: [], has_more: false });
+    const { rerender } = render(<BrowserPage connectionId="local" scanCount={100} />);
+    fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
+    rerender(<BrowserPage connectionId="local" scanCount={250} />);
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
+    expect(await screen.findByRole("button", { name: "user:2" })).toBeEnabled();
+    expect(scanKeysMock).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: 42, count: 250 }));
+  });
+
+  it("切页期间完成的扫描保留结果，返回后不重复请求", async () => {
+    const scan = deferred<ScanPage>();
+    scanKeysMock.mockReturnValueOnce(scan.promise);
+    const { rerender } = render(<BrowserPage connectionId="local" />);
+    expect(screen.getByText("正在扫描键…")).toBeInTheDocument();
+    rerender(<BrowserPage connectionId="local" active={false} />);
+    await act(async () => scan.resolve({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true }));
+    rerender(<BrowserPage connectionId="local" active />);
+    fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "加载更多" })).toBeEnabled();
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
   });
 
   it("新增 Stream 键时生成 Stream DTO", async () => {
