@@ -171,7 +171,8 @@ fn search_command_rejects_empty_connection_id_before_connecting() {
             cmd: "list_search_indexes".into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            // 使用 Webview 的实际地址，兼容 Windows 的 http://tauri.localhost 来源。
+            url: webview.url().expect("test webview URL must be available"),
             body: serde_json::json!({ "connection_id": " " }).into(),
             headers: Default::default(),
             invoke_key: tauri::test::INVOKE_KEY.to_owned(),
@@ -207,7 +208,7 @@ fn open_connection_accepts_snake_case_connection_id_from_frontend() {
             cmd: "open_connection".into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            url: webview.url().expect("test webview URL must be available"),
             body: serde_json::json!({ "connection_id": "missing" }).into(),
             headers: Default::default(),
             invoke_key: tauri::test::INVOKE_KEY.to_owned(),
@@ -244,7 +245,7 @@ fn observability_commands_reach_redis_service_and_validate_inputs() {
             cmd: "get_slow_logs".into(),
             callback: tauri::ipc::CallbackFn(0),
             error: tauri::ipc::CallbackFn(1),
-            url: "tauri://localhost".parse().unwrap(),
+            url: webview.url().expect("test webview URL must be available"),
             body: serde_json::json!({
                 "input": {"connection_id": "missing", "count": 10}
             })
@@ -286,7 +287,7 @@ fn topology_commands_accept_snake_case_connection_id_and_reach_service() {
                 cmd: cmd.into(),
                 callback: tauri::ipc::CallbackFn(0),
                 error: tauri::ipc::CallbackFn(1),
-                url: "tauri://localhost".parse().unwrap(),
+                url: webview.url().expect("test webview URL must be available"),
                 body: serde_json::json!({"connection_id": "missing"}).into(),
                 headers: Default::default(),
                 invoke_key: tauri::test::INVOKE_KEY.to_owned(),
