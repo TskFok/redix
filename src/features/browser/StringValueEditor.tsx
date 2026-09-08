@@ -110,8 +110,8 @@ function StringValueEditorScope({ connectionId, keyName, disabled = false, onBus
     }
   }
 
-  return <section className="string-value-editor" aria-label="String 解码器" aria-busy={busy}>
-    <div className="detail-info-actions">
+  return <section className="module-details string-value-editor" aria-label="String 解码器" aria-busy={busy}>
+    <div className="string-value-toolbar">
       <label className="field"><span>值格式</span><Select aria-label="值格式" value={format} disabled={disabled || busy || dirty || !raw} onChange={(event) => void changeView(event.target.value as ValueFormat, compression)}>
         {FORMATS.map(([value, label]) => <option key={value} value={value} disabled={!!raw?.truncated && (isStructuredFormat(value) || value === "json")}>{label}</option>)}
       </Select></label>
@@ -129,7 +129,7 @@ function StringValueEditorScope({ connectionId, keyName, disabled = false, onBus
     {dirty && <p className="feedback">草稿未保存；保存或放弃修改后可切换格式。</p>}
     {error && <p className="feedback feedback-error" role="alert">{error}</p>}
     {notice && <p className="feedback" role="status">{notice}</p>}
-    <div className="detail-info-actions">
+    <div className="editor-actions">
       <button type="button" className="button button-primary" onClick={() => void save()} disabled={disabled || busy || !!readOnly || !hasDecoded || !dirty}>保存值</button>
       <button type="button" className="button button-secondary" disabled={disabled || busy || !dirty} onClick={() => { setDraft(decoded); setError(null); setNotice(null); }}>放弃修改</button>
     </div>

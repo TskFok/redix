@@ -2115,6 +2115,29 @@ input[type="checkbox"]:hover:not(:disabled) {
   gap: 16px;
 }
 
+.string-value-editor {
+  min-width: 0;
+}
+
+.string-value-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.string-value-toolbar > .field {
+  flex: 1 1 160px;
+}
+
+.string-value-toolbar > .button {
+  flex: 0 0 auto;
+}
+
+.string-value-editor > .feedback {
+  margin: 0;
+}
+
 .json-path-editor {
   display: grid;
   gap: 14px;
