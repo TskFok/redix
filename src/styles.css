@@ -1485,6 +1485,7 @@ input[type="checkbox"]:hover:not(:disabled) {
 
 .browser-detail-panel {
   padding: 20px;
+  scrollbar-gutter: stable;
 }
 
 .browser-panel-heading h2,

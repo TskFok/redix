@@ -199,9 +199,11 @@ export function KeyDetails({
   if (!detail) {
     return (
       <section className="browser-detail-panel browser-empty-details" aria-labelledby="key-details-title">
-        <div>
-          <p className="eyebrow">DETAILS</p>
-          <h2 id="key-details-title">键详情</h2>
+        <div className="browser-panel-heading">
+          <div>
+            <p className="eyebrow">DETAILS</p>
+            <h2 id="key-details-title">键详情</h2>
+          </div>
         </div>
         <p className="empty-detail-message" role={loading ? "status" : undefined}>
           {loading ? "正在读取键详情…" : "请选择一个键查看详情"}
