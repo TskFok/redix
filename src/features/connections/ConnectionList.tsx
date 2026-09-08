@@ -56,7 +56,7 @@ export function ConnectionList({
           >
             <div className="connection-card-heading">
               <div>
-                <h2>{profile.name}</h2>
+                <h3>{profile.name}</h3>
                 <p className="connection-address">
                   <code>
                     {connectionAddress(profile)}
@@ -109,18 +109,20 @@ export function ConnectionList({
               <button
                 type="button"
                 className="button button-secondary button-compact"
+                aria-label={`编辑 ${profile.name}`}
                 onClick={() => onEdit(profile)}
                 disabled={isOpening || isDeleting}
               >
-                编辑 {profile.name}
+                编辑
               </button>
               <button
                 type="button"
-                className="button button-danger button-compact"
+                className="button button-danger button-compact connection-delete-button"
+                aria-label={isDeleting ? "删除中…" : `删除 ${profile.name}`}
                 onClick={() => onDelete(profile)}
                 disabled={isOpening || isDeleting}
               >
-                {isDeleting ? "删除中…" : `删除 ${profile.name}`}
+                {isDeleting ? "删除中…" : "删除"}
               </button>
             </div>
           </article>

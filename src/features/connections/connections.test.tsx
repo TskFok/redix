@@ -129,6 +129,25 @@ describe("Redis 连接管理页面", () => {
     expect(screen.queryByLabelText("标签键 1")).not.toBeInTheDocument();
   });
 
+  it("无匹配连接时清除全部筛选并恢复列表和数量", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile, { ...localProfile, id: "two", name: "另一个 Redis" }]);
+    listConnectionTagsMock.mockResolvedValue({ local: [{ key: "env", value: "prod" }] });
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+
+    await screen.findByText("env=prod");
+    fireEvent.change(screen.getByLabelText("筛选连接标签"), { target: { value: "prod" } });
+    fireEvent.click(screen.getByLabelText("仅显示无标签连接"));
+    expect(screen.getByText("没有匹配标签的连接。")).toBeInTheDocument();
+    expect(screen.getByText("显示 0 / 2 个连接")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(screen.getByLabelText("筛选连接标签")).toHaveValue("");
+    expect(screen.getByLabelText("仅显示无标签连接")).not.toBeChecked();
+    expect(screen.getByText("本地 Redis")).toBeInTheDocument();
+    expect(screen.getByText("另一个 Redis")).toBeInTheDocument();
+    expect(screen.getByText("共 2 个连接")).toBeInTheDocument();
+  });
+
   it("无连接时显示新增提示并能打开连接表单", async () => {
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
 

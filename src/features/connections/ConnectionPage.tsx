@@ -320,6 +320,12 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
 
   const editingId = state.editingProfile?.id ?? "new";
   const visibleProfiles = tags ? filterConnectionsByTag(state.profiles, tags, tagQuery, onlyUntagged) : state.profiles;
+  const hasFilters = Boolean(tagQuery.trim()) || onlyUntagged;
+
+  const clearFilters = () => {
+    setTagQuery("");
+    setOnlyUntagged(false);
+  };
 
   return (
     <section
@@ -331,7 +337,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
     >
       {!formOpen ? (
         <>
-          <div className="page-heading">
+          <div className="page-heading connections-heading">
             <div>
               <p className="eyebrow">数据连接</p>
               <h2 id="connections-page-title">连接管理</h2>
@@ -393,25 +399,80 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
             <p className="loading-state" role="status" aria-live="polite">
               正在加载连接…
             </p>
-          ) : (<>
-            {tags && state.profiles.length > 0 && <div className="form-grid">
-              <label className="field"><span>筛选连接标签</span><input autoCapitalize="off" autoCorrect="off" value={tagQuery} placeholder="按标签键或值搜索，例如 env=prod" onChange={(event) => setTagQuery(event.target.value)} /></label>
-              <label className="field settings-checkbox"><span><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={onlyUntagged} onChange={(event) => setOnlyUntagged(event.target.checked)} />仅显示无标签连接</span></label>
-            </div>}
-            {tagsError && <p role="status">连接标签加载失败。<button type="button" className="button button-quiet" onClick={() => { void listConnectionTags().then(loaded => {setTags(loaded);setTagsError(false);}).catch(() => setTagsError(true)); }}>重试加载标签</button></p>}
-            {state.profiles.length > 0 && visibleProfiles.length === 0 ? <p className="empty-state">没有匹配标签的连接。</p> :
-            <ConnectionList
-              profiles={visibleProfiles}
-              tags={tags ?? undefined}
-              onTagsSaved={(id, updated) => setTags((current) => ({ ...current, [id]: updated }))}
-              activeId={activeId}
-              openingId={state.openingId}
-              deletingId={state.deletingId}
-              onAdd={handleAdd}
-              onEdit={handleEdit}
-              onOpen={(profile) => void handleOpen(profile)}
-              onDelete={(profile) => void handleDelete(profile)}
-            />}
+          ) : (
+            <>
+              {state.profiles.length > 0 && (
+                <div className="connections-toolbar" role="group" aria-label="连接筛选">
+                  {tags && (
+                    <div className="connections-filters">
+                      <label className="field connections-filter-search">
+                        <span>筛选连接标签</span>
+                        <input
+                          autoCapitalize="off"
+                          autoCorrect="off"
+                          value={tagQuery}
+                          placeholder="按标签键或值搜索，例如 env=prod"
+                          onChange={(event) => setTagQuery(event.target.value)}
+                        />
+                      </label>
+                      <label className="checkbox-field connections-filter-toggle">
+                        <input
+                          type="checkbox"
+                          checked={onlyUntagged}
+                          onChange={(event) => setOnlyUntagged(event.target.checked)}
+                        />
+                        <span>仅显示无标签连接</span>
+                      </label>
+                      {hasFilters && (
+                        <button type="button" className="button button-quiet" onClick={clearFilters}>
+                          清除筛选
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <p className="connections-count" aria-live="polite" aria-atomic="true">
+                    {hasFilters && tags
+                      ? `显示 ${visibleProfiles.length} / ${state.profiles.length} 个连接`
+                      : `共 ${state.profiles.length} 个连接`}
+                  </p>
+                </div>
+              )}
+              {tagsError && (
+                <div className="connections-tags-error" role="status">
+                  <span>连接标签加载失败。</span>
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    onClick={() => {
+                      void listConnectionTags().then((loaded) => {
+                        setTags(loaded);
+                        setTagsError(false);
+                      }).catch(() => setTagsError(true));
+                    }}
+                  >
+                    重试加载标签
+                  </button>
+                </div>
+              )}
+              {state.profiles.length > 0 && visibleProfiles.length === 0 ? (
+                <div className="empty-state connections-empty-filter">
+                  <h3>没有匹配标签的连接。</h3>
+                  <p>试试其他标签，或清除筛选查看全部连接。</p>
+                </div>
+              ) : (
+                <ConnectionList
+                  profiles={visibleProfiles}
+                  tags={tags ?? undefined}
+                  onTagsSaved={(id, updated) => setTags((current) => ({ ...current, [id]: updated }))}
+                  activeId={activeId}
+                  openingId={state.openingId}
+                  deletingId={state.deletingId}
+                  onAdd={handleAdd}
+                  onEdit={handleEdit}
+                  onOpen={(profile) => void handleOpen(profile)}
+                  onDelete={(profile) => void handleDelete(profile)}
+                />
+              )}
             </>
           )}
         </>
