@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkbenchPage from "./WorkbenchPage";
 import { currentCommandLine, filterCommandCatalog } from "./CommandSuggestions";
@@ -25,7 +25,10 @@ beforeEach(() => {
   ipc.deleteCommandHistory.mockResolvedValue(undefined);
   ipc.clearCommandHistory.mockResolvedValue(undefined);
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 describe("Workbench 高级交互", () => {
   it("跳过脚本整行注释但保留字符串中的井号", () => {
@@ -102,6 +105,31 @@ describe("Workbench 高级交互", () => {
     fireEvent.click(screen.getByRole("button", { name: "清空历史" }));
     await waitFor(() => expect(screen.queryByRole("list", { name: "命令历史" })).not.toBeInTheDocument());
     expect(ipc.clearCommandHistory).toHaveBeenCalledWith({ connection_id: "local" });
+  });
+
+  it("成功命令的历史保存失败显示可关闭的临时 Toast 且保留结果", async () => {
+    ipc.executeCommand.mockResolvedValue({ kind: "string", value: "PONG" });
+    ipc.saveCommandHistory.mockRejectedValue({ code: "PERSISTENCE_FAILED" });
+    render(<WorkbenchPage connectionId="local" />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Redis 命令" }), { target: { value: "PING" } });
+    fireEvent.click(screen.getByRole("button", { name: "执行" }));
+
+    expect(await screen.findByText("PONG")).toBeInTheDocument();
+    const alert = await screen.findByRole("alert");
+    expect(screen.getByRole("region", { name: "操作提示" })).toContainElement(alert);
+    expect(alert).toHaveTextContent("本地连接保存失败");
+    fireEvent.click(screen.getByRole("button", { name: "关闭提示" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("PONG")).toBeInTheDocument();
+
+    vi.useFakeTimers();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "执行" })));
+    expect(ipc.saveCommandHistory).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("alert")).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(3000));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("PONG")).toBeInTheDocument();
   });
 
   it("删除等待未完成的历史保存，避免旧保存恢复已删除条目", async () => {

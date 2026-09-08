@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import {
@@ -82,11 +84,11 @@ export function KeyDetails({
   const { confirm, confirmationDialog } = useConfirmDialog(
     JSON.stringify([connectionId, detail?.key, loading, busy, childBusy]),
   );
-  const [error, setError] = useState<string | null>(null);
-  const [jsonPathError, setJsonPathError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
+  const [jsonPathError, setJsonPathError, jsonPathErrorToken] = useFeedbackState<string | null>(null);
   const [searchIndexes, setSearchIndexes] = useState<KeySearchIndexSummary[]>([]);
   const [searchIndexesLoading, setSearchIndexesLoading] = useState(false);
-  const [searchIndexesError, setSearchIndexesError] = useState<string | null>(null);
+  const [searchIndexesError, setSearchIndexesError, searchIndexesErrorToken] = useFeedbackState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState(detail?.key ?? "");
   const [keyTtlDraft, setKeyTtlDraft] = useState("");
   const [detailTab, setDetailTab] = useState({ scope: "", id: "value" });
@@ -500,11 +502,12 @@ export function KeyDetails({
         </span>
       </div>
       {confirmationDialog}
+      {error ? <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} /> : null}
+      {searchIndexesError ? <Toast kind="error" message={searchIndexesError} onClose={() => setSearchIndexesError(null)} resetKey={searchIndexesErrorToken} /> : null}
       <KeyDetailsTabs
         key={detailScope}
         selectedTab={detailTab.scope === detailScope ? detailTab.id : "value"}
         onSelectTab={(id) => setDetailTab({ scope: detailScope!, id })}
-        feedback={error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
         tabs={[
           {
             id: "value",
@@ -577,6 +580,7 @@ export function KeyDetails({
                   value={detail.value.Json.value}
                   busy={uiBusy || loading}
                   error={jsonPathError}
+                  errorResetKey={jsonPathErrorToken}
                   rootDeleteMessage={`确定删除整个 JSON 键“${detail.key}”吗？`}
                   onRead={handleJsonPathRead}
                   onMutate={handleJsonPathMutate}
@@ -607,9 +611,7 @@ export function KeyDetails({
                   </div>
                   {searchIndexesLoading ? <span>读取中…</span> : null}
                 </div>
-                {searchIndexesError ? (
-                  <p className="inline-error" role="alert">{searchIndexesError}</p>
-                ) : searchIndexes.length > 0 ? (
+                {searchIndexes.length > 0 ? (
                   <ul className="key-search-index-list">
                     {searchIndexes.map((index) => (
                       <li key={index.name}>

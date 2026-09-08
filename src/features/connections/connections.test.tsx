@@ -378,13 +378,14 @@ describe("Redis 连接管理页面", () => {
     expect(importConnectionsMock).toHaveBeenCalledWith({
       content: '{"connections":[]}',
     });
-    const status = await screen.findByRole("status");
-    expect(status).toHaveTextContent("部分导入");
-    expect(status).toHaveTextContent("已忽略 1 个敏感字段");
-    expect(status).toHaveTextContent("Broken");
+    const alert = await screen.findByRole("alert");
+    expect(screen.getByRole("region", { name: "操作提示" })).toContainElement(alert);
+    expect(alert).toHaveTextContent("部分导入");
+    expect(alert).toHaveTextContent("已忽略 1 个敏感字段");
+    expect(alert).toHaveTextContent("Broken");
   });
 
-  it("导入时忽略敏感字段的提示持续显示", async () => {
+  it("导入时忽略敏感字段显示临时错误 Toast", async () => {
     importConnectionsMock.mockResolvedValue({
       imported: [localProfile],
       failed: [],
@@ -400,9 +401,9 @@ describe("Redis 连接管理页面", () => {
       });
     });
 
-    expect(screen.getByRole("status")).toHaveTextContent("已忽略 1 个敏感字段");
+    expect(screen.getByRole("alert")).toHaveTextContent("已忽略 1 个敏感字段");
     act(() => vi.advanceTimersByTime(3000));
-    expect(screen.getByRole("status")).toHaveTextContent("已忽略 1 个敏感字段");
+    expect(screen.queryByText("已忽略 1 个敏感字段")).not.toBeInTheDocument();
   });
 
   it("测试连接成功提示会自动消失", async () => {
@@ -496,7 +497,7 @@ describe("Redis 连接管理页面", () => {
     await waitFor(() => expect(testConnectionMock).toHaveBeenCalledTimes(1));
     expect(saveConnectionMock).not.toHaveBeenCalled();
     expect(openConnectionMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("status")).toHaveTextContent("Redis 8.4.0");
+    expect(await screen.findByRole("status")).toHaveTextContent("Redis 8.4.0");
   });
 
   it("提交前校验必填字段并在失败时显示可访问错误", async () => {
@@ -506,6 +507,22 @@ describe("Redis 连接管理页面", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("请输入连接名称");
     expect(saveConnectionMock).not.toHaveBeenCalled();
+  });
+
+  it("重复触发相同同步校验错误会重新开始 Toast 计时", async () => {
+    vi.useFakeTimers();
+    render(<ConnectionForm onSaved={vi.fn()} onCancel={vi.fn()} />);
+
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "保存并连接" })));
+    expect(screen.getByRole("alert")).toHaveTextContent("请输入连接名称");
+    act(() => vi.advanceTimersByTime(2000));
+
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "保存并连接" })));
+    act(() => vi.advanceTimersByTime(1000));
+    expect(screen.getByRole("alert")).toHaveTextContent("请输入连接名称");
+
+    act(() => vi.advanceTimersByTime(2000));
+    expect(screen.queryByText("请输入连接名称")).not.toBeInTheDocument();
   });
 
   it("编辑已有连接时空密码会保留旧 secret 标记", async () => {
@@ -850,7 +867,7 @@ describe("Redis 连接管理页面", () => {
     expect(saveConnectionMock).toHaveBeenCalledTimes(1);
     expect(openConnectionMock).toHaveBeenCalledWith(localProfile.id);
     expect(onOpenConnectionMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toHaveTextContent(
+    expect(await screen.findByRole("alert")).toHaveTextContent(
       "已保存连接，但打开失败，请重试",
     );
     expect(screen.queryByRole("heading", { name: "新增连接" })).not.toBeInTheDocument();

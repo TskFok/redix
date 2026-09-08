@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useEffect, useRef, useState } from "react";
 import { aggregateSearch, type AggregateFunction, type AggregateReducer, type SearchAggregateInput, type SearchAggregateResult } from "./aggregateApi";
 import "./aggregatePanel.css";
@@ -34,7 +36,7 @@ function AggregateEditor({ connectionId, index, enabled = true }: Props) {
   const [draft, setDraft] = useState<Draft>(initialDraft);
   const [result, setResult] = useState<SearchAggregateResult | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [retryOffset, setRetryOffset] = useState<number | null>(null);
   const sequence = useRef(0);
   const pending = useRef(false);
@@ -94,7 +96,7 @@ function AggregateEditor({ connectionId, index, enabled = true }: Props) {
     </div>
     <p className="browser-helper">最多 16 个加载字段、8 个分组、8 个聚合函数；响应最多 2 MiB、32 列、64 KiB/单元格。LIMIT 分页不是快照，数据变化或排序值相同时可能重复或遗漏；偏移上限 10,000。请求最多等待 5 秒，服务器仍可能继续执行。</p>
     <div className="aggregate-actions"><button type="button" className="button button-primary" disabled={disabled || busy} onClick={() => void run(0)}>{busy ? "聚合查询中…" : "运行聚合"}</button>{retryOffset !== null ? <button type="button" className="button button-secondary" disabled={disabled || busy} onClick={() => void run(retryOffset)}>重试聚合</button> : null}</div>
-    {error ? <p role="alert" className="error-message">{error}</p> : null}
+    {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
     {result ? <div className="aggregate-results" aria-busy={busy}>
       <p className="browser-helper">偏移 {result.offset} · 本页 {result.rows.length} 行{result.offset + result.rows.length > 10_000 ? " · 已达分页偏移上限" : ""}</p>
       {result.rows.length ? <div className="search-document-table-wrap"><table className="data-table"><thead><tr><th scope="col">行</th>{result.columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{result.rows.map((row, position) => <tr key={position}><td>{result.offset + position + 1}</td>{result.columns.map((column) => { const cell = row.fields.find((field) => field.name === column); return <td className="search-document-value" key={column}><pre>{!cell ? "—" : typeof cell.value === "string" ? cell.value : JSON.stringify(cell.value)}</pre></td>; })}</tr>)}</tbody></table></div> : <p>当前页没有聚合结果。</p>}

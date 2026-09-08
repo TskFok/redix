@@ -1,4 +1,5 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
 import { useEffect, useRef, useState } from "react";
 
 import {
@@ -172,14 +173,10 @@ export function DatabasePage({
       </div>
 
       {state.error ? (
-        <p className="inline-error" role="alert">
-          {state.error}
-        </p>
+        <Toast kind="error" message={state.error} resetKey={state} onClose={() => setState((current) => ({ ...current, error: null }))} />
       ) : null}
       {state.switchError ? (
-        <p className="inline-error" role="alert">
-          {state.switchError}
-        </p>
+        <Toast kind="error" message={state.switchError} resetKey={state} onClose={() => setState((current) => ({ ...current, switchError: null }))} />
       ) : null}
 
       {isCluster && <section className="database-panel"><p>Cluster 仅支持 DB 0，逐节点实例详情请在拓扑查看。</p><button type="button" className="button button-secondary" onClick={onOpenTopology}>查看 Cluster 拓扑</button></section>}

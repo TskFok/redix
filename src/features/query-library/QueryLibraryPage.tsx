@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
+import Toast from "../../components/Toast";
 
 import {
   deleteQueryLibraryItem,
@@ -188,11 +189,7 @@ export function QueryLibraryPage({ onFill }: QueryLibraryPageProps) {
 
       <QueryPackage disabled={state.loading || state.saving || deleting} onImported={(items) => setState((current) => ({ ...current, items: [...items, ...current.items] }))} />
 
-      {state.error ? (
-        <p className="feedback feedback-error" role="alert">
-          {state.error.message}
-        </p>
-      ) : null}
+      {state.error ? <Toast kind="error" message={state.error.message} resetKey={state} onClose={() => setState((current) => ({ ...current, error: null }))} /> : null}
 
       <label className="field query-library-search">
         <span>搜索</span>

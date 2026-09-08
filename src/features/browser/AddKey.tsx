@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -218,7 +220,7 @@ export function AddKey({
   const [vectorQuantization, setVectorQuantization] = useState("");
   const [vectorText, setVectorText] = useState("");
   const [ttlText, setTtlText] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const isBusy = busy || submitting;
   const dialogStateRef = useRef({ isBusy, onCancel });
@@ -525,11 +527,7 @@ export function AddKey({
             {submitting ? "创建中…" : "创建键"}
           </button>
         </div>
-        {error ? (
-          <p className="feedback feedback-error" role="alert">
-            {error}
-          </p>
-        ) : null}
+        {error ? <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} /> : null}
       </form>
     </div>, document.body,
   );

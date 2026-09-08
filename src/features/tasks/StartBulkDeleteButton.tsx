@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { BULK_TASKS_CHANGED, startBulkDelete } from "./bulkTaskApi";
 
 export default function StartBulkDeleteButton({ connectionId, keys, disabled }: { connectionId: string; keys: string[]; disabled: boolean }) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError, errorToken] = useFeedbackState("");
   const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([connectionId, keys, disabled]));
   const inFlight = useRef(false);
   const generation = useRef(0);
@@ -47,6 +49,6 @@ export default function StartBulkDeleteButton({ connectionId, keys, disabled }: 
       {busy ? "启动中…" : "后台批量删除"}
     </button>
     {confirmationDialog}
-    {error && <p role="alert">{error}</p>}
+    {error && <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError("")} />}
   </>;
 }

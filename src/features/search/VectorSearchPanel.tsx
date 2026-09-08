@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useEffect, useRef, useState } from "react";
 import type { SearchIndexAttribute, SearchVectorQueryResult } from "../../lib/types";
 import { searchVectorIndex } from "./searchVectorApi";
@@ -22,7 +24,7 @@ function VectorSearchForm({ connectionId, index, attributes, enabled }: Props) {
   const [count, setCount] = useState("5");
   const [filter, setFilter] = useState("*");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [result, setResult] = useState<SearchVectorQueryResult | null>(null);
   const generation = useRef(0);
   useEffect(() => () => { generation.current += 1; }, []);
@@ -70,7 +72,7 @@ function VectorSearchForm({ connectionId, index, attributes, enabled }: Props) {
     {!validFilter ? <p role="status">过滤条件不能为空，最多 4096 字节且不能包含控制字符。</p> : null}
     <code className="search-vector-preview">({filter})=&gt;[KNN {count} @{fieldName || "字段"} $向量 AS 距离]</code>
     <div><button type="button" className="button button-primary" disabled={!canRun} onClick={() => void execute()}>{busy ? "KNN 查询中…" : "执行 KNN 查询"}</button></div>
-    {error ? <p role="alert">{error}</p> : null}
+    {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
     {result ? <div aria-live="polite"><p>返回 {result.returned} / Top {result.count} · {result.distance_metric} 距离（越小越近）。HNSW 为近似近邻；超时或文档变化可能减少结果。</p>{result.matches.length ? <table className="data-table"><thead><tr><th>键</th><th>距离</th></tr></thead><tbody>{result.matches.map((match) => <tr key={match.key}><td>{match.key}</td><td>{match.distance}</td></tr>)}</tbody></table> : <p>没有匹配的向量文档。</p>}</div> : null}
   </section>;
 }

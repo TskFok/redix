@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { BULK_TASK_FINISHED, BULK_TASKS_CHANGED, cancelBulkTask, listBulkTasks, type BulkTask } from "./bulkTaskApi";
 const labels: Record<BulkTask["status"], string> = { running: "运行中", completed: "已完成", partial_failure: "部分失败", cancelled: "已取消" };
 export default function BulkTaskPanel() {
   const [tasks, setTasks] = useState<BulkTask[]>([]);
   const [error, setError] = useState("");
+  const [cancelError, setCancelError, cancelErrorToken] = useFeedbackState("");
   const [dismissed, setDismissed] = useState(false);
   const refreshRef = useRef<() => void>(() => {});
   useEffect(() => {
@@ -47,11 +50,13 @@ export default function BulkTaskPanel() {
     return () => { disposed = true; clearTimeout(timer); window.removeEventListener(BULK_TASKS_CHANGED, listener); };
   }, []);
   const cancel = async (id: string) => {
+    setCancelError("");
     try { await cancelBulkTask(id); refreshRef.current(); }
-    catch { setError("取消任务失败，请刷新后重试。"); }
+    catch { setCancelError("取消任务失败，请刷新后重试。"); }
   };
-  if (dismissed || (!error && tasks.every((task) => task.status === "completed"))) return null;
-  return <details className="database-panel bulk-task-panel" open>
+  return <>
+    {cancelError && <Toast kind="error" message={cancelError} resetKey={cancelErrorToken} onClose={() => setCancelError("")} />}
+    {!dismissed && (error || tasks.some((task) => task.status !== "completed")) ? <details className="database-panel bulk-task-panel" open>
     <summary>后台任务（{tasks.length}）</summary>
     <p className="browser-helper">任务只保留在本次应用会话。取消会等待已发送的命令返回，已删除的键不会恢复；失败项可能已生效，请核对后再操作。</p>
     <div className="form-actions">
@@ -65,5 +70,6 @@ export default function BulkTaskPanel() {
       <progress value={task.processed} max={task.total} aria-label="删除进度" />
       {task.status === "running" && <button className="button button-secondary" disabled={task.cancel_requested} onClick={() => void cancel(task.id)}>{task.cancel_requested ? "正在取消…" : "取消任务"}</button>}
     </article>)}
-  </details>;
+  </details> : null}
+  </>;
 }

@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useEffect, useRef, useState } from "react";
 import { decodeStringValue, encodeStringValue, getStringValue, setStringValue } from "./valueCodecApi";
 import { isStructuredFormat } from "./codecFormats";
@@ -33,8 +35,8 @@ function StringValueEditorScope({ connectionId, keyName, disabled = false, onBus
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [hasDecoded, setHasDecoded] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useTransientFeedback();
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
+  const [notice, setNotice, noticeToken] = useTransientFeedback();
   const generation = useRef(0);
   const writing = useRef(false);
   const mounted = useRef(false);
@@ -128,8 +130,8 @@ function StringValueEditorScope({ connectionId, keyName, disabled = false, onBus
     {loading && <p>正在读取和解码 String…</p>}
     {hasDecoded && <label className="field"><span>String 值</span><textarea autoCapitalize="off" autoCorrect="off" aria-label="String 值" rows={12} value={draft} spellCheck={false} readOnly={!!readOnly} disabled={disabled || busy} onChange={(event) => { setDraft(event.target.value); setError(null); setNotice(null); }} /></label>}
     {dirty && <p className="feedback">草稿未保存；保存或放弃修改后可切换格式。</p>}
-    {error && <p className="feedback feedback-error" role="alert">{error}</p>}
-    {notice && <p className="feedback" role="status">{notice}</p>}
+    {error && <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} />}
+    {notice && <Toast kind="success" message={notice} onClose={() => setNotice(null)} resetKey={noticeToken} />}
     <div className="editor-actions">
       <button type="button" className="button button-primary" onClick={() => void save()} disabled={disabled || busy || !!readOnly || !hasDecoded || !dirty}>保存值</button>
       <button type="button" className="button button-secondary" disabled={disabled || busy || !dirty} onClick={() => { setDraft(decoded); setError(null); setNotice(null); }}>放弃修改</button>

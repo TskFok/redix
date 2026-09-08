@@ -59,7 +59,7 @@ describe("String 原始字节解码与保存", () => {
     expect(encode).toHaveBeenCalledWith({ text: "00 01 02", format: "hex", compression: "none" });
     expect(save).toHaveBeenCalledTimes(1);
     expect(save).toHaveBeenCalledWith({ connection_id: "local", key: "binary", base64: "AAEC" });
-    expect(screen.getByRole("status")).toHaveTextContent("保留原 TTL");
+    expect(await screen.findByRole("status")).toHaveTextContent("保留原 TTL");
   });
   it("草稿未保存时阻止切换格式覆盖内容；失败保留草稿并隐藏底层错误", async () => {
     save.mockRejectedValue({ code: "COMMAND_FAILED", message: "secret" });

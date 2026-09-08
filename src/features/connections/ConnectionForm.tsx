@@ -1,5 +1,7 @@
 import Select from "../../components/Select";
 import { useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import {
@@ -213,8 +215,8 @@ export function ConnectionForm({
   const [values, setValues] = useState<ConnectionFormValues>(() =>
     formValuesFromProfile(initial),
   );
-  const [error, setError] = useState<string | null>(null);
-  const [testStatus, setTestStatus] = useTransientFeedback();
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
+  const [testStatus, setTestStatus, testStatusToken] = useTransientFeedback();
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -643,16 +645,8 @@ export function ConnectionForm({
           ) : null}
         </section>
 
-        {error ? (
-          <p className="feedback feedback-error" role="alert">
-            {error}
-          </p>
-        ) : null}
-        {testStatus ? (
-          <p className="feedback feedback-success" role="status" aria-live="polite">
-            {testStatus}
-          </p>
-        ) : null}
+        {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
+        {testStatus ? <Toast kind="success" message={testStatus} resetKey={testStatusToken} onClose={() => setTestStatus(null)} /> : null}
 
         <div className="form-actions">
           <button type="button" className="button button-quiet" onClick={onCancel} disabled={busy}>

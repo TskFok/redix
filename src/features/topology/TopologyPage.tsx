@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { getClusterTopology, refreshClusterTopology } from "../../lib/tauri";
 import type { ClusterTopology } from "../../lib/types";
 import { formatEndpoint } from "../connections/connectionState";
@@ -15,7 +17,7 @@ export default function TopologyPage({
 function TopologySession({ connectionId }: { connectionId: string }) {
   const [topology, setTopology] = useState<ClusterTopology | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
+  const [error, setError, errorToken] = useFeedbackState(false);
   const request = useRef(0);
   const active = useRef(false);
   const load = async (refresh: boolean) => {
@@ -67,10 +69,7 @@ function TopologySession({ connectionId }: { connectionId: string }) {
         </button>
       </div>
       {error && (
-        <p role="alert" className="inline-error">
-          无法加载 Cluster 拓扑，请刷新重试。
-          {topology ? "当前显示上次结果。" : ""}
-        </p>
+        <Toast kind="error" message={`无法加载 Cluster 拓扑，请刷新重试。${topology ? "当前显示上次结果。" : ""}`} resetKey={errorToken} onClose={() => setError(false)} />
       )}
       {topology && (
         <>

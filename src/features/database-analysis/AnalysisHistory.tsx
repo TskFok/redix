@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import type { DatabaseAnalysisReport } from "../../lib/types";
 import { deleteAnalysisHistory, getAnalysisHistory, listAnalysisHistory, saveAnalysisHistory,
   type AnalysisHistorySummary, type SavedAnalysis } from "./analysisHistoryApi";
@@ -35,8 +37,9 @@ export default function AnalysisHistory({ connectionId, database, report, render
   const [selected, setSelected] = useState<SavedAnalysis | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useTransientFeedback();
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
+  const [message, setMessage, messageToken] = useTransientFeedback();
+  const [partialReadError, setPartialReadError, partialReadErrorToken] = useFeedbackState<string | null>(null);
   const [trendReports, setTrendReports] = useState<SavedAnalysis[] | null>(null);
   const generation = useRef(0);
   const scope = JSON.stringify([connectionId, database]);
@@ -45,7 +48,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
 
   useEffect(() => {
     const token = ++generation.current;
-    setItems([]); setSelected(null); setDeleteId(null); setError(null); setMessage(null); setTrendReports(null); setBusy(true);
+    setItems([]); setSelected(null); setDeleteId(null); setError(null); setMessage(null); setPartialReadError(null); setTrendReports(null); setBusy(true);
     void listAnalysisHistory({ connection_id: connectionId, database })
       .then((result) => { if (token === generation.current && scopeRef.current === scope) setItems(result); })
       .catch(() => { if (token === generation.current && scopeRef.current === scope) setError("读取分析历史失败，本机文件可能损坏或不可访问；原文件不会被覆盖。"); })
@@ -57,7 +60,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
     if (busy) return;
     const token = ++generation.current;
     const isCurrent = () => generation.current === token && scopeRef.current === scope;
-    setBusy(true); setError(null); setMessage(null);
+    setBusy(true); setError(null); setMessage(null); setPartialReadError(null);
     try { await operation(isCurrent); }
     catch { if (isCurrent()) setError("历史记录操作失败，请检查本机文件权限或记录上限（每库 20 条、总计 50 条、单报告 256 KiB）。原有记录会保留。"); }
     finally { if (isCurrent()) setBusy(false); }
@@ -74,8 +77,9 @@ export default function AnalysisHistory({ connectionId, database, report, render
   return <section className="database-panel" aria-label="分析历史" aria-busy={busy}>
     <div className="database-panel-heading"><h3>分析历史</h3><button className="button button-secondary" disabled={busy || !report || report.database !== database} onClick={save}>保存当前分析</button></div>
     <p>报告可能包含键名与命名空间。仅点击保存后写入本机，不包含键值或连接凭据；每个数据库最多 20 条，全局最多 50 条。</p>
-    {error && <p className="inline-error" role="alert">{error}</p>}
-    {message && <p role="status">{message}</p>}
+    {error && <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} />}
+    {message && <Toast kind="success" message={message} resetKey={messageToken} onClose={() => setMessage(null)} />}
+    {partialReadError && <Toast kind="error" message={partialReadError} resetKey={partialReadErrorToken} onClose={() => setPartialReadError(null)} />}
     {busy && <p role="status">正在处理分析历史…</p>}
     {!busy && items.length === 0 && <p>当前数据库暂无已保存分析。</p>}
     <button type="button" className="button button-secondary" disabled={busy || items.length === 0} onClick={() => void run(async (isCurrent) => {
@@ -83,7 +87,7 @@ export default function AnalysisHistory({ connectionId, database, report, render
       if (!isCurrent()) return;
       const reports = results.flatMap((result) => result.status === "fulfilled" && result.value.connection_id === connectionId && result.value.report.database === database ? [result.value] : []);
       setTrendReports(reports);
-      if (reports.length !== results.length) setMessage("部分历史报告读取失败，趋势只包含成功读取的记录。", null);
+      if (reports.length !== results.length) setPartialReadError("部分历史报告读取失败，趋势只包含成功读取的记录。");
     })}>加载历史趋势</button>
     {trendReports && <AnalysisTrends key={JSON.stringify(trendReports.map((item) => item.id))} items={trendReports} current={report} />}
     {items.length > 0 && <div className="database-table-wrap"><table className="database-table" aria-label="已保存分析">

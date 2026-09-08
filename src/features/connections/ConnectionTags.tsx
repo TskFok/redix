@@ -1,4 +1,6 @@
 import { useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import {
   saveConnectionTags,
   type ConnectionTag,
@@ -41,7 +43,7 @@ export function ConnectionTagsPanel({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<ConnectionTag[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const save = async () => {
     const normalized = draft.map(({ key, value }) => ({ key: key.trim(), value: value.trim() }));
     if (
@@ -134,7 +136,7 @@ export function ConnectionTagsPanel({
               </button>
             </div>
           ))}
-          {error && <p role="alert" className="feedback feedback-error">{error}</p>}
+          {error && <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} />}
           <div className="connection-tag-actions">
             <button
               type="button"

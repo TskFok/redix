@@ -255,7 +255,7 @@ describe("Pending Claim", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("部分 Claim 结果在 3 秒后仍持续显示", async () => {
+  it("部分 Claim 结果作为错误提示并在 3 秒后消失", async () => {
     const claim = deferred<string[]>();
     claimMock.mockReturnValue(claim.promise);
     render(<StreamConsumerGroups connectionId="local" streamKey="events" />);
@@ -270,10 +270,10 @@ describe("Pending Claim", () => {
       claim.resolve([]);
     });
     await vi.waitFor(() => {
-      expect(screen.getByRole("status")).toHaveTextContent("已转移 0 / 1 条");
+      expect(screen.getByRole("alert")).toHaveTextContent("已转移 0 / 1 条");
     });
-    act(() => { vi.advanceTimersByTime(10_000); });
-    expect(screen.getByRole("status")).toHaveTextContent("已转移 0 / 1 条");
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("Claim 失败保留选中消息和目标，不显示底层错误", async () => {

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 import { getCollectionPage, mutateCollection, type CollectionEntry, type CollectionKind, type CollectionMutation, type CollectionPage } from "./collectionApi";
 import { browserErrorMessage } from "./browserState";
@@ -19,7 +21,7 @@ export function CollectionDetails(props: CollectionDetailsProps) {
 function CollectionDetailsSession({ connectionId, keyName, kind, disabled = false, onBusyChange, onChanged }: CollectionDetailsProps) {
   const [page, setPage] = useState<CollectionPage | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [cursor, setCursor] = useState("0");
   const [history, setHistory] = useState<string[]>([]);
   const [pattern, setPattern] = useState("*");
@@ -132,7 +134,7 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
       <label className="field"><span>{kind === "hash" ? "字段匹配模式" : "成员匹配模式"}</span><input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段匹配模式" : "成员匹配模式"} value={pattern} maxLength={4096} disabled={blocked} onChange={(event) => setPattern(event.target.value)} /></label>
       <button type="submit" className="button button-primary" disabled={blocked}>搜索</button>
     </form>}
-    {error && <p role="alert" className="feedback feedback-error">{error}</p>}
+    {error && <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} />}
     {busy && <p role="status" className="loading-state">正在处理集合数据…</p>}
     <div className="module-table-wrap"><table className="module-table"><thead><tr>
       {(kind === "hash" || kind === "list") && <th scope="col">{kind === "hash" ? "字段" : "索引"}</th>}

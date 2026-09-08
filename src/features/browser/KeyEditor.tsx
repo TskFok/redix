@@ -1,4 +1,6 @@
 import { useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 
 import type { RedisValue } from "../../lib/types";
 import {
@@ -60,7 +62,7 @@ export function KeyEditor({
     "Json" in value ? formatJson(value.Json.value) : "",
   );
   const [ttlDraft, setTtlDraft] = useState(() => (ttlMs >= 0 ? String(ttlMs) : ""));
-  const [validationError, setValidationError] = useState<string | null>(null);
+  const [validationError, setValidationError, validationErrorToken] = useFeedbackState<string | null>(null);
 
   const kind = redisValueKind(draft);
 
@@ -637,11 +639,12 @@ export function KeyEditor({
         </button>
       </div> : null}
 
-      {validationError || error ? (
-        <p className="feedback feedback-error" role="alert">
-          {validationError ?? error}
-        </p>
-      ) : null}
+      {validationError || error ? <Toast
+        kind="error"
+        message={validationError ?? error ?? ""}
+        onClose={validationError ? () => setValidationError(null) : undefined}
+        resetKey={validationError ? validationErrorToken : error}
+      /> : null}
 
       <div className="editor-actions">
         {showKeyActions ? <button

@@ -827,8 +827,8 @@ input[type="number"] {
   padding-left: 18px;
 }
 
-[role="alert"]:not(.feedback),
-[role="status"]:not(.feedback) {
+[role="alert"]:not(.feedback):not(.toast),
+[role="status"]:not(.feedback):not(.toast) {
   margin: 12px 0;
   padding: 10px 12px;
   border-left: 2px solid var(--color-border-strong);
@@ -838,11 +838,11 @@ input[type="number"] {
   line-height: 1.5;
 }
 
-[role="alert"]:not(.feedback) {
+[role="alert"]:not(.feedback):not(.toast) {
   border-left-color: var(--color-danger);
 }
 
-[role="status"]:not(.feedback) {
+[role="status"]:not(.feedback):not(.toast) {
   border-left-color: var(--color-primary);
 }
 

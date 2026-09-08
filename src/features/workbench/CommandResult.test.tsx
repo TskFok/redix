@@ -23,7 +23,7 @@ it("复制成功提示会自动消失", async () => {
   expect(screen.queryByText("已复制")).not.toBeInTheDocument();
 });
 
-it("复制失败提示持续显示", async () => {
+it("复制失败显示错误 Toast 并自动消失", async () => {
   vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) } });
   vi.useFakeTimers();
   render(<CommandResult result={{ kind: "string", value: "PONG" }} error={null} />);
@@ -32,6 +32,8 @@ it("复制失败提示持续显示", async () => {
     fireEvent.click(screen.getByRole("button", { name: "复制结果" }));
   });
 
+  expect(screen.getByRole("region", { name: "操作提示" })).toContainElement(screen.getByRole("alert"));
+  expect(screen.getByRole("alert")).toHaveTextContent("复制失败，请手动复制结果。");
   act(() => vi.advanceTimersByTime(3000));
-  expect(screen.getByRole("status")).toHaveTextContent("复制失败，请手动复制结果。");
+  expect(screen.queryByText("复制失败，请手动复制结果。")).not.toBeInTheDocument();
 });

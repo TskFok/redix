@@ -1,4 +1,5 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
 import { useEffect, useRef, useState } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 
@@ -454,7 +455,7 @@ export function VectorSetDetails({
           <button key={tab} type="button" role="tab" aria-selected={state.activeTab === tab} className={`module-tab${state.activeTab === tab ? " module-tab-active" : ""}`} onClick={() => setState((current) => ({ ...current, activeTab: tab }))} disabled={busy || disabled}>{label}</button>
         ))}
       </div>
-      {state.error ? <p className="feedback feedback-error" role="alert">{state.error}</p> : null}
+      {state.error ? <Toast kind="error" message={state.error} onClose={() => setState((current) => ({ ...current, error: null }))} resetKey={state} /> : null}
       {state.activeTab === "elements" ? (
         <div className="module-tab-content">
           <form className="module-action-card vector-add-card" onSubmit={(event) => void handleAddElement(event)}>

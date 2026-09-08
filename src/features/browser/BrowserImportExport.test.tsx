@@ -64,13 +64,13 @@ describe("键导入导出操作反馈", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("导出失败提示保留以供处理", async () => {
+  it("导出失败提示显示 3 秒后自动消失", async () => {
     exportKeys.mockRejectedValueOnce({ code: "COMMAND_FAILED" });
     renderActions();
     await exportSelected();
     expect(screen.getByRole("alert")).toBeInTheDocument();
-    act(() => { vi.advanceTimersByTime(10_000); });
-    expect(screen.getByRole("alert")).toBeInTheDocument();
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 });

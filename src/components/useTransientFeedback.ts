@@ -22,5 +22,5 @@ export function useTransientFeedback<T = string>() {
     return () => window.clearTimeout(timer);
   }, [feedback]);
 
-  return [feedback === null ? null : feedback.value, showFeedback] as const;
+  return [feedback === null ? null : feedback.value, showFeedback, feedback] as const;
 }

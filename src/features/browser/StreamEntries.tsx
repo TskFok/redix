@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useEffect, useRef, useState } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
@@ -51,8 +53,8 @@ function StreamEntriesScope({ connectionId, streamKey, disabled = false, onChang
   const [fieldsJson, setFieldsJson] = useState('[["field","value"]]');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useTransientFeedback();
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
+  const [notice, setNotice, noticeToken] = useTransientFeedback();
   const [refresh, setRefresh] = useState(0);
   const { confirm, confirmationDialog } = useConfirmDialog(
     JSON.stringify([connectionId, streamKey, disabled, loading, query, refresh, selected, entryId, fieldsJson]),
@@ -132,8 +134,8 @@ function StreamEntriesScope({ connectionId, streamKey, disabled = false, onChang
         <label className="field"><span>每页条数</span><Select aria-label="每页消息数" value={query.count} disabled={unavailable} onChange={(event) => setQuery({ ...query, count: Number(event.target.value), cursors: [null] })}>{[50, 100, 250, 500].map((count) => <option key={count} value={count}>{count}</option>)}</Select></label>
       </div>
     </div>
-    {error ? <p className="stream-feedback feedback feedback-error" role="alert">{error}</p> : null}
-    {notice ? <p className="stream-feedback stream-feedback-success" role="status">{notice}</p> : null}
+    {error ? <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} /> : null}
+    {notice ? <Toast kind="success" message={notice} onClose={() => setNotice(null)} resetKey={noticeToken} /> : null}
 
     <div className="stream-message-list">
       <div className="stream-table-wrap">

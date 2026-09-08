@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import type {
@@ -45,7 +47,8 @@ export function CommandResult({
   format = "text",
   onFormatChange,
 }: CommandResultProps) {
-  const [copyStatus, setCopyStatus] = useTransientFeedback();
+  const [copyStatus, setCopyStatus, copyStatusToken] = useTransientFeedback();
+  const [copyFailed, setCopyFailed, copyFailedToken] = useFeedbackState(false);
   const formattedResult = result ? formatResult(result.value, format) : null;
   const isLargeResult = Boolean(formattedResult && formattedResult.length > 2000);
   const hasBatchResults = batchResults.length > 0;
@@ -65,9 +68,11 @@ export function CommandResult({
     }
     try {
       await navigator.clipboard.writeText(copyValue);
+      setCopyFailed(false);
       setCopyStatus("已复制");
     } catch {
-      setCopyStatus("复制失败，请手动复制结果。", null);
+      setCopyStatus(null);
+      setCopyFailed(true);
     }
   };
 
@@ -149,11 +154,8 @@ export function CommandResult({
       ) : (
         <p className="workbench-empty-result">执行命令后，Redis 返回值会显示在这里。</p>
       )}
-      {copyStatus ? (
-        <p className="feedback feedback-success" role="status">
-          {copyStatus}
-        </p>
-      ) : null}
+      {copyStatus ? <Toast kind="success" message={copyStatus} resetKey={copyStatusToken} onClose={() => setCopyStatus(null)} /> : null}
+      {copyFailed ? <Toast kind="error" message="复制失败，请手动复制结果。" resetKey={copyFailedToken} onClose={() => setCopyFailed(false)} /> : null}
     </section>
   );
 }

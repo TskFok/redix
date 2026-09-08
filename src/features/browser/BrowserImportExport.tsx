@@ -1,4 +1,6 @@
 import { useRef, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import { exportKeys, importKeys } from "../../lib/tauri";
@@ -51,8 +53,8 @@ export function BrowserImportExport({
   disabled = false,
 }: BrowserImportExportProps) {
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [status, setStatus] = useTransientFeedback();
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
+  const [status, setStatus, statusToken] = useTransientFeedback();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleExport = async () => {
@@ -143,16 +145,8 @@ export function BrowserImportExport({
           disabled={isBusy}
         />
       </label>
-      {error ? (
-        <p className="feedback feedback-error browser-file-feedback" role="alert">
-          {error}
-        </p>
-      ) : null}
-      {status ? (
-        <p className="feedback feedback-success browser-file-feedback" role="status">
-          {status}
-        </p>
-      ) : null}
+      {error ? <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} /> : null}
+      {status ? <Toast kind="success" message={status} onClose={() => setStatus(null)} resetKey={statusToken} /> : null}
     </div>
   );
 }

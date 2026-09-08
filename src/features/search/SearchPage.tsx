@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 
@@ -223,7 +225,7 @@ export function SearchPage({ connectionId }: SearchPageProps) {
   const [infoLoading, setInfoLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [createDraft, setCreateDraft] = useState<SearchCreateDraft>(() => newCreateDraft());
-  const [createError, setCreateError] = useState<string | null>(null);
+  const [createError, setCreateError, createErrorToken] = useFeedbackState<string | null>(null);
   const [createBusy, setCreateBusy] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const mountedRef = useRef(false);
@@ -560,7 +562,10 @@ export function SearchPage({ connectionId }: SearchPageProps) {
 
       {capability.status === "ready" ? (
         <>
-          {pageError ? <p className="inline-error" role="alert">{pageError}</p> : null}
+          {pageError ? <Toast kind="error" message={pageError} resetKey={state.error ? state : createErrorToken} onClose={() => {
+            setState((current) => ({ ...current, error: null }));
+            setCreateError(null);
+          }} /> : null}
 
           {showCreate ? (
             <section className="database-panel search-create-panel" aria-labelledby="search-create-title">
@@ -623,7 +628,6 @@ export function SearchPage({ connectionId }: SearchPageProps) {
                 </button>
               </fieldset>
               {!vectorSupported ? <p className="browser-helper">VECTOR 索引需要 RedisSearch 2.4 或更高版本。</p> : null}
-              {createError ? <p className="inline-error" role="alert">{createError}</p> : null}
               <div className="form-actions">
                 <button type="button" className="button button-primary" onClick={() => void handleCreate()} disabled={mutationBusy}>
                   {createBusy ? "创建中…" : "创建索引"}

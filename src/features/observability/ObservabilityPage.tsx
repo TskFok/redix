@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
@@ -72,12 +74,12 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
   const [pubSubBusy, setPubSubBusy] = useState(false);
   const [publishChannel, setPublishChannel] = useState("events");
   const [publishMessage, setPublishMessage] = useState("");
-  const [publishFeedback, setPublishFeedback] = useTransientFeedback();
+  const [publishFeedback, setPublishFeedback, publishFeedbackToken] = useTransientFeedback();
   const [profilerSession, setProfilerSession] = useState<ProfilerSession | null>(null);
   const [profilerStatus, setProfilerStatus] = useState("idle");
   const [profilerEvents, setProfilerEvents] = useState<ProfilerEvent[]>([]);
   const [profilerBusy, setProfilerBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const sessionRef = useRef<PubSubSession | null>(null);
   const profilerSessionRef = useRef<ProfilerSession | null>(null);
   const requestRef = useRef(0);
@@ -471,11 +473,7 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
         </button>
       </div>
 
-      {error ? (
-        <p className="inline-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
 
       {isCluster ? (
         <p className="empty-state">Cluster 观察功能需要明确的节点作用域，当前尚未开放。</p>
@@ -504,6 +502,7 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
           pattern={topicPattern}
           publishChannel={publishChannel}
           publishFeedback={publishFeedback}
+          publishFeedbackToken={publishFeedbackToken}
           publishMessage={publishMessage}
           status={pubSubStatus}
           topicText={topicText}
@@ -698,6 +697,7 @@ interface PubSubPanelProps {
   pattern: boolean;
   publishChannel: string;
   publishFeedback: string | null;
+  publishFeedbackToken: unknown;
   publishMessage: string;
   status: string;
   topicText: string;
@@ -718,6 +718,7 @@ function PubSubPanel({
   pattern,
   publishChannel,
   publishFeedback,
+  publishFeedbackToken,
   publishMessage,
   status,
   topicText,
@@ -828,11 +829,7 @@ function PubSubPanel({
             发送
           </button>
         </div>
-        {publishFeedback ? (
-          <p className="feedback feedback-success" role="status">
-            {publishFeedback}
-          </p>
-        ) : null}
+        {publishFeedback ? <Toast kind="success" message={publishFeedback} resetKey={publishFeedbackToken} /> : null}
       </section>
 
       <section className="observability-panel" aria-labelledby="pubsub-message-list-title">
@@ -1011,13 +1008,13 @@ function createSessionId(prefix = "pubsub"): string {
 }
 
 function ExportButton({ label, disabled, output }: { label: string; disabled: boolean; output: () => ObservabilityExport }) {
-  const [error, setError] = useState(false);
+  const [error, setError, errorToken] = useFeedbackState(false);
   return <>
     <button type="button" className="button button-quiet button-compact" disabled={disabled} onClick={() => {
       setError(false);
       try { downloadObservabilityExport(output()); } catch { setError(true); }
     }}>{label}</button>
-    {error ? <span role="alert">无法下载文件，请重试。</span> : null}
+    {error ? <Toast kind="error" message="无法下载文件，请重试。" resetKey={errorToken} onClose={() => setError(false)} /> : null}
   </>;
 }
 

@@ -1,5 +1,7 @@
 import Select from "../../components/Select";
 import { useEffect, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 
 import { saveAppSettings } from "../../lib/tauri";
 import type { AppSettings } from "../../lib/types";
@@ -16,7 +18,7 @@ interface SettingsPageProps {
 export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
   const [draft, setDraft] = useState<AppSettings>(settings);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
 
   useEffect(() => {
     setDraft(settings);
@@ -52,11 +54,7 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
         </div>
       </div>
 
-      {error ? (
-        <p className="feedback feedback-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
 
       <div className="settings-layout">
         <section className="settings-panel" aria-labelledby="appearance-settings-title">

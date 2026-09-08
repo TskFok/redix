@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useTransientFeedback } from "../../components/useTransientFeedback";
 import { BULK_TASK_FINISHED, type BulkTask } from "../tasks/bulkTaskApi";
 import { useAutoRefresh } from "./useAutoRefresh";
 import StartBulkDeleteButton from "../tasks/StartBulkDeleteButton";
@@ -34,7 +36,10 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
   const [state, setState] = useState<BrowserPageState>(() => ({
     ...initialBrowserPageState,
   }));
-  const [bulkChanged, setBulkChanged] = useState(false);
+  const [bulkFeedback, setBulkFeedback, bulkFeedbackToken] = useTransientFeedback<{
+    kind: "success" | "error";
+    message: string;
+  }>();
   const [refreshSeconds, setRefreshSeconds] = useState(0);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
@@ -260,7 +265,7 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
     if (state.loading) {
       return;
     }
-    setBulkChanged(false);
+    setBulkFeedback(null);
     void scanPage(0, state.pattern.trim() || "*", true);
   };
 
@@ -285,22 +290,21 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
   };
 
   useEffect(() => {
-    setBulkChanged(false);
-    let noticeTimer: number | undefined;
+    setBulkFeedback(null);
     const completed = (event: Event) => {
       const task = (event as CustomEvent<BulkTask>).detail;
       if (task.connection_id !== connectionId) return;
       setState((current) => ({ ...current, selectedKeys: [] }));
-      setBulkChanged(true);
-      window.clearTimeout(noticeTimer);
-      noticeTimer = window.setTimeout(() => setBulkChanged(false), 2000);
+      setBulkFeedback({
+        kind: task.status === "completed" ? "success" : "error",
+        message: "后台删除已结束，选择已清除；列表可能已变化，请刷新查看最新结果。",
+      });
     };
     window.addEventListener(BULK_TASK_FINISHED, completed);
     return () => {
       window.removeEventListener(BULK_TASK_FINISHED, completed);
-      window.clearTimeout(noticeTimer);
     };
-  }, [connectionId]);
+  }, [connectionId, setBulkFeedback]);
 
   const handleBulkDeleted = () => {
     void scanPage(0, state.pattern.trim() || "*", true);
@@ -421,11 +425,12 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
       hidden={!active} style={active ? undefined : { display: "none" }}>
       <h2 id="browser-page-title" className="sr-only">数据浏览</h2>
 
-      {state.error ? (
-        <p className="feedback feedback-error" role="alert">
-          {state.error}
-        </p>
-      ) : null}
+      {state.error ? <Toast
+        kind="error"
+        message={state.error}
+        onClose={() => setState((current) => ({ ...current, error: null }))}
+        resetKey={state}
+      /> : null}
       {state.nodeFailures.length > 0 && <div className="feedback feedback-error" role="alert"><p>{state.nodeFailures.length} 个节点扫描失败，当前键列表为部分结果。</p><button type="button" className="button button-secondary" disabled={listBusy} onClick={state.hasMore ? handleLoadMore : handleRefresh}>{state.hasMore ? "继续扫描并重试" : "重新扫描并重试"}</button></div>}
 
       <div className="browser-actions" aria-label="Browser 操作">
@@ -447,7 +452,12 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
         >
           刷新键列表
         </button>
-        {bulkChanged && <p role="status">后台删除已结束，选择已清除；列表可能已变化，请刷新查看最新结果。</p>}
+        {bulkFeedback && <Toast
+          kind={bulkFeedback.kind}
+          message={bulkFeedback.message}
+          onClose={() => setBulkFeedback(null)}
+          resetKey={bulkFeedbackToken}
+        />}
         <label className="browser-auto-refresh">
           <span>键列表自动刷新</span>
           <Select value={refreshSeconds} onChange={(event) => setRefreshSeconds(Number(event.target.value))}>

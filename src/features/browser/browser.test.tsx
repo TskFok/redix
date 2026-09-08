@@ -900,12 +900,12 @@ describe("Redis Browser", () => {
     expect(screen.queryByText("没有匹配的键。")).not.toBeInTheDocument();
     expect(screen.queryByText("正在扫描键…")).not.toBeInTheDocument();
     expect(scanKeysMock).toHaveBeenCalledTimes(2);
-    if (reason === "请求失败") expect(screen.getByRole("alert")).toBeInTheDocument();
+    if (reason === "请求失败") expect(await screen.findByRole("alert")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "加载更多" }));
     expect(await screen.findByRole("button", { name: "events" })).toBeEnabled();
     expect(scanKeysMock.mock.calls[2][0].cursor).toBe(42);
-    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
   });
 
   it("勾选键后只导出一次，并通过 Blob 下载且不包含连接密码", async () => {

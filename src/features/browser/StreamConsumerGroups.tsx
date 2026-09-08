@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useConfirmDialog } from "../../components/useConfirmDialog";
@@ -42,7 +44,10 @@ export function StreamConsumerGroups({
   const [selectedPendingIds, setSelectedPendingIds] = useState<string[]>([]);
   const [claimConsumer, setClaimConsumer] = useState("");
   const [claimIdle, setClaimIdle] = useState("0");
-  const [claimNotice, setClaimNotice] = useTransientFeedback();
+  const [claimNotice, setClaimNotice, claimNoticeToken] = useTransientFeedback<{
+    kind: "success" | "error";
+    message: string;
+  }>();
   const scopeRef = useRef("");
   scopeRef.current = JSON.stringify([connectionId, streamKey, selectedGroupName]);
   const mutationRef = useRef(0);
@@ -51,7 +56,7 @@ export function StreamConsumerGroups({
   const [loading, setLoading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [detailsRefresh, setDetailsRefresh] = useState(0);
   const confirmationScope = JSON.stringify([
     connectionId, streamKey, selectedGroupName, consumers, selectedPendingIds,
@@ -328,10 +333,10 @@ export function StreamConsumerGroups({
       setSelectedPendingIds([]);
       await refresh();
       if (isCurrent()) {
-        setClaimNotice(
-          `已转移 ${claimed.length} / ${entries.length} 条；不满足空闲条件或已不在 Pending 的消息不会转移。`,
-          claimed.length === entries.length ? undefined : null,
-        );
+        setClaimNotice({
+          kind: claimed.length === entries.length ? "success" : "error",
+          message: `已转移 ${claimed.length} / ${entries.length} 条；不满足空闲条件或已不在 Pending 的消息不会转移。`,
+        });
       }
     } catch (caught) {
       if (isCurrent()) setError(browserErrorMessage(caught, "转移 Pending 消息失败，请稍后重试。"));
@@ -399,11 +404,7 @@ export function StreamConsumerGroups({
         </button>
       </form>
 
-      {error ? (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      ) : null}
+      {error ? <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} /> : null}
 
       <div className="stream-group-selector">
         <label className="field">
@@ -536,7 +537,12 @@ export function StreamConsumerGroups({
               转移选中 Pending
             </button>
           </div>
-          {claimNotice ? <p role="status">{claimNotice}</p> : null}
+          {claimNotice ? <Toast
+            kind={claimNotice.kind}
+            message={claimNotice.message}
+            onClose={() => setClaimNotice(null)}
+            resetKey={claimNoticeToken}
+          /> : null}
           {pending.length === 0 ? (
             <p className="stream-empty-state">
               {detailsLoading ? "正在加载 Pending…" : "当前 Group 没有 Pending 消息。"}

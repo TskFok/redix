@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
+import Toast from "../../components/Toast";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import {
@@ -35,7 +36,7 @@ interface ConnectionPageProps {
 }
 
 interface TransferFeedback {
-  kind: "success" | "warning";
+  kind: "success" | "error";
   message: string;
   details: string[];
 }
@@ -70,7 +71,7 @@ function transferFeedbackFromResult(result: ImportConnectionsResult): TransferFe
     details.push(`已忽略 ${result.ignored_secret_fields} 个敏感字段，需在本机重新录入。`);
   }
   return {
-    kind: result.failed.length > 0 ? "warning" : "success",
+    kind: result.failed.length > 0 || result.ignored_secret_fields > 0 ? "error" : "success",
     message:
       result.failed.length > 0
         ? `部分导入：成功 ${result.imported.length} 条，失败 ${result.failed.length} 条。`
@@ -85,7 +86,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
   }));
   const [formOpen, setFormOpen] = useState(false);
   const [transferBusy, setTransferBusy] = useState(false);
-  const [transferFeedback, setTransferFeedback] = useTransientFeedback<TransferFeedback>();
+  const [transferFeedback, setTransferFeedback, transferFeedbackToken] = useTransientFeedback<TransferFeedback>();
   const [tags, setTags] = useState<ConnectionTags | null>(null);
   const [tagsError, setTagsError] = useState(false);
   const [tagQuery, setTagQuery] = useState("");
@@ -330,10 +331,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
         }));
       }
       const feedback = transferFeedbackFromResult(result);
-      setTransferFeedback(
-        feedback,
-        feedback.kind === "warning" || result.ignored_secret_fields > 0 ? null : undefined,
-      );
+      setTransferFeedback(feedback);
     } catch (caught) {
       setState((current) => ({
         ...current,
@@ -399,28 +397,9 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
             </div>
           </div>
 
-          {state.error ? (
-            <p className="feedback feedback-error" role="alert">
-              {state.error}
-            </p>
-          ) : null}
+          {state.error ? <Toast kind="error" message={state.error} resetKey={state} onClose={() => setState((current) => ({ ...current, error: null }))} /> : null}
 
-          {transferFeedback ? (
-            <div
-              className={`transfer-feedback transfer-feedback-${transferFeedback.kind}`}
-              role="status"
-              aria-live="polite"
-            >
-              <strong>{transferFeedback.message}</strong>
-              {transferFeedback.details.length > 0 ? (
-                <ul>
-                  {transferFeedback.details.map((detail) => (
-                    <li key={detail}>{detail}</li>
-                  ))}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
+          {transferFeedback ? <Toast kind={transferFeedback.kind} message={transferFeedback.message} details={transferFeedback.details} resetKey={transferFeedbackToken} onClose={() => setTransferFeedback(null)} /> : null}
 
           {state.loading ? (
             <p className="loading-state" role="status" aria-live="polite">

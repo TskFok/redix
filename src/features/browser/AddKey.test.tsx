@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CreateArrayInput, CreateKeyInput, CreateVectorSetInput, KeyValue, RedisValue } from "../../lib/types";
@@ -99,6 +99,7 @@ describe("AddKey 示例数据", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     vi.resetAllMocks();
   });
 
@@ -227,6 +228,21 @@ describe("AddKey 示例数据", () => {
     fireEvent.click(screen.getByRole("button", { name: "创建键" }));
     expect(screen.getByRole("alert")).toHaveTextContent("键名不能为空");
     fillExample();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("重复触发相同错误时重新开始 3 秒倒计时", () => {
+    vi.useFakeTimers();
+    renderAddKey();
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    expect(screen.getByRole("alert")).toHaveTextContent("键名不能为空");
+
+    act(() => { vi.advanceTimersByTime(2000); });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    act(() => { vi.advanceTimersByTime(1000); });
+    expect(screen.getByRole("alert")).toHaveTextContent("键名不能为空");
+
+    act(() => { vi.advanceTimersByTime(2000); });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 

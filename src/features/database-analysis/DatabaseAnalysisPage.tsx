@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Toast from "../../components/Toast";
 import AnalysisHistory from "./AnalysisHistory";
 import AnalysisRecommendations from "./AnalysisRecommendations";
 
@@ -362,7 +363,8 @@ export function DatabaseAnalysisPage({ connectionId, activeDatabase }: DatabaseA
         </> : null}
         <button type="button" className="button button-quiet" disabled={job.pending} onClick={() => void job.recover()}>重新读取任务</button>
       </section>
-      {(state.error ?? job.error) ? <p className="inline-error" role="alert">{state.error ?? job.error}</p> : null}
+      {state.error ? <Toast kind="error" message={state.error} resetKey={state} onClose={() => setState((current) => ({ ...current, error: null }))} /> : null}
+      {job.error ? <Toast kind="error" message={job.error} resetKey={job.error} /> : null}
       {job.report ? <AnalysisResults report={job.report} /> : null}
       <AnalysisHistory key={JSON.stringify([connectionId, activeDatabase])} connectionId={connectionId} database={activeDatabase} report={job.report} renderReport={(report) => <AnalysisResults report={report} />} />
     </section>

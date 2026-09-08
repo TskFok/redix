@@ -1,4 +1,5 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
 import { useEffect, useRef, useState } from "react";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 
@@ -427,7 +428,7 @@ export function ArrayDetails({
         ))}
       </div>
 
-      {state.error ? <p className="feedback feedback-error" role="alert">{state.error}</p> : null}
+      {state.error ? <Toast kind="error" message={state.error} onClose={() => setState((current) => ({ ...current, error: null }))} resetKey={state} /> : null}
       {displayState ? <p className="loading-state" role="status">{displayState}</p> : null}
 
       {state.activeTab === "view" ? (

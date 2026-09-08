@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 
 import type {
@@ -18,6 +20,7 @@ interface JsonPathEditorProps {
   value: JsonValue;
   busy: boolean;
   error: string | null;
+  errorResetKey?: unknown;
   rootDeleteMessage?: string;
   onRead(path: string): Promise<JsonPathValue>;
   onMutate(mutation: JsonPathMutation): Promise<JsonMutationResult>;
@@ -52,14 +55,15 @@ export function JsonPathEditor({
   value,
   busy,
   error,
+  errorResetKey,
   rootDeleteMessage,
   onRead,
   onMutate,
 }: JsonPathEditorProps) {
   const [path, setPath] = useState("$");
   const [jsonDraft, setJsonDraft] = useState(() => formatJsonValue(value));
-  const [validationError, setValidationError] = useState<string | null>(null);
-  const [operationError, setOperationError] = useState<string | null>(null);
+  const [validationError, setValidationError, validationErrorToken] = useFeedbackState<string | null>(null);
+  const [operationError, setOperationError, operationErrorToken] = useFeedbackState<string | null>(null);
   const [readResult, setReadResult] = useState<JsonPathValue | null>(null);
   const [blockedReason, setBlockedReason] = useState<string | null>(null);
   const { confirm, confirmationDialog } = useConfirmDialog(
@@ -207,6 +211,11 @@ export function JsonPathEditor({
   };
 
   const visibleError = error ?? validationError ?? operationError;
+  const visibleErrorToken = error
+    ? errorResetKey ?? error
+    : validationError
+      ? validationErrorToken
+      : operationErrorToken;
 
   return (
     <section className="json-path-editor" aria-labelledby="json-path-editor-title" aria-busy={busy}>
@@ -268,9 +277,12 @@ export function JsonPathEditor({
         />
       </label>
 
-      {visibleError ? (
-        <p role="alert">{visibleError}</p>
-      ) : null}
+      {visibleError ? <Toast
+        kind="error"
+        message={visibleError}
+        onClose={error ? undefined : () => { setValidationError(null); setOperationError(null); }}
+        resetKey={visibleErrorToken}
+      /> : null}
 
       {readResult ? (
         <div className="json-path-result">

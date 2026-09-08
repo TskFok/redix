@@ -1,4 +1,6 @@
 import { useRef, useState, type ChangeEvent } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 import { exportQueryPackage, importQueryPackage } from "../../lib/localProductsApi";
 import type { QueryLibraryItem } from "../../lib/types";
@@ -8,8 +10,8 @@ const MAX_PACKAGE_BYTES = 10 * 1024 * 1024;
 export default function QueryPackage({ onImported, disabled = false }: {onImported(items: QueryLibraryItem[]): void; disabled?: boolean}) {
   const [busy,setBusy] = useState(false);
   const busyRef = useRef(false);
-  const [error,setError] = useState<string | null>(null);
-  const [message,setMessage] = useTransientFeedback();
+  const [error,setError,errorToken] = useFeedbackState<string | null>(null);
+  const [message,setMessage,messageToken] = useTransientFeedback();
   const run = async (action: () => Promise<void>, fallback: string) => {
     if (busyRef.current || disabled) return;
     busyRef.current = true; setBusy(true); setError(null); setMessage(null);
@@ -37,7 +39,7 @@ export default function QueryPackage({ onImported, disabled = false }: {onImport
       <button type="button" className="button button-secondary" disabled={busy || disabled} onClick={exportFile}>导出查询包</button>
     </div>
     <p className="panel-hint">查询包使用 Redix JSON 格式，导入后追加到当前查询库；不会执行命令。最多 500 条查询、文件上限 10 MiB。</p>
-    {error && <p role="alert" className="feedback feedback-error">{error}</p>}
-    {message && <p role="status">{message}</p>}
+    {error && <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} />}
+    {message && <Toast kind="success" message={message} resetKey={messageToken} onClose={() => setMessage(null)} />}
   </section>;
 }

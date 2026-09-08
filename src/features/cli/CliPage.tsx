@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { closeCliSession, executeCliCommand, openCliSession, type CliSessionInput } from "./cliApi";
 import { appendCliTranscript, cliError, type CliTranscriptEntry } from "./cliState";
 import "./cli.css";
@@ -16,7 +18,7 @@ function CliSessionView({ connectionId, database, isCluster = false, onRestart }
   const [command, setCommand] = useState("");
   const [busy, setBusy] = useState(false);
   const [entries, setEntries] = useState<CliTranscriptEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const active = useRef(true);
   const inFlight = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -96,7 +98,7 @@ function CliSessionView({ connectionId, database, isCluster = false, onRestart }
     </div>
     <p className="panel-hint cli-note">不自动保存命令或输出；内容可能含敏感数据。最多保留 200 条 / 2 MiB，单次输出上限 256 KiB。{isCluster ? "离开页面会关闭当前路由会话。" : "离开页面会关闭会话并丢弃未提交事务。"}</p>
     <p className="panel-hint cli-note">每条命令最多等待 5 秒；超时会丢弃连接且不会自动重试。{isCluster ? "订阅与 MONITOR 在 Cluster 中不支持。" : "订阅与 MONITOR 请使用运维观察。"}</p>
-    {error ? <p role="alert" className="feedback feedback-error">{error}</p> : null}
+    {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
     <div className="cli-terminal" role="log" aria-label="CLI 输出" aria-live="polite">
       {entries.length === 0 ? <p>Redis CLI · {status === "opening" ? "连接中…" : status === "closed" ? "会话已关闭" : "连接就绪"}</p> : null}
       {entries.map((entry, index) => <div key={index} className={entry.error ? "cli-entry cli-entry-error" : "cli-entry"}>

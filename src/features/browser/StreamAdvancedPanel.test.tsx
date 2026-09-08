@@ -60,7 +60,7 @@ it("高级Claim传递TIME、RETRYCOUNT、FORCE，展示影响并只返回成功I
   expect(await screen.findByText(/已转移 1 \/ 1 条/)).toBeInTheDocument();
 });
 
-it("完整 Claim 成功提示自动消失，部分 Claim 结果持续保留", async () => {
+it("完整与部分 Claim 提示均自动消失，部分结果显示为错误", async () => {
   render(<StreamAdvancedPanel {...props}/>);
   fireEvent.click(screen.getByRole("button",{name:"展开 Stream 高级操作"}));
   await screen.findByRole("checkbox",{name:"高级选择 Pending 1-0"});
@@ -75,9 +75,9 @@ it("完整 Claim 成功提示自动消失，部分 Claim 结果持续保留", as
   api.claimStreamPendingAdvanced.mockResolvedValueOnce([]);
   fireEvent.change(screen.getByLabelText("补充消息 ID"),{target:{value:"1-0"}});
   await act(async () => { fireEvent.click(screen.getByRole("button",{name:"执行高级 Claim"})); });
-  expect(screen.getByRole("status")).toHaveTextContent("已转移 0 / 1 条");
-  act(() => { vi.advanceTimersByTime(10_000); });
-  expect(screen.getByRole("status")).toHaveTextContent("已转移 0 / 1 条");
+  expect(screen.getByRole("alert")).toHaveTextContent("已转移 0 / 1 条");
+  act(() => { vi.advanceTimersByTime(3000); });
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
 it("切换Group后丢弃旧请求，错误不泄露服务端消息", async () => {

@@ -1,4 +1,6 @@
 import Select from "../../components/Select";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 import { useEffect, useId, useRef, useState } from "react";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 import {
@@ -49,8 +51,11 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
   const [force, setForce] = useState(false);
   const [explicitIds, setExplicitIds] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useTransientFeedback();
+  const [error, setError, errorToken] = useFeedbackState<string | null>(null);
+  const [message, setMessage, messageToken] = useTransientFeedback<{
+    kind: "success" | "error";
+    message: string;
+  }>();
   const busyRef = useRef(false);
   const tokenRef = useRef(0);
   const mounted = useRef(false);
@@ -101,7 +106,7 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
     void perform(async isCurrent => {
       await updateStreamGroupId({ ...target, last_delivered_id: id });
       if (!isCurrent()) return;
-      setMessage(`Group 最后投递 ID 已更新为 ${id}。`);
+      setMessage({ kind: "success", message: `Group 最后投递 ID 已更新为 ${id}。` });
       await onChanged();
     }, "更新 Group ID 失败，请检查 ID、Group 和访问权限后重试。");
   };
@@ -119,10 +124,10 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
         retry_count: retry, force });
       if (!isCurrent()) return;
       setSelected([]); setExplicitIds("");
-      setMessage(
-        `已转移 ${affected.length} / ${ids.length} 条；未满足条件或已被删除的消息不会返回。`,
-        affected.length === ids.length ? undefined : null,
-      );
+      setMessage({
+        kind: affected.length === ids.length ? "success" : "error",
+        message: `已转移 ${affected.length} / ${ids.length} 条；未满足条件或已被删除的消息不会返回。`,
+      });
       try {
         const result = await getStreamPendingPage(pageInput(history[history.length - 1], applied));
         if (!isCurrent()) return;
@@ -213,8 +218,13 @@ export default function StreamAdvancedPanel({ connectionId, streamKey, group, la
           <button type="button" className="button button-primary" disabled={locked || (!selected.length && !explicitIds.trim())} onClick={claim}>执行高级 Claim</button>
         </div>
       </section>
-      {error && <p role="alert" className="feedback feedback-error stream-feedback">{error}</p>}
-      {message && <p role="status" className="stream-feedback">{message}</p>}
+      {error && <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} />}
+      {message && <Toast
+        kind={message.kind}
+        message={message.message}
+        onClose={() => setMessage(null)}
+        resetKey={messageToken}
+      />}
     </div>}
   </section>;
 }

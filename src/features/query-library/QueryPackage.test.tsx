@@ -19,12 +19,13 @@ it.each(["导入", "导出"])("查询包%s成功提示自动消失", async (oper
       fireEvent.change(screen.getByLabelText("导入查询包文件"), { target: { files: [file] } });
     }
   });
+  expect(screen.getByRole("region", { name: "操作提示" })).toContainElement(screen.getByRole("status"));
   expect(screen.getByRole("status")).toHaveTextContent(`已${operation} 0 条查询`);
   act(() => { vi.advanceTimersByTime(3000); });
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });
 
-it("导入成功传回新增查询，错误文件不替换现有查询",async()=>{
+it("导入成功传回新增查询，错误文件显示临时 Toast 且不替换现有查询",async()=>{
   const onImported=vi.fn();
   api.importQueryPackage.mockResolvedValue([{id:"q",name:"读取",command:"GET x",tags:[],updated_at:1}]);
   render(<QueryPackage onImported={onImported}/>);
@@ -36,6 +37,7 @@ it("导入成功传回新增查询，错误文件不替换现有查询",async()=
   api.importQueryPackage.mockRejectedValue({message:"AUTH secret"});
   fireEvent.change(screen.getByLabelText("导入查询包文件"),{target:{files:[file]}});
   expect(await screen.findByRole("alert")).toHaveTextContent("导入失败");
+  expect(screen.getByRole("region", { name: "操作提示" })).toContainElement(screen.getByRole("alert"));
   expect(screen.getByRole("alert")).not.toHaveTextContent("secret");
   expect(onImported).toHaveBeenCalledTimes(1);
 });

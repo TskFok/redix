@@ -1,4 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import Toast from "../../components/Toast";
+import { useFeedbackState } from "../../components/useFeedbackState";
 
 import {
   executeCommand,
@@ -56,6 +58,7 @@ export function WorkbenchPage({
   const [suggestionIndex, setSuggestionIndex] = useState(-1);
   const [cursor, setCursor] = useState(0);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyError, setHistoryError, historyErrorToken] = useFeedbackState<string | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const pendingSelectionRef = useRef<number | null>(null);
   const historyQueueRef = useRef<Promise<unknown>>(Promise.resolve());
@@ -89,6 +92,7 @@ export function WorkbenchPage({
     setSuggestionIndex(-1);
     setCursor(0);
     setHistoryBusy(false);
+    setHistoryError(null);
     setState({
       ...initialWorkbenchPageState,
       format: defaultFormat,
@@ -104,11 +108,8 @@ export function WorkbenchPage({
       })
       .catch((caught) => {
         if (mountedRef.current && requestRef.current === requestId) {
-          setState((current) => ({
-            ...current,
-            catalogLoading: false,
-            error: normalizeWorkbenchError(caught),
-          }));
+          setState((current) => ({ ...current, catalogLoading: false }));
+          setHistoryError(normalizeWorkbenchError(caught).message);
         }
       });
 
@@ -124,10 +125,7 @@ export function WorkbenchPage({
       })
       .catch((caught) => {
         if (mountedRef.current && requestRef.current === requestId) {
-          setState((current) => ({
-            ...current,
-            error: normalizeWorkbenchError(caught),
-          }));
+          setHistoryError(normalizeWorkbenchError(caught).message);
         }
       });
   }, [normalizedConnectionId]);
@@ -198,10 +196,7 @@ export function WorkbenchPage({
       await pending;
     } catch (caught) {
       if (mountedRef.current && requestRef.current === requestId) {
-        setState((current) => ({
-          ...current,
-          error: normalizeWorkbenchError(caught),
-        }));
+        setHistoryError(normalizeWorkbenchError(caught).message);
       }
     }
   };
@@ -224,6 +219,7 @@ export function WorkbenchPage({
     }
     const requestId = requestRef.current + 1;
     requestRef.current = requestId;
+    setHistoryError(null);
     setState((current) => ({
       ...current,
       command,
@@ -306,7 +302,7 @@ export function WorkbenchPage({
     const requestId = requestRef.current;
     const activeConnectionId = normalizedConnectionId;
     setHistoryBusy(true);
-    setState((current) => ({ ...current, error: null }));
+    setHistoryError(null);
     const pending = historyQueueRef.current.catch(() => undefined).then(() => entry
       ? deleteCommandHistory({ connection_id: activeConnectionId, command: entry.command, created_at: entry.created_at })
       : clearCommandHistory({ connection_id: activeConnectionId }));
@@ -320,7 +316,7 @@ export function WorkbenchPage({
       }
     } catch (caught) {
       if (mountedRef.current && requestRef.current === requestId) {
-        setState((current) => ({ ...current, error: normalizeWorkbenchError(caught) }));
+        setHistoryError(normalizeWorkbenchError(caught).message);
       }
     } finally {
       if (mountedRef.current && requestRef.current === requestId) setHistoryBusy(false);
@@ -353,6 +349,7 @@ export function WorkbenchPage({
           请先连接 Redis，再执行命令。
         </p>
       ) : null}
+      {historyError ? <Toast kind="error" message={historyError} resetKey={historyErrorToken} onClose={() => setHistoryError(null)} /> : null}
       {state.loading ? (
         <p className="loading-state" role="status" aria-live="polite">
           执行中…

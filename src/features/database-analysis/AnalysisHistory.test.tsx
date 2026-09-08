@@ -139,7 +139,7 @@ it("切换连接丢弃加载中的趋势，部分读取失败只显示有效记�
   await waitFor(() => expect(screen.queryByRole("region", { name: "本机历史趋势" })).not.toBeInTheDocument());
 });
 
-it("历史部分读取失败明确提示并不绘制不足两点的趋势", async () => {
+it("历史部分读取失败显示临时错误 Toast 并不绘制不足两点的趋势", async () => {
   vi.mocked(api.listAnalysisHistory).mockResolvedValue([summary, { ...summary, id: "broken" }]);
   vi.mocked(api.getAnalysisHistory).mockResolvedValueOnce({ id: "saved", connection_id: "one", saved_at: 1000, report }).mockRejectedValueOnce(new Error("unavailable"));
   render(<AnalysisHistory connectionId="one" database={0} report={report} renderReport={renderReport} />);
@@ -148,8 +148,9 @@ it("历史部分读取失败明确提示并不绘制不足两点的趋势", asyn
   await act(async () => {
     fireEvent.click(screen.getByRole("button", { name: "加载历史趋势" }));
   });
-  expect(screen.getByText(/部分历史报告读取失败/)).toBeInTheDocument();
+  expect(screen.getByRole("region", { name: "操作提示" })).toContainElement(screen.getByRole("alert"));
+  expect(screen.getByRole("alert")).toHaveTextContent("部分历史报告读取失败");
   expect(screen.queryByRole("img", { name: "历史已观察键数趋势" })).not.toBeInTheDocument();
   act(() => vi.advanceTimersByTime(3000));
-  expect(screen.getByText(/部分历史报告读取失败/)).toBeInTheDocument();
+  expect(screen.queryByText(/部分历史报告读取失败/)).not.toBeInTheDocument();
 });
