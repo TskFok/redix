@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use redix_lib::{
@@ -249,6 +249,87 @@ async fn cluster_routes_scans_all_primaries_and_reports_topology_and_analysis() 
             assert_eq!(value.value, serde_json::json!(format!("value-{index}")));
         }
 
+        // 不同 slot 的长度、过期时间和编码用于检查并发 Pipeline 回填时的键与响应对应关系。
+        let metadata_started = Instant::now();
+        let mut expected_metadata = HashMap::new();
+        for (index, key) in keys.iter().enumerate() {
+            let value = "x".repeat((index + 1) * 16);
+            let ttl_ms = if index % 2 == 0 {
+                -1
+            } else {
+                600_000 + index as i64 * 60_000
+            };
+            let expiration = if ttl_ms == -1 {
+                String::new()
+            } else {
+                format!(" PX {ttl_ms}")
+            };
+            service
+                .execute_command("cluster", &format!("SET {key} {value}{expiration}"))
+                .await
+                .unwrap();
+            let encoding = service
+                .execute_command("cluster", &format!("OBJECT ENCODING {key}"))
+                .await
+                .unwrap()
+                .value
+                .as_str()
+                .unwrap()
+                .to_owned();
+            expected_metadata.insert(key.clone(), (value.len() as u64, ttl_ms, encoding));
+        }
+
+        let metadata_page = service
+            .scan_keys(ScanKeysInput {
+                connection_id: "cluster".into(),
+                cursor: ScanCursor::Standalone(0),
+                pattern: format!("{prefix}:*"),
+                count: 1_000,
+                key_type: None,
+            })
+            .await
+            .unwrap();
+        assert!(metadata_page.node_failures.is_empty());
+        assert_eq!(metadata_page.keys.len(), keys.len());
+        assert_eq!(
+            metadata_page
+                .keys
+                .iter()
+                .map(|key| &key.key)
+                .collect::<HashSet<_>>(),
+            keys.iter().collect::<HashSet<_>>()
+        );
+        assert!(
+            metadata_page
+                .keys
+                .iter()
+                .map(|key| redis_slot(&key.key))
+                .collect::<HashSet<_>>()
+                .len()
+                > 1,
+            "同一 SCAN 页必须包含多个 slot 才能验证集群 Pipeline 分组"
+        );
+        let elapsed_ms = metadata_started.elapsed().as_millis() as i64 + 2_000;
+        for summary in &metadata_page.keys {
+            let (size, ttl_ms, encoding) = &expected_metadata[&summary.key];
+            assert_eq!(summary.key_type, "string", "{}", summary.key);
+            assert_eq!(summary.size, Some(*size), "{}", summary.key);
+            if *ttl_ms == -1 {
+                assert_eq!(summary.ttl_ms, -1, "{}", summary.key);
+            } else {
+                assert!(
+                    (*ttl_ms - elapsed_ms..=*ttl_ms).contains(&summary.ttl_ms),
+                    "{} 的 TTL 响应错位：{}，预期接近 {}",
+                    summary.key,
+                    summary.ttl_ms,
+                    ttl_ms
+                );
+            }
+            assert_eq!(summary.encoding.as_ref(), Some(encoding), "{}", summary.key);
+            assert!(summary.memory_bytes.is_some_and(|bytes| bytes > 0));
+            assert!(summary.idle_seconds.is_some());
+        }
+
         let mut cursor = ScanCursor::Standalone(0);
         let mut found = HashSet::new();
         let mut observed_opaque_has_more = false;
@@ -347,6 +428,174 @@ async fn cluster_routes_scans_all_primaries_and_reports_topology_and_analysis() 
     }
     service.close_connection("cluster").await.unwrap();
     flow
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "由 scripts/test-local-cluster.py 设置 REDIX_TEST_REDIS_CLUSTER_URLS"]
+async fn cluster_scan_pipeline_handles_asking_during_slot_migration() {
+    let seeds = std::env::var("REDIX_TEST_REDIS_CLUSTER_URLS")
+        .expect("cluster launcher must set REDIX_TEST_REDIS_CLUSTER_URLS");
+    let service = cluster_service(&seeds);
+    service.open_connection("cluster").await.unwrap();
+    let topology = service.get_cluster_topology("cluster").await.unwrap();
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let prefix = format!("redix:asking:{{migration-{suffix}}}");
+    let keys = [format!("{prefix}:short"), format!("{prefix}:long")];
+    let values = ["short".to_owned(), "long".repeat(20)];
+    let slot = redis_slot(&keys[0]);
+    let source = topology
+        .nodes
+        .iter()
+        .find(|node| {
+            node.role == ClusterNodeRole::Primary
+                && node
+                    .slots
+                    .iter()
+                    .any(|range| range.start <= slot && slot <= range.end)
+        })
+        .unwrap();
+    let target = topology
+        .nodes
+        .iter()
+        .find(|node| node.role == ClusterNodeRole::Primary && node.id != source.id)
+        .unwrap();
+    let mut source_connection = redis::Client::open(format!(
+        "redis://{}:{}/",
+        source.endpoint.host, source.endpoint.port
+    ))
+    .unwrap()
+    .get_multiplexed_async_connection()
+    .await
+    .unwrap();
+    let mut target_connection = redis::Client::open(format!(
+        "redis://{}:{}/",
+        target.endpoint.host, target.endpoint.port
+    ))
+    .unwrap()
+    .get_multiplexed_async_connection()
+    .await
+    .unwrap();
+
+    // 所有迁槽后的检查都在清理之后断言，失败时也必须恢复共享测试集群。
+    let started = Instant::now();
+    let flow = async {
+        for (key, value) in keys.iter().zip(&values) {
+            redis::cmd("SET")
+                .arg(key)
+                .arg(value)
+                .arg("PX")
+                .arg(600_000)
+                .query_async::<String>(&mut source_connection)
+                .await?;
+        }
+        redis::cmd("CLUSTER")
+            .arg("SETSLOT")
+            .arg(slot)
+            .arg("IMPORTING")
+            .arg(&source.id)
+            .query_async::<String>(&mut target_connection)
+            .await?;
+        redis::cmd("CLUSTER")
+            .arg("SETSLOT")
+            .arg(slot)
+            .arg("MIGRATING")
+            .arg(&target.id)
+            .query_async::<String>(&mut source_connection)
+            .await?;
+        for key in &keys {
+            redis::cmd("MIGRATE")
+                .arg(&target.endpoint.host)
+                .arg(target.endpoint.port)
+                .arg(key)
+                .arg(0)
+                .arg(5_000)
+                .query_async::<String>(&mut source_connection)
+                .await?;
+        }
+        // Slot 所有者仍为 source，键已在 target；每次元数据读取都必须处理 ASK。
+        let page = service
+            .scan_keys(ScanKeysInput {
+                connection_id: "cluster".into(),
+                cursor: ScanCursor::Standalone(0),
+                pattern: format!("{prefix}:*"),
+                count: 1_000,
+                key_type: None,
+            })
+            .await;
+        let all_keys = service
+            .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
+                connection_id: "cluster".into(),
+                pattern: format!("{prefix}:*"),
+                count: 1_000,
+                key_type: None,
+            })
+            .await;
+        Ok::<_, redis::RedisError>((page, all_keys))
+    }
+    .await;
+
+    let mut cleanup_errors = Vec::new();
+    for key in &keys {
+        // IMPORTING 节点需逐条 ASKING 后删除；不能对清理命令使用普通 Pipeline。
+        let _ = redis::cmd("ASKING")
+            .query_async::<String>(&mut target_connection)
+            .await;
+        if let Err(error) = redis::cmd("DEL")
+            .arg(key)
+            .query_async::<u64>(&mut target_connection)
+            .await
+        {
+            cleanup_errors.push(error);
+        }
+    }
+    for connection in [&mut source_connection, &mut target_connection] {
+        if let Err(error) = redis::cmd("CLUSTER")
+            .arg("SETSLOT")
+            .arg(slot)
+            .arg("STABLE")
+            .query_async::<String>(connection)
+            .await
+        {
+            cleanup_errors.push(error);
+        }
+    }
+    for key in &keys {
+        if let Err(error) = redis::cmd("DEL")
+            .arg(key)
+            .query_async::<u64>(&mut source_connection)
+            .await
+        {
+            cleanup_errors.push(error);
+        }
+    }
+    service.close_connection("cluster").await.unwrap();
+    assert!(
+        cleanup_errors.is_empty(),
+        "迁槽清理失败：{cleanup_errors:?}"
+    );
+
+    let (page, all_keys) = flow.expect("迁槽测试准备失败");
+    let page = page.expect("迁槽中的单页 SCAN 应逐命令处理 ASK 后读取元数据");
+    assert!(page.node_failures.is_empty());
+    let all_keys = all_keys.expect("迁槽中的全量 SCAN 应逐命令处理 ASK 后读取元数据");
+    let elapsed_ms = started.elapsed().as_millis() as i64 + 2_000;
+    for summaries in [&page.keys, &all_keys] {
+        assert_eq!(summaries.len(), keys.len());
+        for (key, value) in keys.iter().zip(&values) {
+            let summary = summaries
+                .iter()
+                .find(|summary| &summary.key == key)
+                .unwrap();
+            assert_eq!(summary.key_type, "string");
+            assert_eq!(summary.size, Some(value.len() as u64));
+            assert!((600_000 - elapsed_ms..=600_000).contains(&summary.ttl_ms));
+            assert!(summary.memory_bytes.is_some_and(|bytes| bytes > 0));
+            assert!(summary.encoding.is_some());
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

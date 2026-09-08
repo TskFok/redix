@@ -7,11 +7,15 @@ use crate::{
 };
 
 use super::{
-    connection_manager::{key_size, map_command_error},
+    connection_manager::{key_size_command, map_command_error},
     RoutedConnection,
 };
+use ::redis::aio::ConnectionLike;
+use futures_util::{stream, StreamExt, TryStreamExt};
 
 const MAX_CLUSTER_SCAN_PAGE_BYTES: usize = 4 * 1024 * 1024;
+const SUMMARY_BATCH_SIZE: usize = 500;
+const SUMMARY_CLUSTER_CONCURRENCY: usize = 8;
 
 pub(crate) async fn collect_scan_pages<F, Fut>(mut scan: F) -> Result<Vec<KeySummary>, AppError>
 where
@@ -58,55 +62,178 @@ pub(crate) async fn load_key_summaries(
     keys: Vec<Vec<u8>>,
     requested_type: Option<&str>,
 ) -> Result<Vec<KeySummary>, AppError> {
+    let keys = keys
+        .into_iter()
+        .enumerate()
+        .map(|(index, key)| {
+            String::from_utf8(key)
+                .map(|key| (index, key))
+                .map_err(|_| AppError::InvalidInput)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let mut summaries = Vec::with_capacity(keys.len());
-    for raw_key in keys {
-        let key = String::from_utf8(raw_key.clone()).map_err(|_| AppError::InvalidInput)?;
-        let key_type: String = ::redis::cmd("TYPE")
-            .arg(&raw_key)
-            .query_async(connection)
-            .await
-            .map_err(map_command_error)?;
+    for batch in keys.chunks(SUMMARY_BATCH_SIZE) {
+        match connection {
+            RoutedConnection::Standalone(_) => {
+                summaries.extend(load_summary_batch(connection, batch, requested_type).await?);
+            }
+            RoutedConnection::Cluster(cluster) => {
+                // redis-rs routes an async pipeline to one slot. Even keys on the
+                // same primary must be grouped by slot to avoid CROSSSLOT.
+                let mut groups = std::collections::HashMap::<_, Vec<_>>::new();
+                for entry in batch {
+                    groups
+                        .entry(::redis::cluster_routing::Slot::for_key(entry.1.as_bytes()))
+                        .or_default()
+                        .push(entry.clone());
+                }
+                let results =
+                    stream::iter(groups.into_values())
+                        .map(|group| {
+                            let mut connection = RoutedConnection::Cluster(cluster.clone());
+                            async move {
+                                load_summary_batch(&mut connection, &group, requested_type).await
+                            }
+                        })
+                        .buffer_unordered(SUMMARY_CLUSTER_CONCURRENCY)
+                        .try_collect::<Vec<_>>()
+                        .await?;
+                summaries.extend(results.into_iter().flatten());
+            }
+        }
+    }
+    summaries.sort_unstable_by_key(|(index, _)| *index);
+    Ok(summaries.into_iter().map(|(_, summary)| summary).collect())
+}
+
+async fn load_summary_batch(
+    connection: &mut RoutedConnection,
+    keys: &[(usize, String)],
+    requested_type: Option<&str>,
+) -> Result<Vec<(usize, KeySummary)>, AppError> {
+    let mut types = ::redis::pipe();
+    types.ignore_errors();
+    for (_, key) in keys {
+        types.cmd("TYPE").arg(key);
+    }
+    let key_types = query_summary_pipeline(connection, &types).await?;
+    if key_types.len() != keys.len() {
+        return Err(AppError::CommandFailed);
+    }
+
+    let mut metadata = ::redis::pipe();
+    // MEMORY / OBJECT and type-dependent lengths are optional. Keep their
+    // individual errors in the replies instead of failing the whole pipeline.
+    metadata.ignore_errors();
+    let mut summaries = Vec::with_capacity(keys.len());
+    for ((index, key), key_type) in keys.iter().zip(key_types) {
+        let key_type: String = required_summary_value(key_type)?;
         if requested_type.is_some() && normalize_key_type(&key_type) != requested_type {
             continue;
         }
-        let ttl_ms: i64 = ::redis::cmd("PTTL")
-            .arg(&raw_key)
-            .query_async(connection)
-            .await
-            .map_err(map_command_error)?;
-        let size = key_size(connection, &key, &key_type).await.ok().flatten();
-        let memory_bytes = ::redis::cmd("MEMORY")
+        metadata.cmd("PTTL").arg(key);
+        if let Some(command) = key_size_command(&key_type) {
+            metadata.cmd(command).arg(key);
+        }
+        metadata
+            .cmd("MEMORY")
             .arg("USAGE")
-            .arg(&raw_key)
-            .query_async::<Option<u64>>(connection)
-            .await
-            .ok()
-            .flatten();
-        let encoding = ::redis::cmd("OBJECT")
+            .arg(key)
+            .cmd("OBJECT")
             .arg("ENCODING")
-            .arg(&raw_key)
-            .query_async::<Option<String>>(connection)
-            .await
-            .ok()
-            .flatten();
-        let idle_seconds = ::redis::cmd("OBJECT")
+            .arg(key)
+            .cmd("OBJECT")
             .arg("IDLETIME")
-            .arg(&raw_key)
-            .query_async::<Option<u64>>(connection)
-            .await
-            .ok()
-            .flatten();
-        summaries.push(KeySummary {
-            key,
-            key_type,
-            ttl_ms,
-            size,
-            memory_bytes,
-            encoding,
-            idle_seconds,
-        });
+            .arg(key);
+        summaries.push((
+            *index,
+            KeySummary {
+                key: key.clone(),
+                key_type,
+                ttl_ms: -2,
+                size: None,
+                memory_bytes: None,
+                encoding: None,
+                idle_seconds: None,
+            },
+        ));
+    }
+    if summaries.is_empty() {
+        return Ok(summaries);
+    }
+    let replies = query_summary_pipeline(connection, &metadata).await?;
+    if replies.len() != metadata.len() {
+        return Err(AppError::CommandFailed);
+    }
+    let mut replies = replies.into_iter();
+    for (_, summary) in &mut summaries {
+        summary.ttl_ms = required_summary_value(next_summary_reply(&mut replies)?)?;
+        if key_size_command(&summary.key_type).is_some() {
+            summary.size = ::redis::from_redis_value::<u64>(next_summary_reply(&mut replies)?).ok();
+        }
+        summary.memory_bytes =
+            ::redis::from_redis_value::<Option<u64>>(next_summary_reply(&mut replies)?)
+                .ok()
+                .flatten();
+        summary.encoding =
+            ::redis::from_redis_value::<Option<String>>(next_summary_reply(&mut replies)?)
+                .ok()
+                .flatten();
+        summary.idle_seconds =
+            ::redis::from_redis_value::<Option<u64>>(next_summary_reply(&mut replies)?)
+                .ok()
+                .flatten();
     }
     Ok(summaries)
+}
+
+async fn query_summary_pipeline(
+    connection: &mut RoutedConnection,
+    pipeline: &::redis::Pipeline,
+) -> Result<Vec<::redis::Value>, AppError> {
+    match pipeline
+        .query_async::<Vec<::redis::Value>>(connection)
+        .await
+    {
+        Err(error)
+            if matches!(connection, RoutedConnection::Cluster(_))
+                && matches!(
+                    error.kind(),
+                    ::redis::ErrorKind::Server(
+                        ::redis::ServerErrorKind::Ask | ::redis::ServerErrorKind::Moved
+                    )
+                ) =>
+        {
+            // redis-rs 1.5 sends ASKING only once before replaying a pipeline,
+            // but Redis permits only the next command on an IMPORTING node.
+            // After redirect retries are exhausted, route these read-only
+            // commands individually. Preserve optional server errors for parsing.
+            let mut replies = Vec::with_capacity(pipeline.len());
+            for command in pipeline.cmd_iter() {
+                replies.push(
+                    connection
+                        .req_packed_command(command)
+                        .await
+                        .map_err(map_command_error)?,
+                );
+            }
+            Ok(replies)
+        }
+        result => result.map_err(map_command_error),
+    }
+}
+
+fn required_summary_value<T: ::redis::FromRedisValue>(
+    value: ::redis::Value,
+) -> Result<T, AppError> {
+    let value = value.extract_error().map_err(map_command_error)?;
+    ::redis::from_redis_value(value).map_err(|error| map_command_error(error.into()))
+}
+
+fn next_summary_reply(
+    replies: &mut std::vec::IntoIter<::redis::Value>,
+) -> Result<::redis::Value, AppError> {
+    replies.next().ok_or(AppError::CommandFailed)
 }
 
 pub fn decode_stream_entry(id: &str, entries: Vec<String>) -> Result<StreamEntry, AppError> {
@@ -212,6 +339,271 @@ mod tests {
         StreamField,
     };
     use crate::error::AppError;
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+
+    type Reply = (Vec<String>, String);
+
+    fn reply(args: &[&str], response: &str) -> Reply {
+        (
+            args.iter().map(|arg| (*arg).to_owned()).collect(),
+            response.to_owned(),
+        )
+    }
+
+    // Withhold a stage's replies until every command arrives. A serial client
+    // cannot complete this exchange; no wall-clock performance assertion is needed.
+    async fn pipelined_connection(
+        stages: Vec<Vec<Reply>>,
+    ) -> (crate::redis::RoutedConnection, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = BufReader::new(socket);
+            for mut stage in stages {
+                let mut responses = String::new();
+                while !stage.is_empty() {
+                    let mut line = String::new();
+                    assert_ne!(socket.read_line(&mut line).await.unwrap(), 0);
+                    let count = line
+                        .trim()
+                        .strip_prefix('*')
+                        .unwrap()
+                        .parse::<usize>()
+                        .unwrap();
+                    let mut args = Vec::new();
+                    for _ in 0..count {
+                        line.clear();
+                        socket.read_line(&mut line).await.unwrap();
+                        let size = line
+                            .trim()
+                            .strip_prefix('$')
+                            .unwrap()
+                            .parse::<usize>()
+                            .unwrap();
+                        let mut value = vec![0; size + 2];
+                        socket.read_exact(&mut value).await.unwrap();
+                        args.push(String::from_utf8(value[..size].to_vec()).unwrap());
+                    }
+                    // redis-rs sends client identification during connection setup.
+                    if args.first().is_some_and(|arg| arg == "CLIENT") {
+                        socket.get_mut().write_all(b"+OK\r\n").await.unwrap();
+                        continue;
+                    }
+                    let index = stage
+                        .iter()
+                        .position(|(expected, _)| *expected == args)
+                        .unwrap_or_else(|| panic!("unexpected command: {args:?}"));
+                    responses.push_str(&stage.remove(index).1);
+                }
+                socket
+                    .get_mut()
+                    .write_all(responses.as_bytes())
+                    .await
+                    .unwrap();
+            }
+        });
+        let client = ::redis::Client::open(format!("redis://{address}/")).unwrap();
+        let connection =
+            crate::redis::RoutedClient::Standalone(crate::redis::StandaloneClient::Direct(client))
+                .connection()
+                .await
+                .unwrap();
+        (connection, server)
+    }
+
+    #[tokio::test]
+    async fn summaries_pipeline_batches_types_and_preserves_optional_errors_and_alignment() {
+        let stages = vec![
+            vec![
+                reply(&["TYPE", "a"], "+string\r\n"),
+                reply(&["TYPE", "b"], "+hash\r\n"),
+                reply(&["TYPE", "c"], "+ReJSON-RL\r\n"),
+            ],
+            vec![
+                reply(&["PTTL", "a"], ":1234\r\n"),
+                reply(&["STRLEN", "a"], ":11\r\n"),
+                reply(&["MEMORY", "USAGE", "a"], ":72\r\n"),
+                reply(&["OBJECT", "ENCODING", "a"], "+embstr\r\n"),
+                reply(&["OBJECT", "IDLETIME", "a"], ":5\r\n"),
+                reply(&["PTTL", "b"], ":-1\r\n"),
+                reply(&["HLEN", "b"], "-WRONGTYPE changed during scan\r\n"),
+                reply(&["MEMORY", "USAGE", "b"], "-NOPERM denied\r\n"),
+                reply(&["OBJECT", "ENCODING", "b"], "$-1\r\n"),
+                reply(&["OBJECT", "IDLETIME", "b"], "-ERR LFU policy\r\n"),
+                reply(&["PTTL", "c"], ":-2\r\n"),
+                reply(&["MEMORY", "USAGE", "c"], "$-1\r\n"),
+                reply(&["OBJECT", "ENCODING", "c"], "$-1\r\n"),
+                reply(&["OBJECT", "IDLETIME", "c"], "$-1\r\n"),
+            ],
+        ];
+        let (mut connection, server) = pipelined_connection(stages).await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::load_key_summaries(
+                &mut connection,
+                vec![b"a".to_vec(), b"b".to_vec(), b"c".to_vec()],
+                None,
+            ),
+        )
+        .await;
+        server.abort();
+        assert_eq!(
+            result.expect("metadata queries must be pipelined").unwrap(),
+            vec![
+                KeySummary {
+                    key: "a".into(),
+                    key_type: "string".into(),
+                    ttl_ms: 1234,
+                    size: Some(11),
+                    memory_bytes: Some(72),
+                    encoding: Some("embstr".into()),
+                    idle_seconds: Some(5)
+                },
+                KeySummary {
+                    key: "b".into(),
+                    key_type: "hash".into(),
+                    ttl_ms: -1,
+                    size: None,
+                    memory_bytes: None,
+                    encoding: None,
+                    idle_seconds: None
+                },
+                KeySummary {
+                    key: "c".into(),
+                    key_type: "ReJSON-RL".into(),
+                    ttl_ms: -2,
+                    size: None,
+                    memory_bytes: None,
+                    encoding: None,
+                    idle_seconds: None
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn summaries_pipeline_filters_types_before_reading_metadata() {
+        let (mut connection, server) = pipelined_connection(vec![
+            vec![
+                reply(&["TYPE", "a"], "+string\r\n"),
+                reply(&["TYPE", "b"], "+ReJSON-RL\r\n"),
+            ],
+            vec![
+                reply(&["PTTL", "b"], ":-1\r\n"),
+                reply(&["MEMORY", "USAGE", "b"], ":200\r\n"),
+                reply(&["OBJECT", "ENCODING", "b"], "+raw\r\n"),
+                reply(&["OBJECT", "IDLETIME", "b"], ":0\r\n"),
+            ],
+        ])
+        .await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::load_key_summaries(
+                &mut connection,
+                vec![b"a".to_vec(), b"b".to_vec()],
+                Some("json"),
+            ),
+        )
+        .await;
+        server.abort();
+        let summaries = result
+            .expect("TYPE must be pipelined before filtering")
+            .unwrap();
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].key, "b");
+        assert_eq!(summaries[0].size, None);
+        assert_eq!(summaries[0].memory_bytes, Some(200));
+    }
+
+    #[tokio::test]
+    async fn summaries_pipeline_still_rejects_required_metadata_errors() {
+        let (mut connection, server) = pipelined_connection(vec![
+            vec![reply(&["TYPE", "a"], "+string\r\n")],
+            vec![
+                reply(&["PTTL", "a"], "-NOPERM denied\r\n"),
+                reply(&["STRLEN", "a"], ":1\r\n"),
+                reply(&["MEMORY", "USAGE", "a"], ":72\r\n"),
+                reply(&["OBJECT", "ENCODING", "a"], "+embstr\r\n"),
+                reply(&["OBJECT", "IDLETIME", "a"], ":0\r\n"),
+            ],
+        ])
+        .await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            super::load_key_summaries(&mut connection, vec![b"a".to_vec()], None),
+        )
+        .await;
+        server.abort();
+        assert_eq!(
+            result.expect("metadata queries must be pipelined"),
+            Err(AppError::CommandFailed)
+        );
+    }
+
+    #[tokio::test]
+    async fn summaries_pipeline_does_not_filter_away_type_errors() {
+        let (mut connection, server) = pipelined_connection(vec![vec![
+            reply(&["TYPE", "a"], "+string\r\n"),
+            reply(&["TYPE", "b"], "-NOPERM denied\r\n"),
+        ]])
+        .await;
+        let result = super::load_key_summaries(
+            &mut connection,
+            vec![b"a".to_vec(), b"b".to_vec()],
+            Some("hash"),
+        )
+        .await;
+        server.abort();
+        assert_eq!(result, Err(AppError::CommandFailed));
+    }
+
+    #[tokio::test]
+    async fn summaries_pipeline_splits_large_scan_pages_without_losing_keys() {
+        let keys = (0..501)
+            .map(|index| format!("key:{index}"))
+            .collect::<Vec<_>>();
+        let mut stages = Vec::new();
+        for start in [0, 500] {
+            let end = (start + 500).min(keys.len());
+            stages.push(
+                keys[start..end]
+                    .iter()
+                    .map(|key| reply(&["TYPE", key], "+string\r\n"))
+                    .collect(),
+            );
+            let mut metadata = Vec::new();
+            for (index, key) in keys.iter().enumerate().take(end).skip(start) {
+                metadata.extend([
+                    reply(&["PTTL", key], ":-1\r\n"),
+                    reply(&["STRLEN", key], &format!(":{}\r\n", index + 1)),
+                    reply(&["MEMORY", "USAGE", key], ":72\r\n"),
+                    reply(&["OBJECT", "ENCODING", key], "+raw\r\n"),
+                    reply(&["OBJECT", "IDLETIME", key], ":0\r\n"),
+                ]);
+            }
+            stages.push(metadata);
+        }
+        let (mut connection, server) = pipelined_connection(stages).await;
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            super::load_key_summaries(
+                &mut connection,
+                keys.iter().map(|key| key.as_bytes().to_vec()).collect(),
+                None,
+            ),
+        )
+        .await;
+        server.abort();
+        let summaries = result
+            .expect("large SCAN pages must use bounded pipelines")
+            .unwrap();
+        assert_eq!(summaries.len(), 501);
+        for (index, summary) in summaries.iter().enumerate() {
+            assert_eq!(summary.key, keys[index]);
+            assert_eq!(summary.size, Some(index as u64 + 1));
+        }
+    }
 
     fn scan_page(cursor: ScanCursor, keys: &[&str], has_more: bool) -> ScanPage {
         ScanPage {

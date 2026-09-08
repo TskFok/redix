@@ -1547,57 +1547,12 @@ impl RedisOperations for RedisService {
             .query_async::<(u64, Vec<String>)>(&mut connection)
             .await
             .map_err(map_command_error)?;
-        let mut summaries = Vec::with_capacity(keys.len());
-
-        for key in keys {
-            let key_type: String = ::redis::cmd("TYPE")
-                .arg(&key)
-                .query_async::<String>(&mut connection)
-                .await
-                .map_err(map_command_error)?;
-            if requested_type.is_some() && normalize_key_type(&key_type) != requested_type {
-                continue;
-            }
-            let ttl_ms: i64 = ::redis::cmd("PTTL")
-                .arg(&key)
-                .query_async::<i64>(&mut connection)
-                .await
-                .map_err(map_command_error)?;
-            let size = key_size(&mut connection, &key, &key_type)
-                .await
-                .ok()
-                .flatten();
-            let memory_bytes = ::redis::cmd("MEMORY")
-                .arg("USAGE")
-                .arg(&key)
-                .query_async::<Option<u64>>(&mut connection)
-                .await
-                .ok()
-                .flatten();
-            let encoding = ::redis::cmd("OBJECT")
-                .arg("ENCODING")
-                .arg(&key)
-                .query_async::<Option<String>>(&mut connection)
-                .await
-                .ok()
-                .flatten();
-            let idle_seconds = ::redis::cmd("OBJECT")
-                .arg("IDLETIME")
-                .arg(&key)
-                .query_async::<Option<u64>>(&mut connection)
-                .await
-                .ok()
-                .flatten();
-            summaries.push(KeySummary {
-                key,
-                key_type,
-                ttl_ms,
-                size,
-                memory_bytes,
-                encoding,
-                idle_seconds,
-            });
-        }
+        let summaries = load_key_summaries(
+            &mut connection,
+            keys.into_iter().map(String::into_bytes).collect(),
+            requested_type,
+        )
+        .await?;
 
         Ok(ScanPage {
             cursor: ScanCursor::Standalone(cursor),
@@ -2779,7 +2734,19 @@ pub(crate) async fn key_size(
     key: &str,
     key_type: &str,
 ) -> Result<Option<u64>, AppError> {
-    let command = match key_type {
+    let Some(command) = key_size_command(key_type) else {
+        return Ok(None);
+    };
+    ::redis::cmd(command)
+        .arg(key)
+        .query_async::<u64>(connection)
+        .await
+        .map(Some)
+        .map_err(map_command_error)
+}
+
+pub(crate) fn key_size_command(key_type: &str) -> Option<&'static str> {
+    Some(match key_type {
         "string" => "STRLEN",
         "hash" => "HLEN",
         "list" => "LLEN",
@@ -2788,15 +2755,8 @@ pub(crate) async fn key_size(
         "stream" => "XLEN",
         "array" => "ARLEN",
         "vectorset" | "vector-set" => "VCARD",
-        "ReJSON-RL" | "ReJSON-RS" | "JSON" => return Ok(None),
-        _ => return Ok(None),
-    };
-    ::redis::cmd(command)
-        .arg(key)
-        .query_async::<u64>(connection)
-        .await
-        .map(Some)
-        .map_err(map_command_error)
+        _ => return None,
+    })
 }
 
 async fn ensure_existing_key_type(
