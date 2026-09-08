@@ -7,12 +7,13 @@ import StartBulkDeleteButton from "../tasks/StartBulkDeleteButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { getBrowserKey, getModuleCapabilities, scanKeys } from "../../lib/tauri";
-import type { KeyValue, ScanCursor } from "../../lib/types";
+import type { ConnectionProfile, KeyValue, ScanCursor } from "../../lib/types";
 import KeyDetails from "./KeyDetails";
 import KeyList from "./KeyList";
 import AddKey from "./AddKey";
 import BulkKeyActions from "./BulkKeyActions";
 import BrowserImportExport from "./BrowserImportExport";
+import BrowserDatabaseSelect from "./BrowserDatabaseSelect";
 import {
   applyCreatedKey,
   applyScanPage,
@@ -26,13 +27,27 @@ import {
 
 interface BrowserPageProps {
   connectionId: string;
+  activeDatabase?: number;
+  isCluster?: boolean;
+  onProfileChanged?: (profile: ConnectionProfile) => void;
+  databaseSwitching?: boolean;
+  onDatabaseSwitchingChange?: (switching: boolean) => void;
   scanCount?: number;
   active?: boolean;
 }
 
 const FILTER_DEBOUNCE_MS = 320;
 
-export function BrowserPage({ connectionId, scanCount = 100, active = true }: BrowserPageProps) {
+export function BrowserPage({
+  connectionId,
+  activeDatabase = 0,
+  isCluster = false,
+  onProfileChanged,
+  databaseSwitching: externalDatabaseSwitching = false,
+  onDatabaseSwitchingChange,
+  scanCount = 100,
+  active = true,
+}: BrowserPageProps) {
   const [state, setState] = useState<BrowserPageState>(() => ({
     ...initialBrowserPageState,
   }));
@@ -43,6 +58,13 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
   const [refreshSeconds, setRefreshSeconds] = useState(0);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
+  const [localDatabaseSwitching, setDatabaseSwitching] = useState(false);
+  const databaseSwitching = localDatabaseSwitching || externalDatabaseSwitching;
+  const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const [fileActionLoading, setFileActionLoading] = useState(false);
+  const [bulkStartLoading, setBulkStartLoading] = useState(false);
+  const databaseSwitchingRef = useRef(false);
+  databaseSwitchingRef.current = databaseSwitching;
   const [showAddKey, setShowAddKey] = useState(false);
   const [moduleProbe, setModuleProbe] = useState<ModuleProbeState>({
     status: "loading",
@@ -52,11 +74,13 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
   connectionIdRef.current = connectionId;
   const mountedRef = useRef(false);
   const scanLoadingRef = useRef(false);
+  const deferredScanRef = useRef<{ cursor: ScanCursor; pattern: string; replace: boolean } | null>(null);
   const scanRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const moduleProbeRequestRef = useRef(0);
   const debounceRef = useRef<number | null>(null);
   const skipDebounceForPatternRef = useRef<string | null>(null);
+  const scannedPatternRef = useRef("*");
   const keyTypeRef = useRef("");
   const visibleKeys = useMemo(() => filterKeysByType(state.keys, state.keyType), [state.keys, state.keyType]);
   const normalizedScanCount =
@@ -70,11 +94,16 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
       requestedPattern: string,
       replace: boolean,
     ) => {
-      if (scanLoadingRef.current) {
+      if (!mountedRef.current) return;
+      if (databaseSwitchingRef.current) {
+        deferredScanRef.current = { cursor, pattern: requestedPattern, replace };
         return;
       }
+      if (scanLoadingRef.current) return;
 
+      deferredScanRef.current = null;
       scanLoadingRef.current = true;
+      scannedPatternRef.current = requestedPattern;
       const requestedKeyType = keyTypeRef.current;
       const requestedScanCount = scanCountRef.current;
       const requestId = scanRequestRef.current + 1;
@@ -141,6 +170,17 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
     [connectionId],
   );
 
+  const handleDatabaseSwitching = useCallback((switching: boolean) => {
+    onDatabaseSwitchingChange?.(switching);
+    if (!mountedRef.current) return;
+    databaseSwitchingRef.current = switching;
+    setDatabaseSwitching(switching);
+    if (switching && debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+  }, [onDatabaseSwitchingChange]);
+
   useEffect(() => {
     mountedRef.current = true;
     scanLoadingRef.current = false;
@@ -159,6 +199,7 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
       mountedRef.current = false;
       scanRequestRef.current += 1;
       scanLoadingRef.current = false;
+      deferredScanRef.current = null;
       detailRequestRef.current += 1;
       if (debounceRef.current !== null) {
         window.clearTimeout(debounceRef.current);
@@ -166,6 +207,14 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
       }
     };
   }, [connectionId, scanPage]);
+
+  useEffect(() => {
+    const pending = deferredScanRef.current;
+    if (!databaseSwitching && pending) {
+      deferredScanRef.current = null;
+      void scanPage(pending.cursor, pending.pattern, pending.replace);
+    }
+  }, [databaseSwitching, scanPage]);
 
   useEffect(() => {
     const requestId = moduleProbeRequestRef.current + 1;
@@ -411,7 +460,8 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
     }));
   };
 
-  const listBusy = state.loading || detailLoading || detailActionLoading;
+  const listBusy = state.loading || detailLoading || detailActionLoading || databaseSwitching
+    || bulkActionLoading || fileActionLoading || bulkStartLoading;
   useAutoRefresh(refreshSeconds, !active || listBusy || showAddKey || state.selectedKey !== null || state.selectedKeys.length > 0, () => {
     void scanPage(0, state.pattern.trim() || "*", true);
   });
@@ -434,6 +484,14 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
       {state.nodeFailures.length > 0 && <div className="feedback feedback-error" role="alert"><p>{state.nodeFailures.length} 个节点扫描失败，当前键列表为部分结果。</p><button type="button" className="button button-secondary" disabled={listBusy} onClick={state.hasMore ? handleLoadMore : handleRefresh}>{state.hasMore ? "继续扫描并重试" : "重新扫描并重试"}</button></div>}
 
       <div className="browser-actions" aria-label="Browser 操作">
+        {onProfileChanged && <BrowserDatabaseSelect
+          connectionId={connectionId}
+          activeDatabase={activeDatabase}
+          isCluster={isCluster}
+          disabled={listBusy || showAddKey || (state.pattern.trim() || "*") !== scannedPatternRef.current}
+          onProfileChanged={onProfileChanged}
+          onSwitchingChange={handleDatabaseSwitching}
+        />}
         <button
           type="button"
           className="button button-secondary"
@@ -469,19 +527,21 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
           </Select>
         </label>
         {refreshSeconds > 0 && <small>选择键、查看详情或编辑期间暂停自动刷新。</small>}
-        <StartBulkDeleteButton connectionId={connectionId} keys={state.selectedKeys} disabled={listBusy} />
+        <StartBulkDeleteButton connectionId={connectionId} keys={state.selectedKeys} disabled={listBusy} onBusyChange={setBulkStartLoading} />
         <BulkKeyActions
           connectionId={connectionId}
           selectedKeys={state.selectedKeys}
           busy={listBusy}
           onDeleted={handleBulkDeleted}
           onError={handleBulkError}
+          onBusyChange={setBulkActionLoading}
         />
         <BrowserImportExport
           connectionId={connectionId}
           selectedKeys={state.selectedKeys}
           onImported={handleImported}
           disabled={listBusy}
+          onBusyChange={setFileActionLoading}
         />
       </div>
 
@@ -496,7 +556,7 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
         />
       ) : null}
 
-      <div className="browser-layout">
+      <fieldset className="browser-layout" disabled={databaseSwitching} aria-label="键浏览与编辑">
         <KeyList
           key={connectionId}
           pattern={state.pattern}
@@ -530,7 +590,7 @@ export function BrowserPage({ connectionId, scanCount = 100, active = true }: Br
           onDeleted={handleDeleted}
           onBusyChange={setDetailActionLoading}
         />
-      </div>
+      </fieldset>
     </section>
   );
 }

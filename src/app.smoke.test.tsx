@@ -463,6 +463,105 @@ describe("Redix 应用壳", () => {
     });
   });
 
+  it("在 Browser 直接切换 Db 后清除旧选择并同步数据库概览", async () => {
+    let database = 0;
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    scanKeysMock.mockImplementation(async () => ({
+      cursor: database === 0 ? 41 : 0,
+      keys: [{ key: database === 0 ? "db-zero" : "db-one", key_type: "string", ttl_ms: -1, size: 5 }],
+      node_failures: [], has_more: database === 0,
+    }));
+    selectDatabaseMock.mockImplementation(async (input) => {
+      database = input.database;
+      return { ...localProfile, database };
+    });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByRole("button", { name: "db-zero" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 db-zero" }));
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "string" } });
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+
+    fireEvent.change(screen.getByRole("combobox", { name: "切换数据库" }), { target: { value: "1" } });
+
+    expect(await screen.findByRole("button", { name: "db-one" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toHaveValue("1");
+    expect(screen.queryByRole("button", { name: "db-zero" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "选择键 db-one" })).not.toBeChecked();
+    expect(screen.getByRole("button", { name: "批量删除" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    expect(screen.getByLabelText("类型过滤")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+    expect(selectDatabaseMock).toHaveBeenCalledWith({ connection_id: "local", database: 1 });
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanKeysMock).toHaveBeenLastCalledWith({ connection_id: "local", cursor: 0, pattern: "*", count: 100, key_type: null });
+    fireEvent.click(screen.getByRole("button", { name: "Database" }));
+    expect(await screen.findByText("当前数据库：1")).toBeInTheDocument();
+  });
+
+  it("Browser 切换 Db 期间禁用键操作，失败后保留原数据库和选择", async () => {
+    let rejectSwitch!: (reason: unknown) => void;
+    selectDatabaseMock.mockReturnValue(new Promise((_, reject) => { rejectSwitch = reject; }));
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    scanKeysMock.mockResolvedValue({ cursor: 41, keys: [{ key: "db-zero", key_type: "string", ttl_ms: -1, size: 5 }], node_failures: [], has_more: true });
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByRole("button", { name: "db-zero" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 db-zero" }));
+
+    fireEvent.change(screen.getByRole("combobox", { name: "切换数据库" }), { target: { value: "1" } });
+
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toBeDisabled();
+    for (const name of ["新增键", "刷新键列表", "批量删除（1）", "导出选中键", "筛选", "加载更多", "db-zero"]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+    expect(screen.getByLabelText("导入 JSON 文件")).toBeDisabled();
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => { rejectSwitch(new Error("DB index is out of range")); });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("数据库切换失败");
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toBeEnabled();
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toHaveValue("0");
+    expect(screen.getByRole("checkbox", { name: "选择键 db-zero" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "批量删除（1）" })).toBeEnabled();
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("导入文件尚未读取完成时禁用 Browser 数据库切换", async () => {
+    let readFile!: (text: string) => void;
+    const file = new File(["[]"], "keys.json", { type: "application/json" });
+    Object.defineProperty(file, "text", { value: () => new Promise<string>((resolve) => { readFile = resolve; }) });
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByText("没有匹配的键。");
+    fireEvent.change(screen.getByLabelText("导入 JSON 文件"), { target: { files: [file] } });
+
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toBeDisabled();
+
+    await act(async () => { readFile("[]"); });
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toBeEnabled();
+    expect(selectDatabaseMock).not.toHaveBeenCalled();
+  });
+
+  it("筛选防抖尚未执行时禁止切库，完成筛选后恢复", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByText("没有匹配的键。");
+    fireEvent.click(screen.getByRole("button", { name: "筛选" }));
+    fireEvent.change(screen.getByLabelText("键过滤"), { target: { value: "user:*" } });
+    fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
+
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toBeDisabled();
+    await waitFor(() => expect(scanKeysMock).toHaveBeenCalledTimes(2));
+    expect(scanKeysMock).toHaveBeenLastCalledWith({ connection_id: "local", cursor: 0, pattern: "user:*", count: 100, key_type: null });
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toBeEnabled();
+  });
+
   it("数据库切换尚未完成就返回 Browser，完成后仍加载新数据库并清除旧选择", async () => {
     let database = 0;
     let finishSwitch!: (profile: typeof localProfile) => void;
@@ -489,6 +588,8 @@ describe("Redix 应用壳", () => {
     expect(selectDatabaseMock).toHaveBeenCalledWith({ connection_id: "local", database: 1 });
     fireEvent.click(screen.getByRole("button", { name: "Browser" }));
     expect(screen.getByRole("checkbox", { name: "选择键 db-zero" })).toBeChecked();
+    expect(screen.getByRole("combobox", { name: "切换数据库" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "刷新键列表" })).toBeDisabled();
     expect(scanKeysMock).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -505,6 +606,29 @@ describe("Redix 应用壳", () => {
     expect(scanKeysMock).toHaveBeenLastCalledWith({
       connection_id: "local", cursor: 0, pattern: "*", count: 100, key_type: null,
     });
+  });
+
+  it("Browser 切库尚未完成时，Database 页面不能发起另一次切库", async () => {
+    let finishSwitch!: (profile: typeof localProfile) => void;
+    selectDatabaseMock.mockReturnValue(new Promise<typeof localProfile>((resolve) => { finishSwitch = resolve; }));
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    getDatabaseOverviewMock.mockResolvedValue([
+      { database: 0, key_count: 1, expires: 0, avg_ttl_ms: 0 },
+      { database: 1, key_count: 1, expires: 0, avg_ttl_ms: 0 },
+      { database: 2, key_count: 1, expires: 0, avg_ttl_ms: 0 },
+    ]);
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+    await screen.findByText("没有匹配的键。");
+    fireEvent.change(screen.getByRole("combobox", { name: "切换数据库" }), { target: { value: "1" } });
+    fireEvent.click(screen.getByRole("button", { name: "Database" }));
+
+    expect(await screen.findByRole("button", { name: "切换到数据库 2" })).toBeDisabled();
+
+    await act(async () => { finishSwitch({ ...localProfile, database: 1 }); });
+    expect(screen.getByText("当前数据库：1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "切换到数据库 2" })).toBeEnabled();
+    expect(selectDatabaseMock).toHaveBeenCalledTimes(1);
   });
 
   it("从其他工作区也能通过快捷键返回，切换连接后使用新连接", async () => {

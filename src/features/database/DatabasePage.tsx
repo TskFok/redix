@@ -27,6 +27,8 @@ interface DatabasePageProps {
   connectionId: string;
   activeDatabase: number;
   onProfileChanged: (profile: ConnectionProfile) => void;
+  databaseSwitching?: boolean;
+  onSwitchingChange?: (switching: boolean) => void;
   isCluster?: boolean;
   onOpenTopology?: () => void;
 }
@@ -35,6 +37,8 @@ export function DatabasePage({
   connectionId,
   activeDatabase,
   onProfileChanged,
+  databaseSwitching = false,
+  onSwitchingChange,
   isCluster = false,
   onOpenTopology,
 }: DatabasePageProps) {
@@ -47,7 +51,7 @@ export function DatabasePage({
   const previousConnection = useRef(connectionId);
   const requestRef = useRef(0);
   const mountedRef = useRef(false);
-  useAutoRefresh(refreshSeconds, state.loading || state.switching, () => setReloadToken((current) => current + 1));
+  useAutoRefresh(refreshSeconds, state.loading || state.switching || databaseSwitching, () => setReloadToken((current) => current + 1));
 
   useEffect(() => {
     mountedRef.current = true;
@@ -114,11 +118,12 @@ export function DatabasePage({
   }, [connectionId, reloadToken, isCluster]);
 
   const handleSelectDatabase = async (database: number) => {
-    if (state.switching || database === activeDatabase) {
+    if (state.switching || databaseSwitching || database === activeDatabase) {
       return;
     }
 
     const requestId = requestRef.current;
+    onSwitchingChange?.(true);
     setState((current) => ({
       ...current,
       switching: true,
@@ -144,6 +149,8 @@ export function DatabasePage({
         switching: false,
         switchError: databaseSwitchFailedMessage,
       }));
+    } finally {
+      onSwitchingChange?.(false);
     }
   };
 
@@ -151,7 +158,7 @@ export function DatabasePage({
     <section
       className="database-page"
       aria-labelledby="database-page-title"
-      aria-busy={state.loading || state.switching}
+      aria-busy={state.loading || state.switching || databaseSwitching}
     >
       <div className="page-heading database-page-heading">
         <div>
@@ -166,7 +173,7 @@ export function DatabasePage({
           type="button"
           className="button button-secondary"
           onClick={() => setReloadToken((current) => current + 1)}
-          disabled={state.loading || state.switching}
+          disabled={state.loading || state.switching || databaseSwitching}
         >
           {state.loading ? "刷新中…" : "刷新概览"}
         </button>
@@ -360,7 +367,7 @@ export function DatabasePage({
                             type="button"
                             className="button button-secondary button-compact"
                             onClick={() => void handleSelectDatabase(database.database)}
-                            disabled={state.switching}
+                            disabled={state.switching || databaseSwitching}
                           >
                             {state.switching
                               ? "切换中…"

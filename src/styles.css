@@ -1647,6 +1647,10 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 .browser-layout {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
   display: grid;
   grid-template-columns: minmax(280px, 0.72fr) minmax(0, 1.68fr);
   grid-template-rows: minmax(0, 1fr);
@@ -1719,6 +1723,7 @@ input[type="checkbox"]:hover:not(:disabled) {
   margin-bottom: 12px;
 }
 
+.browser-database-select,
 .browser-auto-refresh {
   display: inline-flex;
   flex: 0 0 auto;
@@ -1730,6 +1735,7 @@ input[type="checkbox"]:hover:not(:disabled) {
   white-space: nowrap;
 }
 
+.browser-database-select > .app-select-control,
 .browser-auto-refresh > .app-select-control {
   width: 108px;
   flex: 0 0 auto;

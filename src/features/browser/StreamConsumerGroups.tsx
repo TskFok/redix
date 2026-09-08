@@ -27,6 +27,7 @@ import StreamAdvancedPanel from "./StreamAdvancedPanel";
 interface StreamConsumerGroupsProps {
   connectionId: string;
   streamKey: string;
+  onBusyChange?: (busy: boolean) => void;
 }
 
 function formatIdle(idleMs: number): string {
@@ -36,6 +37,7 @@ function formatIdle(idleMs: number): string {
 export function StreamConsumerGroups({
   connectionId,
   streamKey,
+  onBusyChange,
 }: StreamConsumerGroupsProps) {
   const [groups, setGroups] = useState<StreamConsumerGroup[]>([]);
   const [selectedGroupName, setSelectedGroupName] = useState("");
@@ -55,7 +57,13 @@ export function StreamConsumerGroups({
   const [lastDeliveredId, setLastDeliveredId] = useState("$");
   const [loading, setLoading] = useState(false);
   const [detailsLoading, setDetailsLoading] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [localBusy, setBusy] = useState(false);
+  const [advancedBusy, setAdvancedBusy] = useState(false);
+  const busy = localBusy || advancedBusy;
+  const busyCallback = useRef(onBusyChange);
+  busyCallback.current = onBusyChange;
+  useEffect(() => { busyCallback.current?.(busy); }, [busy]);
+  useEffect(() => () => { busyCallback.current?.(false); }, []);
   const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [detailsRefresh, setDetailsRefresh] = useState(0);
   const confirmationScope = JSON.stringify([
@@ -79,6 +87,7 @@ export function StreamConsumerGroups({
     mutationRef.current += 1;
     inFlightRef.current = false;
     setBusy(false);
+    setAdvancedBusy(false);
     setClaimNotice(null);
   }, [connectionId, streamKey, selectedGroupName]);
 
@@ -594,7 +603,7 @@ export function StreamConsumerGroups({
         lastDeliveredId={selectedGroup.last_delivered_id}
         disabled={busy || loading || detailsLoading}
         onChanged={refresh}
-        onBusyChange={setBusy}
+        onBusyChange={setAdvancedBusy}
       />}
 
     </section>

@@ -193,6 +193,7 @@ function AppBrand() {
 
 export default function App() {
   const [activeProfile, setActiveProfile] = useState<ConnectionProfile | null>(null);
+  const [switchingConnections, setSwitchingConnections] = useState<Set<string>>(() => new Set());
   const [connectionWorkspaceOpen, setConnectionWorkspaceOpen] = useState(false);
   const [activeSection, setActiveSection] = useState<AppSection>("connections");
   const [settings, setSettings] = useState<AppSettings>(() => ({
@@ -253,6 +254,15 @@ export default function App() {
     setActiveProfile((current) =>
       current?.id === profile.id ? profile : current,
     );
+  };
+
+  const handleDatabaseSwitching = (connectionId: string, switching: boolean) => {
+    setSwitchingConnections((current) => {
+      const next = new Set(current);
+      if (switching) next.add(connectionId);
+      else next.delete(connectionId);
+      return next;
+    });
   };
 
   const activeNavigation = navigationItems.find((item) => item.id === activeSection);
@@ -408,6 +418,11 @@ export default function App() {
             <BrowserPage
               key={JSON.stringify([activeProfile.id, activeProfile.database])}
               connectionId={activeProfile.id}
+              activeDatabase={activeProfile.database}
+              isCluster={Boolean(activeProfile.cluster)}
+              onProfileChanged={handleProfileChanged}
+              databaseSwitching={switchingConnections.has(activeProfile.id)}
+              onDatabaseSwitchingChange={(switching) => handleDatabaseSwitching(activeProfile.id, switching)}
               scanCount={settings.scan_count}
               active={activeSection === "browser"}
             />
@@ -429,6 +444,8 @@ export default function App() {
               connectionId={activeProfile.id}
               activeDatabase={activeProfile.database}
               onProfileChanged={handleProfileChanged}
+              databaseSwitching={switchingConnections.has(activeProfile.id)}
+              onSwitchingChange={(switching) => handleDatabaseSwitching(activeProfile.id, switching)}
               isCluster={Boolean(activeProfile.cluster)}
               onOpenTopology={() => setActiveSection("topology")}
             />

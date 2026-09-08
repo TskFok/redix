@@ -4,8 +4,9 @@ import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
 import { BULK_TASKS_CHANGED, startBulkDelete } from "./bulkTaskApi";
 
-export default function StartBulkDeleteButton({ connectionId, keys, disabled }: { connectionId: string; keys: string[]; disabled: boolean }) {
+export default function StartBulkDeleteButton({ connectionId, keys, disabled, onBusyChange }: { connectionId: string; keys: string[]; disabled: boolean; onBusyChange?: (busy: boolean) => void }) {
   const [busy, setBusy] = useState(false);
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   const [error, setError, errorToken] = useFeedbackState("");
   const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([connectionId, keys, disabled]));
   const inFlight = useRef(false);

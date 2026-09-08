@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
@@ -12,6 +12,7 @@ interface BrowserImportExportProps {
   selectedKeys: string[];
   onImported: () => Promise<void>;
   disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -51,8 +52,10 @@ export function BrowserImportExport({
   selectedKeys,
   onImported,
   disabled = false,
+  onBusyChange,
 }: BrowserImportExportProps) {
   const [busy, setBusy] = useState(false);
+  useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [status, setStatus, statusToken] = useTransientFeedback();
   const inputRef = useRef<HTMLInputElement>(null);

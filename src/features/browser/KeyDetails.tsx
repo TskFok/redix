@@ -81,8 +81,9 @@ export function KeyDetails({
 }: KeyDetailsProps) {
   const [busy, setBusy] = useState(false);
   const [childBusy, setChildBusy] = useState(false);
+  const [consumerGroupsBusy, setConsumerGroupsBusy] = useState(false);
   const { confirm, confirmationDialog } = useConfirmDialog(
-    JSON.stringify([connectionId, detail?.key, loading, busy, childBusy]),
+    JSON.stringify([connectionId, detail?.key, loading, busy, childBusy, consumerGroupsBusy]),
   );
   const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [jsonPathError, setJsonPathError, jsonPathErrorToken] = useFeedbackState<string | null>(null);
@@ -113,18 +114,20 @@ export function KeyDetails({
     operationRef.current += 1;
     setBusy(false);
     setChildBusy(false);
+    setConsumerGroupsBusy(false);
     setError(null);
     setJsonPathError(null);
     setRenameDraft(detail?.key ?? "");
     setLocalInfo(null);
     onMetadataChange?.(null);
-    onBusyChange?.(false);
   }, [connectionId, detail?.key, onBusyChange]);
 
-  const uiBusy = busy || childBusy;
+  const uiBusy = busy || childBusy || consumerGroupsBusy;
+  useEffect(() => {
+    onBusyChange?.(uiBusy);
+  }, [uiBusy, onBusyChange]);
   const handleChildBusy = (nextBusy: boolean) => {
     setChildBusy(nextBusy);
-    onBusyChange?.(nextBusy);
   };
 
   const info = metadata === undefined ? localInfo : metadata;
@@ -208,7 +211,6 @@ export function KeyDetails({
       return;
     }
     setBusy(nextBusy);
-    onBusyChange?.(nextBusy);
   };
 
   if (!detail) {
@@ -596,6 +598,7 @@ export function KeyDetails({
                 key={`${connectionId}:${detail.key}`}
                 connectionId={connectionId}
                 streamKey={detail.key}
+                onBusyChange={setConsumerGroupsBusy}
               />
             ),
           }] : []),

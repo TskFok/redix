@@ -179,6 +179,16 @@ function deferred<T>() {
 }
 
 describe("Redis Browser", () => {
+  it("在其他页面切库期间打开 Browser，切库结束后恢复首次扫描", async () => {
+    const view = render(<BrowserPage connectionId="local" databaseSwitching />);
+    expect(scanKeysMock).not.toHaveBeenCalled();
+
+    view.rerender(<BrowserPage connectionId="local" databaseSwitching={false} />);
+
+    await waitFor(() => expect(scanKeysMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("没有匹配的键。")).toBeInTheDocument();
+  });
+
   it("部分节点失败可继续重试，完成 opaque cursor 不显示更多", async () => {
     scanKeysMock.mockResolvedValueOnce({ cursor: "cluster:retry", keys: [], node_failures: [{ node_id: "node-b", code: "CONNECTION_FAILED" }], has_more: true }).mockResolvedValueOnce({ cursor: "cluster:complete", keys: [], node_failures: [], has_more: false });
     render(<BrowserPage connectionId="cluster" />);

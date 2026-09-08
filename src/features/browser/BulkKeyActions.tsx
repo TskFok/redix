@@ -10,6 +10,7 @@ interface BulkKeyActionsProps {
   busy: boolean;
   onDeleted: (count: number) => void;
   onError: (message: string) => void;
+  onBusyChange?: (busy: boolean) => void;
 }
 
 export function BulkKeyActions({
@@ -18,8 +19,10 @@ export function BulkKeyActions({
   busy,
   onDeleted,
   onError,
+  onBusyChange,
 }: BulkKeyActionsProps) {
   const [submitting, setSubmitting] = useState(false);
+  useEffect(() => { onBusyChange?.(submitting); }, [submitting, onBusyChange]);
   const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([connectionId, selectedKeys, busy]));
   const inFlight = useRef(false);
   const generation = useRef(0);
