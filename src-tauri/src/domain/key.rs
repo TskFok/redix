@@ -33,7 +33,7 @@ impl ScanKeysInput {
     pub fn validate(&self) -> Result<(), AppError> {
         if self.connection_id.trim().is_empty()
             || self.pattern.trim().is_empty()
-            || !(1..=500).contains(&self.count)
+            || !(1..=10_000).contains(&self.count)
             || self
                 .key_type
                 .as_deref()

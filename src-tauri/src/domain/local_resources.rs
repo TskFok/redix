@@ -122,7 +122,7 @@ impl AppSettings {
         if self.version != 1
             || !matches!(self.theme.as_str(), "system" | "light" | "dark")
             || !matches!(self.result_format.as_str(), "raw" | "text" | "json")
-            || !(10..=1_000).contains(&self.scan_count)
+            || !(10..=10_000).contains(&self.scan_count)
         {
             return Err(AppError::InvalidConnection);
         }

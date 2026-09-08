@@ -1513,6 +1513,39 @@ describe("Redis Browser", () => {
     expect(scanKeysMock).toHaveBeenCalledTimes(2);
   });
 
+  it.each([1000, 10000])("扫描数量设为 %i 时首次加载使用完整批量大小并展示结果", async (scanCount) => {
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [stringSummary], node_failures: [], has_more: false });
+    render(<BrowserPage connectionId="local" scanCount={scanCount} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "展开前缀 user:" }));
+    expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
+    expect(scanKeysMock).toHaveBeenCalledExactlyOnceWith({
+      connection_id: "local", cursor: 0, pattern: "*", count: scanCount, key_type: null,
+    });
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it.each([1000, 10000])("扫描数量改为 %i 后刷新从头扫描并替换键列表", async (scanCount) => {
+    scanKeysMock.mockReset()
+      .mockResolvedValueOnce({ cursor: 42, keys: [{ ...stringSummary, key: "before-refresh" }], node_failures: [], has_more: true })
+      .mockResolvedValueOnce({ cursor: 0, keys: [{ ...stringSummary, key: "after-refresh" }], node_failures: [], has_more: false });
+    const { rerender } = render(<BrowserPage connectionId="local" scanCount={100} />);
+    expect(await screen.findByRole("button", { name: "before-refresh" })).toBeEnabled();
+
+    rerender(<BrowserPage connectionId="local" scanCount={scanCount} />);
+    expect(scanKeysMock).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "before-refresh" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "刷新键列表" }));
+
+    expect(await screen.findByRole("button", { name: "after-refresh" })).toBeEnabled();
+    expect(scanKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanKeysMock).toHaveBeenLastCalledWith({
+      connection_id: "local", cursor: 0, pattern: "*", count: scanCount, key_type: null,
+    });
+    expect(screen.queryByRole("button", { name: "before-refresh" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("调整扫描批量大小保留列表，下次加载更多才使用新大小", async () => {
     scanKeysMock.mockReset()
       .mockResolvedValueOnce({ cursor: 42, keys: [stringSummary], node_failures: [], has_more: true })

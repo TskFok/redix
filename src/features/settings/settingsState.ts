@@ -9,8 +9,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
 };
 
 export function validateAppSettings(settings: AppSettings): string | null {
-  if (!Number.isInteger(settings.scan_count) || settings.scan_count < 10 || settings.scan_count > 1000) {
-    return "扫描数量必须在 10 到 1000 之间。";
+  if (!Number.isInteger(settings.scan_count) || settings.scan_count < 10 || settings.scan_count > 10000) {
+    return "扫描数量必须在 10 到 10000 之间。";
   }
   if (!["system", "light", "dark"].includes(settings.theme)) {
     return "主题设置无效。";

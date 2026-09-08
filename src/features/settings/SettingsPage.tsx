@@ -115,7 +115,7 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
               aria-label="每次扫描数量"
               type="number"
               min={10}
-              max={1000}
+              max={10000}
               step={10}
               value={draft.scan_count}
               onChange={(event) =>
@@ -125,7 +125,7 @@ export function SettingsPage({ settings, onSaved }: SettingsPageProps) {
                 }))
               }
             />
-            <small>Browser 每次向 Redis 请求的 SCAN 数量，范围为 10 到 1000。</small>
+            <small>Browser 每次向 Redis 请求的 SCAN 数量，范围为 10 到 10000。</small>
           </label>
           <label className="field settings-checkbox">
             <span>

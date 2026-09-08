@@ -39,16 +39,16 @@ describe("SettingsPage", () => {
     expect(screen.getByLabelText("批量命令遇错后继续")).not.toBeChecked();
   });
 
-  it("提交前拒绝越界扫描数量，合法设置保存后回传", async () => {
+  it.each([5, 10001])("提交前拒绝越界扫描数量 %i，合法设置保存后回传", async (scanCount) => {
     const onSaved = vi.fn();
     render(<SettingsPage settings={settings} onSaved={onSaved} />);
 
     fireEvent.change(screen.getByLabelText("每次扫描数量"), {
-      target: { value: "5" },
+      target: { value: String(scanCount) },
     });
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "扫描数量必须在 10 到 1000 之间。",
+      "扫描数量必须在 10 到 10000 之间。",
     );
     expect(saveAppSettingsMock).not.toHaveBeenCalled();
 
@@ -67,6 +67,23 @@ describe("SettingsPage", () => {
       scan_count: 250,
     });
     expect(onSaved).toHaveBeenCalledWith({ ...settings, theme: "dark" });
+  });
+
+  it.each([10, 1000, 10000])("允许保存扫描数量 %i 并将结果传回工作区", async (scanCount) => {
+    saveAppSettingsMock.mockResolvedValue({ ...settings, scan_count: scanCount });
+    const onSaved = vi.fn();
+    render(<SettingsPage settings={settings} onSaved={onSaved} />);
+
+    fireEvent.change(screen.getByLabelText("每次扫描数量"), {
+      target: { value: String(scanCount) },
+    });
+    expect(screen.getByLabelText("每次扫描数量")).toBeValid();
+    fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith({ ...settings, scan_count: scanCount }));
+    expect(saveAppSettingsMock).toHaveBeenCalledExactlyOnceWith({ ...settings, scan_count: scanCount });
+    expect(screen.getByLabelText("每次扫描数量")).toHaveValue(scanCount);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("保存失败时显示固定错误而不显示底层文本", async () => {

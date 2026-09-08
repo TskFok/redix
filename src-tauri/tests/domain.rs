@@ -314,8 +314,8 @@ fn serializes_profile_without_password_field() {
 }
 
 #[test]
-fn rejects_scan_counts_outside_one_through_five_hundred() {
-    for count in [0, 501] {
+fn rejects_scan_counts_outside_one_through_ten_thousand() {
+    for count in [0, 10_001] {
         let input = ScanKeysInput {
             connection_id: "local".into(),
             cursor: 0.into(),
@@ -326,6 +326,26 @@ fn rejects_scan_counts_outside_one_through_five_hundred() {
 
         let error = input.validate().expect_err("invalid scan count must fail");
         assert_eq!(error.code(), "INVALID_CONNECTION");
+    }
+}
+
+#[test]
+fn scan_accepts_counts_allowed_by_settings() {
+    for scan_count in [10, 100, 500, 501, 1_000, 1_001, 10_000] {
+        let settings = AppSettings {
+            scan_count,
+            ..AppSettings::default()
+        };
+        assert_eq!(settings.validate(), Ok(()), "settings scan count {scan_count}");
+
+        let input = ScanKeysInput {
+            connection_id: "local".into(),
+            cursor: 0.into(),
+            pattern: "*".into(),
+            count: settings.scan_count as usize,
+            key_type: None,
+        };
+        assert_eq!(input.validate(), Ok(()), "scan count {scan_count}");
     }
 }
 
@@ -712,15 +732,17 @@ fn settings_validate_fixed_enum_and_range() {
     }
     .validate()
     .is_ok());
-    assert_eq!(
-        AppSettings {
-            scan_count: 1,
-            ..AppSettings::default()
-        }
-        .validate()
-        .unwrap_err(),
-        AppError::InvalidConnection
-    );
+    for scan_count in [1, 9, 10_001] {
+        assert_eq!(
+            AppSettings {
+                scan_count,
+                ..AppSettings::default()
+            }
+            .validate(),
+            Err(AppError::InvalidConnection),
+            "settings scan count {scan_count}"
+        );
+    }
 }
 
 #[test]

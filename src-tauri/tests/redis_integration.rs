@@ -1079,7 +1079,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
             connection_id: "integration".into(),
             cursor: 0.into(),
             pattern: format!("{}:*", keys.prefix),
-            count: 100,
+            count: 10_000,
             key_type: Some("hash".into()),
         })
         .await

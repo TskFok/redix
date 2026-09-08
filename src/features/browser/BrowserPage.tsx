@@ -84,7 +84,7 @@ export function BrowserPage({
   const keyTypeRef = useRef("");
   const visibleKeys = useMemo(() => filterKeysByType(state.keys, state.keyType), [state.keys, state.keyType]);
   const normalizedScanCount =
-    Number.isInteger(scanCount) && scanCount >= 10 && scanCount <= 1000 ? scanCount : 100;
+    Number.isInteger(scanCount) && scanCount >= 10 && scanCount <= 10000 ? scanCount : 100;
   const scanCountRef = useRef(normalizedScanCount);
   scanCountRef.current = normalizedScanCount;
 
