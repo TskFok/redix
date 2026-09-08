@@ -9,7 +9,7 @@ import {
 import KeyDetails from "./KeyDetails";
 import KeyEditor from "./KeyEditor";
 import AddKey from "./AddKey";
-import type { KeyValue, RedisValue } from "../../lib/types";
+import type { KeyValue, RedisValue, ScanPage } from "../../lib/types";
 
 const { getStringValueMock, decodeStringValueMock, encodeStringValueMock, setStringValueMock } = vi.hoisted(() => ({
   getStringValueMock: vi.fn(), decodeStringValueMock: vi.fn(), encodeStringValueMock: vi.fn(), setStringValueMock: vi.fn(),
@@ -1132,6 +1132,65 @@ describe("Redis Browser", () => {
     }
   });
 
+  it("新增键以弹窗打开，支持焦点循环、关闭和重新打开", async () => {
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("没有匹配的键。");
+    const trigger = screen.getByRole("button", { name: "新增键" });
+    trigger.focus();
+    fireEvent.click(trigger);
+
+    const dialog = screen.getByRole("dialog", { name: "新增键" });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(screen.getByLabelText("键名")).toHaveFocus();
+    expect(screen.getByText("没有匹配的键。")).toBeInTheDocument();
+    const submit = within(dialog).getByRole("button", { name: "创建键" });
+    submit.focus();
+    fireEvent.keyDown(submit, { key: "Tab" });
+    expect(dialog).toContainElement(document.activeElement as HTMLElement);
+    expect(submit).not.toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "Tab", shiftKey: true });
+    expect(submit).toHaveFocus();
+
+    const kind = screen.getByLabelText("数据类型");
+    fireEvent.click(kind);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    fireEvent.keyDown(kind, { key: "Escape" });
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(dialog).toBeInTheDocument();
+    fireEvent.keyDown(kind, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    fireEvent.click(trigger);
+    expect(screen.getByLabelText("键名")).toHaveValue("");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(createKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("创建请求期间禁用示例填充并阻止关闭弹窗，失败后保留表单", async () => {
+    const creation = deferred<KeyValue>();
+    scanKeysMock.mockResolvedValue({ cursor: 0, keys: [], node_failures: [], has_more: false });
+    createKeyMock.mockReturnValueOnce(creation.promise);
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("没有匹配的键。");
+    fireEvent.click(screen.getByRole("button", { name: "新增键" }));
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "draft:key" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    expect(screen.getByRole("button", { name: "添加示例数据" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "取消" })).toBeDisabled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    const dialog = screen.getByRole("dialog", { name: "新增键" });
+    fireEvent.click(dialog.parentElement!);
+    expect(dialog).toBeInTheDocument();
+    await act(async () => creation.reject({ code: "COMMAND_FAILED", message: "duplicate" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("创建键失败");
+    expect(screen.getByLabelText("键名")).toHaveValue("draft:key");
+    fireEvent.click(dialog.parentElement!);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("新增 String 键并在创建完成后刷新列表", async () => {
     const created = {
       ...stringDetail,
@@ -1168,6 +1227,40 @@ describe("Redis Browser", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "展开前缀 new:" }));
     expect(screen.getByRole("button", { name: "new:user" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "新增键" })).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("新增键成功刷新后恢复入口焦点，尊重用户主动移焦（%s）", async (focusMoved) => {
+    const refresh = deferred<ScanPage>();
+    scanKeysMock
+      .mockResolvedValueOnce({ cursor: 0, keys: [], node_failures: [], has_more: false })
+      .mockReturnValueOnce(refresh.promise);
+    createKeyMock.mockResolvedValue({ ...stringDetail, key: "new:user" });
+    render(<BrowserPage connectionId="local" />);
+    await screen.findByText("没有匹配的键。");
+    const trigger = screen.getByRole("button", { name: "新增键" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "new:user" } });
+    const submit = screen.getByRole("button", { name: "创建键" });
+    submit.focus();
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新增键" })).not.toBeInTheDocument());
+    expect(trigger).toBeDisabled();
+    // jsdom neither blurs newly disabled buttons nor allows blur() while disabled.
+    (trigger as HTMLButtonElement).disabled = false;
+    trigger.blur();
+    (trigger as HTMLButtonElement).disabled = true;
+    if (focusMoved) {
+      const otherControl = screen.getByLabelText("键列表自动刷新");
+      otherControl.focus();
+      otherControl.blur();
+    }
+    expect(document.body).toHaveFocus();
+    await act(async () => refresh.resolve({ cursor: 0, keys: [], node_failures: [], has_more: false }));
+    expect(trigger).toBeEnabled();
+    expect(focusMoved ? document.body : trigger).toHaveFocus();
   });
 
   it("新增 Stream 键时生成 Stream DTO", async () => {

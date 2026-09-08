@@ -35,6 +35,8 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailActionLoading, setDetailActionLoading] = useState(false);
   const [showAddKey, setShowAddKey] = useState(false);
+  const addKeyButtonRef = useRef<HTMLButtonElement>(null);
+  const restoreAddKeyFocusRef = useRef(false);
   const [moduleProbe, setModuleProbe] = useState<ModuleProbeState>({
     status: "loading",
     capabilities: null,
@@ -119,6 +121,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
     skipDebounceForPatternRef.current = "*";
     setDetailActionLoading(false);
     setShowAddKey(false);
+    restoreAddKeyFocusRef.current = false;
     setState({
       ...initialBrowserPageState,
       pattern: "*",
@@ -251,6 +254,7 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   };
 
   const handleCreated = () => {
+    restoreAddKeyFocusRef.current = true;
     setShowAddKey(false);
     void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
   };
@@ -379,6 +383,24 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
   };
 
   const listBusy = state.loading || detailLoading || detailActionLoading;
+  useEffect(() => {
+    if (showAddKey || !restoreAddKeyFocusRef.current) return;
+    if (!listBusy) {
+      restoreAddKeyFocusRef.current = false;
+      if (document.activeElement === document.body) {
+        addKeyButtonRef.current?.focus({ preventScroll: true });
+      }
+      return;
+    }
+    // The trigger is disabled during the scan; do not overwrite a later focus choice.
+    const cancelRestore = (event: FocusEvent) => {
+      if (event.target !== addKeyButtonRef.current && event.target !== document.body) {
+        restoreAddKeyFocusRef.current = false;
+      }
+    };
+    document.addEventListener("focusin", cancelRestore);
+    return () => document.removeEventListener("focusin", cancelRestore);
+  }, [listBusy, showAddKey]);
   useAutoRefresh(refreshSeconds, listBusy || showAddKey || state.selectedKey !== null || state.selectedKeys.length > 0, () => {
     void scanPage(0, state.pattern.trim() || "*", true, state.keyType);
   });
@@ -400,10 +422,13 @@ export function BrowserPage({ connectionId, scanCount = 100 }: BrowserPageProps)
 
       <div className="browser-actions" aria-label="Browser 操作">
         <button
+          ref={addKeyButtonRef}
           type="button"
           className="button button-secondary"
           onClick={() => setShowAddKey(true)}
-          disabled={listBusy || showAddKey}
+          disabled={listBusy}
+          aria-haspopup="dialog"
+          aria-expanded={showAddKey}
         >
           新增键
         </button>

@@ -1621,7 +1621,7 @@ input[type="checkbox"]:hover:not(:disabled) {
   overflow: hidden;
 }
 
-.browser-page > :not(.browser-layout):not(.browser-add-key) {
+.browser-page > :not(.browser-layout) {
   flex-shrink: 0;
 }
 
@@ -1760,16 +1760,26 @@ input[type="checkbox"]:hover:not(:disabled) {
   margin: 0;
 }
 
+.browser-add-key-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: color-mix(in srgb, var(--color-background) 65%, transparent);
+}
+
 .browser-add-key {
   display: grid;
+  width: min(100%, 640px);
   min-height: 0;
-  max-height: 50%;
-  flex: 1 1 0;
-  gap: 14px;
-  margin-bottom: 12px;
-  padding: 16px;
-  border: 1px solid var(--color-border);
+  max-height: calc(100dvh - 48px);
+  gap: 18px;
+  padding: 24px;
+  border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
+  color: var(--color-text);
   background: var(--color-surface);
   box-shadow: var(--shadow-panel);
   overflow: auto;
@@ -1784,10 +1794,10 @@ input[type="checkbox"]:hover:not(:disabled) {
   gap: 12px;
 }
 
-.browser-add-key-heading h3 {
+.browser-add-key-heading h2 {
   margin: 0;
   color: var(--color-text-strong);
-  font-size: 14px;
+  font-size: 18px;
   font-weight: 500;
 }
 
@@ -1795,6 +1805,19 @@ input[type="checkbox"]:hover:not(:disabled) {
   display: grid;
   grid-template-columns: minmax(0, 1.3fr) minmax(160px, 0.7fr);
   gap: 12px;
+}
+
+.browser-add-key-example {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.browser-add-key-example p {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 11px;
 }
 
 .browser-add-key-footer .field {
