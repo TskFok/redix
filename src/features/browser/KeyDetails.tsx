@@ -490,27 +490,21 @@ export function KeyDetails({
       aria-labelledby="key-details-title"
       aria-busy={uiBusy}
     >
-      <div className="browser-panel-heading">
-        <div>
-          <p className="eyebrow">DETAILS</p>
-          <h2 id="key-details-title">键详情</h2>
-        </div>
+      <div className="detail-header">
+        <p className="eyebrow">DETAILS</p>
+        <h2 id="key-details-title" className="sr-only">键详情</h2>
+        <code className="detail-key-name" title={detail.key}>{detail.key}</code>
         <span className="detail-type">{keyTypeLabel(detail.key_type)}</span>
-      </div>
-
-      <div className="detail-key-line">
-        <span>键名</span>
-        <code title={detail.key}>{detail.key}</code>
         <span className="detail-ttl-summary" title="生存时间">
           TTL {detail.ttl_ms < 0 ? "永久" : `${detail.ttl_ms} ms`}
         </span>
       </div>
       {confirmationDialog}
-      {error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
       <KeyDetailsTabs
         key={detailScope}
         selectedTab={detailTab.scope === detailScope ? detailTab.id : "value"}
         onSelectTab={(id) => setDetailTab({ scope: detailScope!, id })}
+        feedback={error ? <p className="feedback feedback-error" role="alert">{error}</p> : null}
         tabs={[
           {
             id: "value",

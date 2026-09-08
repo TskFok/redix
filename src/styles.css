@@ -1684,7 +1684,7 @@ input[type="checkbox"]:hover:not(:disabled) {
 
 .browser-detail-panel {
   padding: 20px;
-  scrollbar-gutter: stable;
+  overflow: hidden;
 }
 
 .browser-panel-heading h2,
@@ -1942,24 +1942,26 @@ input[type="checkbox"]:hover:not(:disabled) {
   justify-content: flex-start;
 }
 
-.detail-key-line {
+.detail-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 14px;
-  margin-top: 18px;
-  padding: 11px 0;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
+  gap: 12px;
+  min-width: 0;
+  padding-bottom: 8px;
 }
 
-.detail-key-line > span,
+.detail-header .eyebrow {
+  margin: 0;
+}
+
+.detail-ttl-summary,
 .detail-metadata span {
   color: var(--color-muted);
   font-size: 10px;
 }
 
-.detail-key-line code {
+.detail-key-name {
   overflow: hidden;
   color: var(--color-text);
   text-overflow: ellipsis;
@@ -1972,9 +1974,6 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 .detail-tabs {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
   gap: 4px;
   min-width: 0;
@@ -2019,7 +2018,13 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 .detail-tab-panel {
+  position: relative;
   min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .detail-tab-panel[hidden] {

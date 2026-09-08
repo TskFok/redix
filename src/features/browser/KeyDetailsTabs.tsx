@@ -10,9 +10,10 @@ interface KeyDetailsTabsProps {
   tabs: DetailTab[];
   selectedTab: string;
   onSelectTab: (tab: string) => void;
+  feedback?: ReactNode;
 }
 
-export default function KeyDetailsTabs({ tabs, selectedTab, onSelectTab }: KeyDetailsTabsProps) {
+export default function KeyDetailsTabs({ tabs, selectedTab, onSelectTab, feedback }: KeyDetailsTabsProps) {
   const id = useId();
   const buttons = useRef(new Map<string, HTMLButtonElement>());
   const activeTab = tabs.some((tab) => tab.id === selectedTab) ? selectedTab : "value";
@@ -69,6 +70,7 @@ export default function KeyDetailsTabs({ tabs, selectedTab, onSelectTab }: KeyDe
           tabIndex={0}
         >
           {/* Keep editors mounted so tab changes preserve drafts and in-flight operations. */}
+          {activeTab === tab.id ? feedback : null}
           {tab.content}
         </div>
       ))}
