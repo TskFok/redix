@@ -11,6 +11,11 @@
   margin-top: 0;
 }
 
+.browser-list-toolbar .button {
+  padding-inline: 8px;
+  white-space: nowrap;
+}
+
 .browser-list-actions {
   display: flex;
   align-items: center;

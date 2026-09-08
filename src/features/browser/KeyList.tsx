@@ -68,12 +68,13 @@ export function KeyList({
         <div className="browser-list-actions">
           <button ref={filterTrigger} type="button" className="button button-secondary browser-filter-trigger"
             aria-label="筛选" aria-haspopup="dialog" aria-expanded={filtersOpen} data-active={hasFilters}
+            title={hasFilters ? "筛选已启用" : "筛选"}
             onClick={() => {
               filterTrigger.current?.focus({ preventScroll: true });
               setFiltersOpen(true);
             }}>
             <svg viewBox="0 0 16 16" aria-hidden="true" focusable="false"><path d="M2 3h12L9 8.5V13l-2-1V8.5Z" /></svg>
-            {hasFilters ? "筛选 · 已启用" : "筛选"}
+            筛选
           </button>
           {hasMore ? (
             <button
