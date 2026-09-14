@@ -569,13 +569,17 @@ input[type="number"] {
 }
 
 .app-shell.app-shell-browser,
-.app-shell.app-shell-workbench {
+.app-shell.app-shell-workbench,
+.app-shell.app-shell-database,
+.app-shell.app-shell-observability {
   height: 100dvh;
   min-height: 0;
 }
 
 .workspace.workspace-browser,
-.workspace.workspace-workbench {
+.workspace.workspace-workbench,
+.workspace.workspace-database,
+.workspace.workspace-observability {
   display: flex;
   flex-direction: column;
   padding-bottom: 24px;
@@ -583,7 +587,9 @@ input[type="number"] {
 }
 
 .workspace-browser > .workspace-context,
-.workspace-workbench > .workspace-context {
+.workspace-workbench > .workspace-context,
+.workspace-database > .workspace-context,
+.workspace-observability > .workspace-context {
   flex-shrink: 0;
 }
 
@@ -3625,6 +3631,53 @@ input[type="checkbox"]:hover:not(:disabled) {
   align-items: flex-start;
 }
 
+.database-overview-page {
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
+}
+
+.database-overview-page > .database-page-heading {
+  flex-shrink: 0;
+}
+
+.database-overview-page > .database-page-heading > :first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+.database-page-actions {
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.database-auto-refresh {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.database-auto-refresh > .app-select-control {
+  width: 100px;
+  flex: 0 0 auto;
+}
+
+.database-page-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: 2px 4px 4px;
+  overflow: auto;
+}
+
+.database-page-content > * {
+  flex-shrink: 0;
+}
+
 .database-metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -3887,15 +3940,28 @@ input[type="checkbox"]:hover:not(:disabled) {
 .observability-page {
   display: flex;
   min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
   flex-direction: column;
   gap: 14px;
+  overflow: hidden;
 }
 
-.observability-page-heading {
-  align-items: flex-start;
+.observability-page-content {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 14px;
+  padding: 2px 4px 4px;
+  overflow: auto;
 }
 
-.observability-scope,
+.observability-page-content > * {
+  flex-shrink: 0;
+}
+
 .observability-config-summary,
 .observability-session-note {
   color: var(--color-muted);
@@ -3903,18 +3969,11 @@ input[type="checkbox"]:hover:not(:disabled) {
   font-size: 10px;
 }
 
-.observability-scope {
-  max-width: 38ch;
-  overflow: hidden;
-  padding-top: 4px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .observability-tabs {
   display: flex;
   width: fit-content;
   max-width: 100%;
+  flex-shrink: 0;
   gap: 3px;
   padding: 3px;
   border: 1px solid var(--color-border);
@@ -3991,17 +4050,25 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 .observability-inline-field {
-  display: grid;
+  display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 8px;
   color: var(--color-muted);
-  font-size: 9px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.observability-inline-field > .app-select-control {
+  width: 86px;
+  flex: 0 0 auto;
 }
 
 .observability-inline-field select {
-  min-height: 32px;
-  padding: 5px 34px 5px 10px;
-  font-size: 10px;
+  min-height: 40px;
+  padding: 8px 34px 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .observability-panel-hint {
@@ -4409,14 +4476,18 @@ input[type="checkbox"]:hover:not(:disabled) {
   }
 
   .app-shell-browser .app-main,
-  .app-shell-workbench .app-main {
+  .app-shell-workbench .app-main,
+  .app-shell-database .app-main,
+  .app-shell-observability .app-main {
     min-height: 0;
     flex: 1 1 0;
     overflow: hidden;
   }
 
   .app-shell-browser .app-navigation,
-  .app-shell-workbench .app-navigation {
+  .app-shell-workbench .app-navigation,
+  .app-shell-database .app-navigation,
+  .app-shell-observability .app-navigation {
     min-width: 0;
     flex: 1 1 auto;
   }

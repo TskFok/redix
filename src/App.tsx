@@ -270,6 +270,8 @@ export default function App() {
   const canAccessWorkspace = connectionWorkspaceOpen && activeProfile !== null;
   const isBrowserWorkspace = canAccessWorkspace && activeSection === "browser";
   const isWorkbenchWorkspace = canAccessWorkspace && activeSection === "workbench";
+  const isDatabaseWorkspace = canAccessWorkspace && activeSection === "database";
+  const isObservabilityWorkspace = canAccessWorkspace && activeSection === "observability";
   const canAccessLocalResources = (section: AppSection) =>
     section === "connections" || section === "query-library" || section === "settings";
   const showConnectionPage =
@@ -321,7 +323,7 @@ export default function App() {
   ];
 
   return (
-    <main className={`app-shell${canAccessWorkspace ? "" : " app-shell-home"}${isBrowserWorkspace ? " app-shell-browser" : ""}${isWorkbenchWorkspace ? " app-shell-workbench" : ""}`}>
+    <main className={`app-shell${canAccessWorkspace ? "" : " app-shell-home"}${isBrowserWorkspace ? " app-shell-browser" : ""}${isWorkbenchWorkspace ? " app-shell-workbench" : ""}${isDatabaseWorkspace ? " app-shell-database" : ""}${isObservabilityWorkspace ? " app-shell-observability" : ""}`}>
       {canAccessWorkspace ? (
       <aside className="app-sidebar" aria-label="产品侧边栏">
         <AppBrand />
@@ -403,7 +405,7 @@ export default function App() {
       )}
 
       <section className="app-main">
-        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}${isBrowserWorkspace ? " workspace-browser" : ""}${isWorkbenchWorkspace ? " workspace-workbench" : ""}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
+        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}${isBrowserWorkspace ? " workspace-browser" : ""}${isWorkbenchWorkspace ? " workspace-workbench" : ""}${isDatabaseWorkspace ? " workspace-database" : ""}${isObservabilityWorkspace ? " workspace-observability" : ""}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
           {showConnectionPage ? (
             <ConnectionPage
               activeConnectionId={activeProfile?.id ?? null}

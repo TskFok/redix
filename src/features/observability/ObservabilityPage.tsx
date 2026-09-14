@@ -422,21 +422,9 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
   return (
     <section
       className="observability-page"
-      aria-labelledby="observability-page-title"
+      aria-label="运维观察"
       aria-busy={slowLogLoading || slowLogBusy || pubSubBusy || profilerBusy}
     >
-      <div className="page-heading observability-page-heading">
-        <div>
-          <p className="eyebrow">OPERATIONS / OBSERVABILITY</p>
-          <h2 id="observability-page-title">运维观察</h2>
-          <p className="page-description">
-            用 Slow Log 定位慢命令、通过 Pub/Sub 观察频道消息，并用 Profiler 查看实时命令。操作针对当前连接。
-          </p>
-        </div>
-        <span className="observability-scope">当前连接 · {connectionId}</span>
-      </div>
-
-      {isCluster && <p className="observability-warning">Cluster Slow Log 节点作用域尚未支持；Pub/Sub 和 Profiler 同样不可用。可在命令工作台显式执行原生命令，其路由范围由驱动决定。</p>}
       <div className="observability-tabs" role="tablist" aria-label="运维观察模块">
         <button
           type="button"
@@ -473,60 +461,64 @@ function ObservabilitySessionPage({ connectionId, isCluster = false }: Observabi
         </button>
       </div>
 
-      {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
+      <div className="observability-page-content">
+        {isCluster && <p className="observability-warning">Cluster Slow Log 节点作用域尚未支持；Pub/Sub 和 Profiler 同样不可用。可在命令工作台显式执行原生命令，其路由范围由驱动决定。</p>}
 
-      {isCluster ? (
-        <p className="empty-state">Cluster 观察功能需要明确的节点作用域，当前尚未开放。</p>
-      ) : tab === "slowlog" ? (
-        <SlowLogPanel
-          config={slowLogConfig}
-          count={slowLogCount}
-          logs={slowLogs}
-          loading={slowLogLoading}
-          busy={slowLogBusy}
-          maxLen={slowLogMaxLen}
-          slowerThan={slowLogSlowerThan}
-          onCountChange={setSlowLogCount}
-          onMaxLenChange={setSlowLogMaxLen}
-          onSlowerThanChange={setSlowLogSlowerThan}
-          onRefresh={() => void refreshSlowLogs()}
-          onClear={() => void handleClearSlowLogs()}
-          onSaveConfig={() => void handleSaveSlowLogConfig()}
-        />
-      ) : tab === "pubsub" ? (
-        <PubSubPanel
-          key={`pubsub-${pubSubSession?.session_id ?? "idle"}`}
-          activeSession={pubSubSession}
-          busy={pubSubBusy}
-          messages={pubSubMessages}
-          pattern={topicPattern}
-          publishChannel={publishChannel}
-          publishFeedback={publishFeedback}
-          publishFeedbackToken={publishFeedbackToken}
-          publishMessage={publishMessage}
-          status={pubSubStatus}
-          topicText={topicText}
-          onClearMessages={() => setPubSubMessages([])}
-          onPatternChange={setTopicPattern}
-          onPublish={() => void handlePublish()}
-          onPublishChannelChange={setPublishChannel}
-          onPublishMessageChange={setPublishMessage}
-          onStart={() => void handleStartPubSub()}
-          onStop={() => void handleStopPubSub()}
-          onTopicTextChange={setTopicText}
-        />
-      ) : (
-        <ProfilerPanel
-          key={`profiler-${profilerSession?.session_id ?? "idle"}`}
-          activeSession={profilerSession}
-          busy={profilerBusy}
-          events={profilerEvents}
-          status={profilerStatus}
-          onClearEvents={() => setProfilerEvents([])}
-          onStart={() => void handleStartProfiler()}
-          onStop={() => void handleStopProfiler()}
-        />
-      )}
+        {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
+
+        {isCluster ? (
+          <p className="empty-state">Cluster 观察功能需要明确的节点作用域，当前尚未开放。</p>
+        ) : tab === "slowlog" ? (
+          <SlowLogPanel
+            config={slowLogConfig}
+            count={slowLogCount}
+            logs={slowLogs}
+            loading={slowLogLoading}
+            busy={slowLogBusy}
+            maxLen={slowLogMaxLen}
+            slowerThan={slowLogSlowerThan}
+            onCountChange={setSlowLogCount}
+            onMaxLenChange={setSlowLogMaxLen}
+            onSlowerThanChange={setSlowLogSlowerThan}
+            onRefresh={() => void refreshSlowLogs()}
+            onClear={() => void handleClearSlowLogs()}
+            onSaveConfig={() => void handleSaveSlowLogConfig()}
+          />
+        ) : tab === "pubsub" ? (
+          <PubSubPanel
+            key={`pubsub-${pubSubSession?.session_id ?? "idle"}`}
+            activeSession={pubSubSession}
+            busy={pubSubBusy}
+            messages={pubSubMessages}
+            pattern={topicPattern}
+            publishChannel={publishChannel}
+            publishFeedback={publishFeedback}
+            publishFeedbackToken={publishFeedbackToken}
+            publishMessage={publishMessage}
+            status={pubSubStatus}
+            topicText={topicText}
+            onClearMessages={() => setPubSubMessages([])}
+            onPatternChange={setTopicPattern}
+            onPublish={() => void handlePublish()}
+            onPublishChannelChange={setPublishChannel}
+            onPublishMessageChange={setPublishMessage}
+            onStart={() => void handleStartPubSub()}
+            onStop={() => void handleStopPubSub()}
+            onTopicTextChange={setTopicText}
+          />
+        ) : (
+          <ProfilerPanel
+            key={`profiler-${profilerSession?.session_id ?? "idle"}`}
+            activeSession={profilerSession}
+            busy={profilerBusy}
+            events={profilerEvents}
+            status={profilerStatus}
+            onClearEvents={() => setProfilerEvents([])}
+            onStart={() => void handleStartProfiler()}
+            onStop={() => void handleStopProfiler()}
+          />
+        )}
+      </div>
     </section>
   );
 }
