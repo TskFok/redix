@@ -215,7 +215,11 @@ fn parse_json_array_append_values(values: Vec<Value>) -> Result<(u64, Option<u64
     Ok((affected, new_length))
 }
 
-async fn read_ttl_ms(connection: &mut RoutedConnection, key: &str) -> Result<i64, AppError> {
+async fn read_ttl_ms(
+    connection: &mut RoutedConnection,
+    key: impl AsRef<[u8]> + Send + Sync,
+) -> Result<i64, AppError> {
+    let key = key.as_ref();
     ::redis::cmd("PTTL")
         .arg(key)
         .query_async::<i64>(connection)
@@ -223,7 +227,11 @@ async fn read_ttl_ms(connection: &mut RoutedConnection, key: &str) -> Result<i64
         .map_err(map_command_error)
 }
 
-async fn read_mutation_ttl_ms(connection: &mut RoutedConnection, key: &str) -> i64 {
+async fn read_mutation_ttl_ms(
+    connection: &mut RoutedConnection,
+    key: impl AsRef<[u8]> + Send + Sync,
+) -> i64 {
+    let key = key.as_ref();
     resolve_mutation_ttl_ms(read_ttl_ms(connection, key).await)
 }
 

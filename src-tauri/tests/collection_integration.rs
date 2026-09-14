@@ -1,6 +1,6 @@
 //! This ignored test starts and verifies its own disposable Redis; no user URL is accepted.
 use redix_lib::{
-    domain::{collection::*, ConnectionProfile, RedisValue, RenameKeyInput},
+    domain::{collection::*, ConnectionProfile, RedisBytes, RedisValue, RenameKeyInput},
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
     redis::{RedisOperations, RedisService},
@@ -158,6 +158,329 @@ fn mutation_input(key: &str, operation: serde_json::Value) -> CollectionMutation
         "connection_id": "isolated", "key": key, "mutation": operation
     }))
     .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "自行启动隔离临时Redis，覆盖二进制集合与空键"]
+async fn binary_collections_preserve_identity_reads_mutations_and_hash_field_ttl() {
+    let (_server, service, mut raw) = isolated_server().await;
+    let hash_key = RedisBytes::from(vec![0xff, b'h', 0]);
+    let list_key = RedisBytes::from(vec![0xff, b'l', 0]);
+    let set_key = RedisBytes::from("");
+    let zset_key = RedisBytes::from(vec![0xff, b'z', 0]);
+    let first = RedisBytes::from(vec![0xff, 0, 0xfe]);
+    let second = RedisBytes::from(vec![0xfe, 0, 0xff]);
+    let empty = RedisBytes::from("");
+    redis::pipe()
+        .cmd("HSET")
+        .arg(&hash_key)
+        .arg(&first)
+        .arg(&second)
+        .arg(&second)
+        .arg(&first)
+        .arg("")
+        .arg("")
+        .ignore()
+        .cmd("RPUSH")
+        .arg(&list_key)
+        .arg(&first)
+        .arg("")
+        .arg(&second)
+        .ignore()
+        .cmd("SADD")
+        .arg(&set_key)
+        .arg(&first)
+        .arg(&second)
+        .arg("")
+        .ignore()
+        .cmd("ZADD")
+        .arg(&zset_key)
+        .arg(1.5)
+        .arg(&first)
+        .arg(-2)
+        .arg(&second)
+        .arg(0)
+        .arg("")
+        .ignore()
+        .cmd("PEXPIRE")
+        .arg(&hash_key)
+        .arg(60000)
+        .ignore()
+        .query_async::<()>(&mut raw)
+        .await
+        .unwrap();
+
+    let binary_request = |key: &RedisBytes, kind| CollectionPageInput {
+        key: key.clone(),
+        count: 1,
+        ..request("", kind)
+    };
+    for (key, kind) in [
+        (&hash_key, CollectionKind::Hash),
+        (&list_key, CollectionKind::List),
+        (&set_key, CollectionKind::Set),
+        (&zset_key, CollectionKind::Zset),
+    ] {
+        let mut input = binary_request(key, kind);
+        let mut entries = Vec::new();
+        for _ in 0..30 {
+            let page = service.get_collection_page(input.clone()).await.unwrap();
+            assert_eq!(page.total, "3");
+            // Exercise the actual IPC round trip before using returned identities to edit.
+            let page: CollectionPage =
+                serde_json::from_slice(&serde_json::to_vec(&page).unwrap()).unwrap();
+            entries.extend(page.entries);
+            if !page.has_more {
+                break;
+            }
+            input.cursor = page.next_cursor;
+        }
+        let values = entries
+            .iter()
+            .map(|entry| entry.value.clone())
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            values,
+            HashSet::from([first.clone(), second.clone(), empty.clone()])
+        );
+        if kind != CollectionKind::List {
+            assert_eq!(
+                entries
+                    .iter()
+                    .map(|entry| entry.id.clone())
+                    .collect::<HashSet<_>>(),
+                values
+            );
+        } else {
+            assert_eq!(
+                entries
+                    .iter()
+                    .map(|entry| entry.id.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    RedisBytes::from("0"),
+                    RedisBytes::from("1"),
+                    RedisBytes::from("2")
+                ]
+            );
+        }
+    }
+    let filtered = service
+        .get_collection_page(CollectionPageInput {
+            pattern: vec![0xff, b'*'].into(),
+            ..binary_request(&hash_key, CollectionKind::Hash)
+        })
+        .await
+        .unwrap();
+    assert_eq!(filtered.entries.len(), 1);
+    assert_eq!(filtered.entries[0].id, first);
+    let sorted = service
+        .get_collection_page(CollectionPageInput {
+            order: CollectionOrder::ScoreDesc,
+            count: 3,
+            ..binary_request(&zset_key, CollectionKind::Zset)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        sorted
+            .entries
+            .iter()
+            .map(|entry| (entry.id.clone(), entry.score))
+            .collect::<Vec<_>>(),
+        vec![
+            (first.clone(), Some(1.5)),
+            (empty.clone(), Some(0.0)),
+            (second.clone(), Some(-2.0))
+        ]
+    );
+    let tail = service
+        .get_list_entry(ListIndexInput {
+            connection_id: "isolated".into(),
+            key: list_key.clone(),
+            index: "-1".into(),
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tail.id, "2");
+    assert_eq!(tail.value, second);
+
+    let execute = |key: &RedisBytes, mutation| CollectionMutationInput {
+        connection_id: "isolated".into(),
+        key: key.clone(),
+        mutation,
+    };
+    service
+        .mutate_collection(execute(
+            &hash_key,
+            CollectionMutation::HashExpire {
+                field: first.clone(),
+                ttl_ms: "30000".into(),
+            },
+        ))
+        .await
+        .unwrap();
+    let deadline: Vec<i64> = redis::cmd("HPEXPIRETIME")
+        .arg(&hash_key)
+        .arg("FIELDS")
+        .arg(1)
+        .arg(&first)
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    service
+        .mutate_collection(execute(
+            &hash_key,
+            CollectionMutation::HashSet {
+                field: first.clone(),
+                value: first.clone(),
+            },
+        ))
+        .await
+        .unwrap();
+    let after: Vec<i64> = redis::cmd("HPEXPIRETIME")
+        .arg(&hash_key)
+        .arg("FIELDS")
+        .arg(1)
+        .arg(&first)
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(after, deadline, "二进制字段编辑必须保留字段到期时间");
+    let page = service
+        .get_collection_page(binary_request(&hash_key, CollectionKind::Hash))
+        .await
+        .unwrap();
+    assert!(page
+        .entries
+        .iter()
+        .any(|entry| entry.id == first && entry.ttl_ms.is_some_and(|ttl| ttl > 0)));
+    for mutation in [
+        CollectionMutation::HashPersist {
+            field: first.clone(),
+        },
+        CollectionMutation::HashDelete {
+            field: second.clone(),
+        },
+        CollectionMutation::HashSet {
+            field: empty.clone(),
+            value: second.clone(),
+        },
+    ] {
+        service
+            .mutate_collection(execute(&hash_key, mutation))
+            .await
+            .unwrap();
+    }
+    for mutation in [
+        CollectionMutation::SetRemove {
+            member: first.clone(),
+        },
+        CollectionMutation::SetRemove {
+            member: empty.clone(),
+        },
+        CollectionMutation::SetAdd {
+            member: first.clone(),
+        },
+        CollectionMutation::SetAdd {
+            member: empty.clone(),
+        },
+    ] {
+        service
+            .mutate_collection(execute(&set_key, mutation))
+            .await
+            .unwrap();
+    }
+    for mutation in [
+        CollectionMutation::ZsetRemove {
+            member: first.clone(),
+        },
+        CollectionMutation::ZsetAdd {
+            member: second.clone(),
+            score: 4.25,
+        },
+        CollectionMutation::ZsetAdd {
+            member: empty.clone(),
+            score: 2.0,
+        },
+    ] {
+        service
+            .mutate_collection(execute(&zset_key, mutation))
+            .await
+            .unwrap();
+    }
+    for mutation in [
+        CollectionMutation::ListSet {
+            index: "0".into(),
+            value: second.clone(),
+        },
+        CollectionMutation::ListAppend {
+            value: first.clone(),
+            prepend: false,
+        },
+        CollectionMutation::ListAppend {
+            value: first.clone(),
+            prepend: true,
+        },
+        CollectionMutation::ListTrim {
+            count: "1".into(),
+            from_head: true,
+        },
+    ] {
+        service
+            .mutate_collection(execute(&list_key, mutation))
+            .await
+            .unwrap();
+    }
+    let hash: Vec<(RedisBytes, RedisBytes)> = redis::cmd("HGETALL")
+        .arg(&hash_key)
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(
+        hash.into_iter().collect::<HashSet<_>>(),
+        HashSet::from([
+            (first.clone(), first.clone()),
+            (empty.clone(), second.clone())
+        ])
+    );
+    let ttls: Vec<i64> = redis::cmd("HPTTL")
+        .arg(&hash_key)
+        .arg("FIELDS")
+        .arg(1)
+        .arg(&first)
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(ttls, vec![-1]);
+    let set: HashSet<RedisBytes> = redis::cmd("SMEMBERS")
+        .arg(&set_key)
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(
+        set,
+        HashSet::from([first.clone(), second.clone(), empty.clone()])
+    );
+    let zset: Vec<(RedisBytes, f64)> = redis::cmd("ZRANGE")
+        .arg(&zset_key)
+        .arg(0)
+        .arg(-1)
+        .arg("WITHSCORES")
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(zset, vec![(empty.clone(), 2.0), (second.clone(), 4.25)]);
+    let list: Vec<RedisBytes> = redis::cmd("LRANGE")
+        .arg(&list_key)
+        .arg(0)
+        .arg(-1)
+        .query_async(&mut raw)
+        .await
+        .unwrap();
+    assert_eq!(list, vec![second.clone(), empty, second, first]);
+    service.close_connection("isolated").await.unwrap();
 }
 
 async fn field_ttl(raw: &mut redis::aio::MultiplexedConnection, field: &str) -> i64 {
@@ -727,7 +1050,7 @@ async fn zset_score_order_is_global_across_pages_with_negative_and_equal_scores(
             actual,
             expected
                 .into_iter()
-                .map(|(member, score)| (member.to_string(), score))
+                .map(|(member, score)| (RedisBytes::from(member), score))
                 .collect::<Vec<_>>()
         );
         let partial = service
@@ -783,7 +1106,7 @@ async fn zset_score_order_is_global_across_pages_with_negative_and_equal_scores(
     }
     assert_eq!(
         matches,
-        HashSet::from(["negative".to_string(), "middle".to_string()])
+        HashSet::from([RedisBytes::from("negative"), RedisBytes::from("middle")])
     );
     for order in [CollectionOrder::ScoreAsc, CollectionOrder::ScoreDesc] {
         assert_eq!(
@@ -848,8 +1171,8 @@ async fn list_index_lookup_handles_signed_boundaries_and_returns_an_editable_abs
             .unwrap()
             .unwrap();
         assert_eq!(
-            (entry.id.as_str(), entry.value.as_str()),
-            (expected_id, expected_value),
+            (entry.id.as_bytes(), entry.value.as_bytes()),
+            (expected_id.as_bytes(), expected_value.as_bytes()),
             "索引：{index}"
         );
         assert_eq!(entry.score, None);
@@ -894,7 +1217,7 @@ async fn list_index_lookup_handles_signed_boundaries_and_returns_an_editable_abs
         &service,
         "lookup",
         CollectionMutation::ListSet {
-            index: tail.id,
+            index: tail.id.utf8().unwrap().to_owned(),
             value: "edited tail".into(),
         },
     )
@@ -931,7 +1254,13 @@ async fn list_index_lookup_handles_signed_boundaries_and_returns_an_editable_abs
         .query_async::<()>(&mut raw)
         .await
         .unwrap();
-    for key in ["binary-list", "oversized-list", "escaped-list"] {
+    let binary = service
+        .get_list_entry(list_index("binary-list", "0"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(binary.value.as_bytes(), &[0xff, 0, 0xfe]);
+    for key in ["oversized-list", "escaped-list"] {
         assert_eq!(
             service.get_list_entry(list_index(key, "0")).await,
             Err(AppError::CommandFailed),

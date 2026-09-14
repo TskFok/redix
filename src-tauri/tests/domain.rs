@@ -365,7 +365,7 @@ fn scan_filter_rejects_unknown_key_type_and_accepts_supported_type() {
 }
 
 #[test]
-fn import_rejects_empty_entries_and_exported_key_rejects_empty_name() {
+fn import_rejects_empty_entries_and_exported_key_accepts_empty_name() {
     assert_eq!(
         ImportKeysInput {
             connection_id: "local".into(),
@@ -377,16 +377,13 @@ fn import_rejects_empty_entries_and_exported_key_rejects_empty_name() {
     );
 
     let empty_name = ExportedKey {
-        key: String::new(),
+        key: "".into(),
         ttl_ms: -1,
         value: RedisValue::String {
             value: "value".into(),
         },
     };
-    assert_eq!(
-        empty_name.validate().unwrap_err(),
-        AppError::InvalidConnection
-    );
+    assert_eq!(empty_name.validate(), Ok(()));
 }
 
 #[test]
@@ -399,7 +396,7 @@ fn serializes_errors_with_stable_code_and_safe_message() {
 }
 
 #[test]
-fn validates_browser_extension_inputs_without_accepting_empty_keys() {
+fn validates_browser_extension_inputs_and_accepts_empty_or_whitespace_keys() {
     let value = RedisValue::Stream {
         entries: vec![StreamEntry {
             id: "1-0".into(),
@@ -427,24 +424,18 @@ fn validates_browser_extension_inputs_without_accepting_empty_keys() {
         "INVALID_CONNECTION"
     );
 
-    let invalid_rename = RenameKeyInput {
+    let whitespace_rename = RenameKeyInput {
         connection_id: "local".into(),
         key: "events".into(),
         new_key: " ".into(),
     };
-    assert_eq!(
-        invalid_rename.validate().unwrap_err().code(),
-        "INVALID_CONNECTION"
-    );
+    assert_eq!(whitespace_rename.validate(), Ok(()));
 
-    let invalid_delete = DeleteKeysInput {
+    let empty_key_delete = DeleteKeysInput {
         connection_id: "local".into(),
         keys: vec!["events".into(), "".into()],
     };
-    assert_eq!(
-        invalid_delete.validate().unwrap_err().code(),
-        "INVALID_CONNECTION"
-    );
+    assert_eq!(empty_key_delete.validate(), Ok(()));
 
     let invalid_info = KeyInfoInput {
         connection_id: " ".into(),
@@ -580,7 +571,7 @@ fn json_payload_and_response_limits_accept_exact_boundary_and_reject_overflow() 
 }
 
 #[test]
-fn json_path_contract_enforces_trimmed_identifiers_and_utf8_byte_limit() {
+fn json_path_contract_accepts_whitespace_keys_and_enforces_path_byte_limit() {
     let input = GetJsonPathInput {
         connection_id: "  ".into(),
         key: "doc".into(),
@@ -593,7 +584,7 @@ fn json_path_contract_enforces_trimmed_identifiers_and_utf8_byte_limit() {
         key: "  ".into(),
         path: "$".into(),
     };
-    assert_eq!(input.validate().unwrap_err(), AppError::InvalidInput);
+    assert_eq!(input.validate(), Ok(()));
 
     let max_path = format!("$.{}", "你".repeat(170));
     assert_eq!(max_path.len(), 512);

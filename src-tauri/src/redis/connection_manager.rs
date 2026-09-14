@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use std::{collections::HashMap, sync::Arc};
 
 use ::redis::{Client, ClientTlsConfig, TlsCertificates, Value};
@@ -108,7 +109,11 @@ pub trait RedisOperations: Send + Sync {
     ) -> Result<SlowLogConfig, AppError>;
     async fn publish_pub_sub(&self, input: PublishPubSubInput) -> Result<u64, AppError>;
     async fn scan_keys(&self, input: crate::domain::ScanKeysInput) -> Result<ScanPage, AppError>;
-    async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError>;
+    async fn get_key(
+        &self,
+        connection_id: &str,
+        key: impl AsRef<[u8]> + Send + Sync,
+    ) -> Result<KeyValue, AppError>;
     async fn create_array(&self, input: CreateArrayInput) -> Result<KeyValue, AppError>;
     async fn get_array_summary(
         &self,
@@ -214,7 +219,11 @@ pub trait RedisOperations: Send + Sync {
     async fn set_key(&self, input: SetKeyInput) -> Result<KeyValue, AppError>;
     async fn create_key(&self, input: CreateKeyInput) -> Result<KeyValue, AppError>;
     async fn rename_key(&self, input: RenameKeyInput) -> Result<KeyValue, AppError>;
-    async fn delete_key(&self, connection_id: &str, key: &str) -> Result<(), AppError>;
+    async fn delete_key(
+        &self,
+        connection_id: &str,
+        key: impl AsRef<[u8]> + Send + Sync,
+    ) -> Result<(), AppError>;
     async fn delete_keys(&self, input: DeleteKeysInput) -> Result<u64, AppError>;
     async fn set_key_ttl(&self, input: SetKeyTtlInput) -> Result<i64, AppError>;
     async fn get_key_info(&self, input: KeyInfoInput) -> Result<KeyInfo, AppError>;
@@ -355,9 +364,6 @@ impl ClusterScanBackend for RedisClusterScanBackend {
             )
             .await
             .map_err(|_| AppError::ClusterNodeUnavailable)?;
-            if keys.iter().any(|key| std::str::from_utf8(key).is_err()) {
-                return Err(AppError::ClusterNodeUnavailable);
-            }
             Ok((next_cursor, keys))
         })
     }
@@ -499,9 +505,10 @@ impl RedisService {
     pub async fn get_browser_key(
         &self,
         connection_id: &str,
-        key: &str,
+        key: impl AsRef<[u8]> + Send + Sync,
     ) -> Result<KeyValue, AppError> {
-        if key.is_empty() || key.len() > 16 * 1024 {
+        let key = key.as_ref();
+        if key.len() > 65536 {
             return Err(AppError::InvalidInput);
         }
         let mut connection = self.connection(connection_id).await?;
@@ -622,8 +629,9 @@ impl RedisService {
     pub(crate) async fn collection_write_connection(
         &self,
         connection_id: &str,
-        key: &str,
+        key: impl AsRef<[u8]> + Send + Sync,
     ) -> Result<RoutedConnection, AppError> {
+        let key = key.as_ref();
         let (snapshot, _) = self.active_snapshot(connection_id).await?;
         let mut connection = snapshot.client.connection().await?;
         if matches!(connection, RoutedConnection::Cluster(_)) {
@@ -633,9 +641,8 @@ impl RedisService {
                 node.role == ClusterNodeRole::Primary
                     && node.slots.iter().any(|range| {
                         // Slot's integer representation stays inside redis-rs.
-                        (range.start..=range.end).any(|number| {
-                            ::redis::cluster_routing::Slot::new(number) == Some(slot)
-                        })
+                        (range.start..=range.end)
+                            .any(|number| ::redis::cluster_routing::Slot::new(number) == Some(slot))
                     })
             });
             let owner = owners.next().ok_or(AppError::ClusterTopologyFailed)?;
@@ -1597,7 +1604,12 @@ impl RedisOperations for RedisService {
         })
     }
 
-    async fn get_key(&self, connection_id: &str, key: &str) -> Result<KeyValue, AppError> {
+    async fn get_key(
+        &self,
+        connection_id: &str,
+        key: impl AsRef<[u8]> + Send + Sync,
+    ) -> Result<KeyValue, AppError> {
+        let key = key.as_ref();
         let mut connection = self.connection(connection_id).await?;
         read_key(&mut connection, key).await
     }
@@ -2327,7 +2339,12 @@ impl RedisOperations for RedisService {
         read_key(&mut connection, &input.new_key).await
     }
 
-    async fn delete_key(&self, connection_id: &str, key: &str) -> Result<(), AppError> {
+    async fn delete_key(
+        &self,
+        connection_id: &str,
+        key: impl AsRef<[u8]> + Send + Sync,
+    ) -> Result<(), AppError> {
+        let key = key.as_ref();
         let mut connection = self.connection(connection_id).await?;
         ::redis::cmd("DEL")
             .arg(key)
@@ -2748,7 +2765,12 @@ async fn get_slow_log_config_with_connection(
     parse_slow_log_config_reply(reply)
 }
 
-fn search_index_covers_key(info: &SearchIndexInfo, key: &str, redis_key_type: &str) -> bool {
+fn search_index_covers_key(
+    info: &SearchIndexInfo,
+    key: impl AsRef<[u8]> + Send + Sync,
+    redis_key_type: &str,
+) -> bool {
+    let key = key.as_ref();
     let expected_type = match redis_key_type {
         "hash" => "hash",
         "rejson-rl" | "rejson-rs" | "json" => "json",
@@ -2761,14 +2783,19 @@ fn search_index_covers_key(info: &SearchIndexInfo, key: &str, redis_key_type: &s
         _ => false,
     };
     type_matches
-        && (info.prefixes.is_empty() || info.prefixes.iter().any(|prefix| key.starts_with(prefix)))
+        && (info.prefixes.is_empty()
+            || info
+                .prefixes
+                .iter()
+                .any(|prefix| key.starts_with(prefix.as_bytes())))
 }
 
 pub(crate) async fn key_size(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     key_type: &str,
 ) -> Result<Option<u64>, AppError> {
+    let key = key.as_ref();
     let Some(command) = key_size_command(key_type) else {
         return Ok(None);
     };
@@ -2796,9 +2823,10 @@ pub(crate) fn key_size_command(key_type: &str) -> Option<&'static str> {
 
 async fn ensure_existing_key_type(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     expected: &str,
 ) -> Result<(), AppError> {
+    let key = key.as_ref();
     let key_type: String = ::redis::cmd("TYPE")
         .arg(key)
         .query_async::<String>(connection)
@@ -2813,7 +2841,11 @@ async fn ensure_existing_key_type(
     Ok(())
 }
 
-async fn redis_key_exists(connection: &mut RoutedConnection, key: &str) -> Result<bool, AppError> {
+async fn redis_key_exists(
+    connection: &mut RoutedConnection,
+    key: impl AsRef<[u8]> + Send + Sync,
+) -> Result<bool, AppError> {
+    let key = key.as_ref();
     let exists: i64 = ::redis::cmd("EXISTS")
         .arg(key)
         .query_async::<i64>(connection)
@@ -2824,8 +2856,9 @@ async fn redis_key_exists(connection: &mut RoutedConnection, key: &str) -> Resul
 
 async fn read_vector_set_dimension(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
 ) -> Result<Option<u32>, AppError> {
+    let key = key.as_ref();
     let reply = ::redis::cmd("VINFO")
         .arg(key)
         .query_async::<Value>(connection)
@@ -2836,9 +2869,10 @@ async fn read_vector_set_dimension(
 
 async fn read_vector_set_element_with_connection(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     element: &str,
 ) -> Result<VectorSetElement, AppError> {
+    let key = key.as_ref();
     let mut pipeline = ::redis::pipe();
     pipeline
         .add_command(build_vemb_command(key, element)?)
@@ -2858,9 +2892,10 @@ async fn read_vector_set_element_with_connection(
 
 async fn load_vector_set_page_elements(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     names: Vec<String>,
 ) -> Result<Vec<VectorSetElement>, AppError> {
+    let key = key.as_ref();
     if names.is_empty() {
         return Ok(Vec::new());
     }
@@ -2891,9 +2926,10 @@ async fn load_vector_set_page_elements(
 
 async fn load_vector_set_match_attributes(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     matches: &mut [VectorSimilarityMatch],
 ) -> Result<(), AppError> {
+    let key = key.as_ref();
     if matches.is_empty() {
         return Ok(());
     }
@@ -2916,9 +2952,10 @@ async fn load_vector_set_match_attributes(
 
 async fn apply_ttl(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     ttl_ms: i64,
 ) -> Result<i64, AppError> {
+    let key = key.as_ref();
     validate_ttl(ttl_ms)?;
     let updated: i64 = ::redis::cmd("PEXPIRE")
         .arg(key)
@@ -2936,7 +2973,11 @@ async fn apply_ttl(
         .map_err(map_command_error)
 }
 
-async fn read_key_info(connection: &mut RoutedConnection, key: &str) -> Result<KeyInfo, AppError> {
+async fn read_key_info(
+    connection: &mut RoutedConnection,
+    key: impl AsRef<[u8]> + Send + Sync,
+) -> Result<KeyInfo, AppError> {
+    let key = key.as_ref();
     let key_type: String = ::redis::cmd("TYPE")
         .arg(key)
         .query_async::<String>(connection)
@@ -2974,7 +3015,7 @@ async fn read_key_info(connection: &mut RoutedConnection, key: &str) -> Result<K
         .flatten();
 
     Ok(KeyInfo {
-        key: key.to_owned(),
+        key: key.into(),
         key_type,
         ttl_ms,
         size,
@@ -2984,15 +3025,20 @@ async fn read_key_info(connection: &mut RoutedConnection, key: &str) -> Result<K
     })
 }
 
-async fn read_key(connection: &mut RoutedConnection, key: &str) -> Result<KeyValue, AppError> {
+async fn read_key(
+    connection: &mut RoutedConnection,
+    key: impl AsRef<[u8]> + Send + Sync,
+) -> Result<KeyValue, AppError> {
+    let key = key.as_ref();
     read_key_mode(connection, key, false).await
 }
 
 async fn read_key_mode(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     preview: bool,
 ) -> Result<KeyValue, AppError> {
+    let key = key.as_ref();
     let key_type: String = ::redis::cmd("TYPE")
         .arg(key)
         .query_async::<String>(connection)
@@ -3005,7 +3051,7 @@ async fn read_key_mode(
     if preview {
         let value = match key_type.as_str() {
             "string" => Some(RedisValue::String {
-                value: String::new(),
+                value: RedisBytes::default(),
             }),
             "hash" => Some(RedisValue::Hash { fields: vec![] }),
             "list" => Some(RedisValue::List { items: vec![] }),
@@ -3035,14 +3081,14 @@ async fn read_key_mode(
         "string" => RedisValue::String {
             value: ::redis::cmd("GET")
                 .arg(key)
-                .query_async::<String>(connection)
+                .query_async::<RedisBytes>(connection)
                 .await
                 .map_err(map_command_error)?,
         },
         "hash" => RedisValue::Hash {
             fields: ::redis::cmd("HGETALL")
                 .arg(key)
-                .query_async::<Vec<(String, String)>>(connection)
+                .query_async::<Vec<(RedisBytes, RedisBytes)>>(connection)
                 .await
                 .map_err(map_command_error)?
                 .into_iter()
@@ -3054,14 +3100,14 @@ async fn read_key_mode(
                 .arg(key)
                 .arg(0)
                 .arg(-1)
-                .query_async::<Vec<String>>(connection)
+                .query_async::<Vec<RedisBytes>>(connection)
                 .await
                 .map_err(map_command_error)?,
         },
         "set" => RedisValue::Set {
             members: ::redis::cmd("SMEMBERS")
                 .arg(key)
-                .query_async::<Vec<String>>(connection)
+                .query_async::<Vec<RedisBytes>>(connection)
                 .await
                 .map_err(map_command_error)?,
         },
@@ -3071,7 +3117,7 @@ async fn read_key_mode(
                 .arg(0)
                 .arg(-1)
                 .arg("WITHSCORES")
-                .query_async::<Vec<(String, f64)>>(connection)
+                .query_async::<Vec<(RedisBytes, f64)>>(connection)
                 .await
                 .map_err(map_command_error)?
                 .into_iter()
@@ -3152,7 +3198,7 @@ async fn read_key_mode(
         .await
         .map_err(map_command_error)?;
     Ok(KeyValue {
-        key: key.to_owned(),
+        key: key.into(),
         key_type,
         ttl_ms,
         value,
@@ -3200,9 +3246,10 @@ fn stream_entry_from_reply(entry: ::redis::streams::StreamId) -> Result<StreamEn
 
 async fn write_key(
     connection: &mut RoutedConnection,
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     value: &RedisValue,
 ) -> Result<(), AppError> {
+    let key = key.as_ref();
     value.validate()?;
     match value {
         RedisValue::String { value } => {
@@ -3299,7 +3346,11 @@ async fn write_key(
     Ok(())
 }
 
-async fn replace_collection(connection: &mut RoutedConnection, key: &str) -> Result<(), AppError> {
+async fn replace_collection(
+    connection: &mut RoutedConnection,
+    key: impl AsRef<[u8]> + Send + Sync,
+) -> Result<(), AppError> {
+    let key = key.as_ref();
     ::redis::cmd("DEL")
         .arg(key)
         .query_async::<i64>(connection)
@@ -3891,7 +3942,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn production_cluster_backend_keeps_cursor_when_a_node_returns_binary_keys() {
+    async fn production_cluster_backend_preserves_binary_keys_and_advances_cursor() {
         let visible_endpoint = spawn_cluster_scan_node(17, vec![b"visible".to_vec()]).await;
         let binary_endpoint = spawn_cluster_scan_node(23, vec![vec![0xff, 0, b'k']]).await;
         let nodes = vec![
@@ -3929,18 +3980,13 @@ mod tests {
         let page = crate::redis::scan_cluster(&backend, 5, &nodes, Some(&initial), "*", 100)
             .await
             .unwrap();
-        assert_eq!(page.keys, vec![b"visible".to_vec()]);
-        assert_eq!(page.node_failures.len(), 1);
-        assert_eq!(page.node_failures[0].node_id, "binary-node");
-        assert_eq!(
-            page.node_failures[0].code,
-            AppError::ClusterNodeUnavailable.code()
-        );
+        assert_eq!(page.keys, vec![b"visible".to_vec(), vec![0xff, 0, b'k']]);
+        assert!(page.node_failures.is_empty());
         let known =
             std::collections::HashSet::from(["visible-node".to_owned(), "binary-node".to_owned()]);
         let state = crate::redis::ClusterScanState::decode(&page.cursor, 5, &known).unwrap();
         assert_eq!(state.cursor_for("visible-node"), Some(17));
-        assert_eq!(state.cursor_for("binary-node"), Some(41));
+        assert_eq!(state.cursor_for("binary-node"), Some(23));
     }
 
     #[tokio::test]

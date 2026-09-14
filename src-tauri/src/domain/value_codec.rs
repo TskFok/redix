@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use crate::error::AppError;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::io::{Read, Write};
@@ -29,7 +30,7 @@ pub enum ValueCompression {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GetStringValueInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct StringValue {
@@ -41,7 +42,7 @@ pub struct StringValue {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SetStringValueInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub base64: String,
 }
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -73,7 +74,6 @@ impl GetStringValueInput {
     pub fn validate(&self) -> Result<(), AppError> {
         if self.connection_id.trim().is_empty()
             || self.connection_id.len() > 4096
-            || self.key.is_empty()
             || self.key.len() > 65536
         {
             return Err(AppError::InvalidInput);
@@ -394,7 +394,7 @@ mod tests {
             key: "".into()
         }
         .validate()
-        .is_err());
+        .is_ok());
         assert!(SetStringValueInput {
             connection_id: "local".into(),
             key: "k".into(),

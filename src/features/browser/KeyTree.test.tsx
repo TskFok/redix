@@ -125,7 +125,7 @@ describe("键树浏览", () => {
       fireEvent.click(screen.getByRole("button", { name: `展开前缀 ${prefix}` }));
     }
     for (const key of ["", ":lead", "a:", "a::b", "__proto__:x", "constructor:y"]) {
-      fireEvent.click(screen.getByRole("checkbox", { name: `选择键 ${key}`.trim() }));
+      fireEvent.click(screen.getByRole("checkbox", { name: `选择键 ${key || "（空键）"}`.trim() }));
     }
     expect(screen.getByLabelText("已选择的键")).toHaveTextContent('["",":lead","a:","a::b","__proto__:x","constructor:y"]');
   });

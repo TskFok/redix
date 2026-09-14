@@ -78,7 +78,7 @@ async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
         let created = service
             .set_json_path(SetJsonPathInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
                 path: "$".into(),
                 value: serde_json::json!({
                     "profile": {
@@ -97,7 +97,7 @@ async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
         let name = service
             .get_json_path(GetJsonPathInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
                 path: "$.profile.name".into(),
             })
             .await
@@ -109,7 +109,7 @@ async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
         service
             .set_json_path(SetJsonPathInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
                 path: "$.profile.name".into(),
                 value: serde_json::json!("codex"),
             })
@@ -118,7 +118,7 @@ async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
         let appended = service
             .append_json_array(AppendJsonArrayInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
                 path: "$.items".into(),
                 values: vec![serde_json::json!(3), serde_json::json!(4)],
             })
@@ -131,7 +131,7 @@ async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
         let items = service
             .get_json_path(GetJsonPathInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
                 path: "$.items".into(),
             })
             .await
@@ -143,7 +143,7 @@ async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
         let deleted = service
             .delete_json_path(DeleteJsonPathInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
                 path: "$.profile.active".into(),
             })
             .await
@@ -154,7 +154,7 @@ async fn redis_stack_json_path_flow_when_redis_stack_is_available() {
         let missing = service
             .get_json_path(GetJsonPathInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
                 path: "$.profile.active".into(),
             })
             .await
@@ -238,7 +238,7 @@ async fn redis_stack_search_flow_when_redis_stack_is_available() {
         service
             .set_key(SetKeyInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
                 value: RedisValue::Hash {
                     fields: vec![
                         HashEntry {
@@ -320,7 +320,7 @@ async fn redis_stack_search_flow_when_redis_stack_is_available() {
         let associations = service
             .get_key_search_indexes(GetKeySearchIndexesInput {
                 connection_id: "integration".into(),
-                key: key.clone(),
+                key: key.clone().into(),
             })
             .await
             .map_err(|error| error.code().to_owned())?;
@@ -421,7 +421,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let created = service
                 .create_array(CreateArrayInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                     mode: ArrayCreateMode::Contiguous,
                     start_index: Some("0".into()),
                     values: vec!["one".into(), "two".into()],
@@ -437,7 +437,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let summary = service
                 .get_array_summary(redix_lib::domain::ArrayKeyInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                 })
                 .await
                 .map_err(|error| error.code().to_owned())?;
@@ -448,7 +448,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let range = service
                 .get_array_range(ArrayRangeInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                     start: "0".into(),
                     end: "1".into(),
                 })
@@ -464,7 +464,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             service
                 .set_array_element(SetArrayElementInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                     index: "1".into(),
                     value: "updated".into(),
                 })
@@ -473,7 +473,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             service
                 .append_array_elements(AppendArrayInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                     values: vec!["three".into()],
                 })
                 .await
@@ -481,7 +481,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let used = service
                 .aggregate_array(AggregateArrayInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                     operation: ArrayAggregateOperation::Used,
                     start: None,
                     end: None,
@@ -497,7 +497,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let search = service
                 .search_array(SearchArrayInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                     start: None,
                     end: None,
                     predicates: vec![ArrayPredicate {
@@ -518,7 +518,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             service
                 .delete_array_elements(DeleteArrayElementsInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                     indices: vec!["1".into()],
                 })
                 .await
@@ -526,7 +526,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             service
                 .delete_array_range(DeleteArrayRangeInput {
                     connection_id: "integration".into(),
-                    key: array_key.clone(),
+                    key: array_key.clone().into(),
                     start: "0".into(),
                     end: "0".into(),
                 })
@@ -540,7 +540,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let created = service
                 .create_vector_set(CreateVectorSetInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                     dimension: 3,
                     quantization: None,
                     elements: vec![
@@ -568,7 +568,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let summary = service
                 .get_vector_set_summary(VectorSetKeyInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                 })
                 .await
                 .map_err(|error| error.code().to_owned())?;
@@ -579,7 +579,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let page = service
                 .list_vector_set_elements(ListVectorSetElementsInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                     start: None,
                     end: None,
                     limit: 2,
@@ -595,7 +595,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let element = service
                 .get_vector_set_element(VectorSetElementInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                     element: "one".into(),
                 })
                 .await
@@ -609,7 +609,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let updated = service
                 .set_vector_set_attributes(SetVectorSetAttributesInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                     element: "one".into(),
                     attributes: serde_json::json!({"kind": "updated"}),
                 })
@@ -622,7 +622,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let matches = service
                 .search_vector_set(VectorSimilarityQueryInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                     by_element: Some("one".into()),
                     by_vector: None,
                     by_vector_base64: None,
@@ -638,7 +638,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let embedding = service
                 .download_vector_embedding(VectorSetElementInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                     element: "one".into(),
                 })
                 .await
@@ -650,7 +650,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             service
                 .delete_vector_set_attributes(VectorSetElementInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                     element: "one".into(),
                 })
                 .await
@@ -658,7 +658,7 @@ async fn redis_stack_array_and_vector_set_flow_when_redis_stack_is_available() {
             let deleted = service
                 .delete_vector_set_elements(DeleteVectorSetElementsInput {
                     connection_id: "integration".into(),
-                    key: vector_key.clone(),
+                    key: vector_key.clone().into(),
                     elements: vec!["two".into()],
                 })
                 .await
@@ -947,7 +947,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         let stored = service
             .set_key(SetKeyInput {
                 connection_id: "integration".into(),
-                key: (*key).to_owned(),
+                key: (*key).to_owned().into(),
                 value: value.clone(),
             })
             .await
@@ -964,7 +964,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     let ttl = service
         .set_key_ttl(SetKeyTtlInput {
             connection_id: "integration".into(),
-            key: keys.string.clone(),
+            key: keys.string.clone().into(),
             ttl_ms: 5_000,
         })
         .await
@@ -1002,7 +1002,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     service
         .set_key(SetKeyInput {
             connection_id: "integration".into(),
-            key: database_one_key.clone(),
+            key: database_one_key.clone().into(),
             value: RedisValue::String {
                 value: "database-one".into(),
             },
@@ -1067,7 +1067,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     }
     for (key, key_type, _, _) in &expected {
         let summary = summaries
-            .get(*key)
+            .get(&redix_lib::domain::RedisBytes::from(*key))
             .ok_or_else(|| format!("SCAN did not return {key_type} test key"))?;
         if serde_json::to_value(summary).unwrap() != serde_json::json!({"key": key}) {
             return Err(format!("default SCAN must return only the name of {key_type} test key"));
@@ -1124,7 +1124,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     let exported = service
         .export_keys(ExportKeysInput {
             connection_id: "integration".into(),
-            keys: vec![keys.string.clone(), keys.hash.clone()],
+            keys: vec![keys.string.clone().into(), keys.hash.clone().into()],
         })
         .await
         .map_err(|error| error.code().to_owned())?;
@@ -1135,9 +1135,9 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         .into_iter()
         .map(|entry| ExportedKey {
             key: if entry.key == keys.string {
-                keys.import_string.clone()
+                keys.import_string.clone().into()
             } else {
-                keys.import_hash.clone()
+                keys.import_hash.clone().into()
             },
             ..entry
         })
@@ -1249,7 +1249,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     let stream = service
         .create_key(CreateKeyInput {
             connection_id: "integration".into(),
-            key: keys.stream.clone(),
+            key: keys.stream.clone().into(),
             value: stream_value.clone(),
             ttl_ms: None,
         })
@@ -1266,7 +1266,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     let renamed = service
         .create_key(CreateKeyInput {
             connection_id: "integration".into(),
-            key: keys.rename_source.clone(),
+            key: keys.rename_source.clone().into(),
             value: RedisValue::String {
                 value: "rename".into(),
             },
@@ -1285,8 +1285,8 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     let renamed = service
         .rename_key(RenameKeyInput {
             connection_id: "integration".into(),
-            key: keys.rename_source.clone(),
-            new_key: keys.rename_target.clone(),
+            key: keys.rename_source.clone().into(),
+            new_key: keys.rename_target.clone().into(),
         })
         .await
         .map_err(|error| error.code().to_owned())?;
@@ -1303,7 +1303,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         service
             .create_key(CreateKeyInput {
                 connection_id: "integration".into(),
-                key: key.to_string(),
+                key: key.to_string().into(),
                 value: RedisValue::String {
                     value: "batch".into(),
                 },
@@ -1315,7 +1315,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     let deleted = service
         .delete_keys(DeleteKeysInput {
             connection_id: "integration".into(),
-            keys: vec![keys.batch_a.clone(), keys.batch_b.clone()],
+            keys: vec![keys.batch_a.clone().into(), keys.batch_b.clone().into()],
         })
         .await
         .map_err(|error| error.code().to_owned())?;
@@ -1334,7 +1334,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     let info = service
         .get_key_info(KeyInfoInput {
             connection_id: "integration".into(),
-            key: keys.rename_target.clone(),
+            key: keys.rename_target.clone().into(),
         })
         .await
         .map_err(|error| error.code().to_owned())?;
@@ -1348,7 +1348,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     match service
         .create_key(CreateKeyInput {
             connection_id: "integration".into(),
-            key: keys.json.clone(),
+            key: keys.json.clone().into(),
             value: json_value.clone(),
             ttl_ms: None,
         })
@@ -1451,7 +1451,7 @@ async fn cleanup_analysis_keys(service: &RedisService, keys: &AnalysisKeys) -> R
         match service
             .delete_keys(DeleteKeysInput {
                 connection_id: "integration".into(),
-                keys: batch.to_vec(),
+                keys: batch.iter().map(Into::into).collect(),
             })
             .await
         {
@@ -1515,7 +1515,7 @@ async fn analyzes_database_details_and_metadata_batches_when_redis_is_available(
             service
                 .create_key(CreateKeyInput {
                     connection_id: "integration".into(),
-                    key: key.clone(),
+                    key: key.clone().into(),
                     value: RedisValue::String {
                         value: "analysis".into(),
                     },
@@ -1556,7 +1556,7 @@ async fn analyzes_database_details_and_metadata_batches_when_redis_is_available(
             service
                 .create_key(CreateKeyInput {
                     connection_id: "integration".into(),
-                    key: key.clone(),
+                    key: key.clone().into(),
                     value,
                     ttl_ms: None,
                 })
@@ -1796,7 +1796,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         service
             .create_key(CreateKeyInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 value: RedisValue::Stream {
                     entries: vec![
                         StreamEntry {
@@ -1822,7 +1822,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         service
             .create_stream_consumer_group(CreateStreamConsumerGroupInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 name: "workers".into(),
                 last_delivered_id: "0-0".into(),
             })
@@ -1832,7 +1832,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let groups = service
             .get_stream_consumer_groups(GetStreamConsumerGroupsInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
             })
             .await
             .map_err(|error| error.code().to_owned())?;
@@ -1843,7 +1843,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let consumers = service
             .get_stream_consumers(GetStreamConsumersInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 group: "workers".into(),
             })
             .await
@@ -1852,7 +1852,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let pending = service
             .get_stream_pending_entries(GetStreamPendingEntriesInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 group: "workers".into(),
                 count: 20,
                 consumer: None,
@@ -1879,7 +1879,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let consumers = service
             .get_stream_consumers(GetStreamConsumersInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 group: "workers".into(),
             })
             .await
@@ -1891,7 +1891,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let pending = service
             .get_stream_pending_entries(GetStreamPendingEntriesInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 group: "workers".into(),
                 count: 20,
                 consumer: Some("consumer-1".into()),
@@ -1904,7 +1904,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
 
         let claim_input = redix_lib::domain::ClaimStreamPendingEntriesInput {
             connection_id: "integration".into(),
-            key: keys.stream.clone(),
+            key: keys.stream.clone().into(),
             group: "workers".into(),
             consumer: "replacement".into(),
             min_idle_ms: 0,
@@ -1920,7 +1920,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let owned = service
             .get_stream_pending_entries(GetStreamPendingEntriesInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 group: "workers".into(),
                 count: 100,
                 consumer: Some("replacement".into()),
@@ -1945,7 +1945,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let acknowledged = service
             .acknowledge_stream_pending_entries(AcknowledgeStreamPendingEntriesInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 group: "workers".into(),
                 entries: vec![pending[0].id.clone()],
             })
@@ -1956,7 +1956,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let removed_consumer = service
             .delete_stream_consumer(DeleteStreamConsumerInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 group: "workers".into(),
                 consumer: "consumer-1".into(),
             })
@@ -1967,7 +1967,7 @@ async fn runs_stream_consumer_group_flow_when_redis_is_available() {
         let deleted_group = service
             .delete_stream_consumer_group(DeleteStreamConsumerGroupInput {
                 connection_id: "integration".into(),
-                key: keys.stream.clone(),
+                key: keys.stream.clone().into(),
                 name: "workers".into(),
             })
             .await

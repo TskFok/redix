@@ -1,4 +1,4 @@
-use crate::error::AppError;
+use crate::{domain::RedisBytes, error::AppError};
 
 pub const MAX_COLLECTION_PAGE_HINT: usize = 500;
 pub const MAX_COLLECTION_PAGE_ENTRIES: usize = 2_000;
@@ -29,11 +29,11 @@ pub enum CollectionOrder {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CollectionPageInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub kind: CollectionKind,
     pub cursor: String,
     pub count: usize,
-    pub pattern: String,
+    pub pattern: RedisBytes,
     #[serde(default)]
     pub order: CollectionOrder,
 }
@@ -46,7 +46,7 @@ impl CollectionPageInput {
             || self.pattern.len() > 4096
             || (self.order != CollectionOrder::Scan && self.kind != CollectionKind::Zset)
             || ((self.kind == CollectionKind::List || self.order != CollectionOrder::Scan)
-                && (self.pattern != "*"
+                && (self.pattern.as_bytes() != b"*"
                     || cursor
                         .checked_add(self.count as u64)
                         .is_none_or(|end| end > i64::MAX as u64)))
@@ -59,8 +59,8 @@ impl CollectionPageInput {
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct CollectionEntry {
-    pub id: String,
-    pub value: String,
+    pub id: RedisBytes,
+    pub value: RedisBytes,
     pub score: Option<f64>,
     pub ttl_ms: Option<i64>,
 }
@@ -78,23 +78,51 @@ pub struct CollectionPage {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum CollectionMutation {
-    HashSet { field: String, value: String },
-    HashDelete { field: String },
-    HashExpire { field: String, ttl_ms: String },
-    HashPersist { field: String },
-    SetAdd { member: String },
-    SetRemove { member: String },
-    ZsetAdd { member: String, score: f64 },
-    ZsetRemove { member: String },
-    ListSet { index: String, value: String },
-    ListAppend { value: String, prepend: bool },
-    ListTrim { count: String, from_head: bool },
+    HashSet {
+        field: RedisBytes,
+        value: RedisBytes,
+    },
+    HashDelete {
+        field: RedisBytes,
+    },
+    HashExpire {
+        field: RedisBytes,
+        ttl_ms: String,
+    },
+    HashPersist {
+        field: RedisBytes,
+    },
+    SetAdd {
+        member: RedisBytes,
+    },
+    SetRemove {
+        member: RedisBytes,
+    },
+    ZsetAdd {
+        member: RedisBytes,
+        score: f64,
+    },
+    ZsetRemove {
+        member: RedisBytes,
+    },
+    ListSet {
+        index: String,
+        value: RedisBytes,
+    },
+    ListAppend {
+        value: RedisBytes,
+        prepend: bool,
+    },
+    ListTrim {
+        count: String,
+        from_head: bool,
+    },
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ListIndexInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub index: String,
 }
 
@@ -108,14 +136,14 @@ impl ListIndexInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CollectionMutationInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub mutation: CollectionMutation,
 }
 
 impl CollectionMutationInput {
     pub fn validate(&self) -> Result<(), AppError> {
         validate_key(&self.connection_id, &self.key)?;
-        let bounded = |text: &str| {
+        let bounded = |text: &RedisBytes| {
             if text.len() <= MAX_COLLECTION_VALUE_BYTES {
                 Ok(())
             } else {
@@ -180,12 +208,8 @@ fn positive_decimal(value: &str, max: u64) -> Result<u64, AppError> {
     }
 }
 
-fn validate_key(connection_id: &str, key: &str) -> Result<(), AppError> {
-    if connection_id.trim().is_empty()
-        || connection_id.len() > 4096
-        || key.is_empty()
-        || key.len() > 65536
-    {
+fn validate_key(connection_id: &str, key: &RedisBytes) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() || connection_id.len() > 4096 || key.len() > 65536 {
         Err(AppError::InvalidInput)
     } else {
         Ok(())
@@ -195,6 +219,33 @@ fn validate_key(connection_id: &str, key: &str) -> Result<(), AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collection_binary_inputs_accept_empty_keys_and_measure_decoded_bytes() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        for key in [serde_json::json!(""), serde_json::json!({"base64": "/wA="})] {
+            let request = serde_json::from_value::<CollectionPageInput>(serde_json::json!({
+                "connection_id": "local", "key": key, "kind": "hash", "cursor": "0",
+                "count": 2, "pattern": {"base64": "/yo="}
+            }));
+            assert!(request.is_ok(), "binary key/pattern must deserialize");
+            assert!(request.unwrap().validate().is_ok());
+        }
+        for (size, valid) in [
+            (MAX_COLLECTION_VALUE_BYTES, true),
+            (MAX_COLLECTION_VALUE_BYTES + 1, false),
+        ] {
+            let request = serde_json::from_value::<CollectionMutationInput>(serde_json::json!({
+                "connection_id": "local", "key": "", "mutation": {
+                    "operation": "hash_set", "field": "",
+                    "value": {"base64": STANDARD.encode(vec![0xff; size])}
+                }
+            }));
+            assert!(request.is_ok(), "binary mutation must deserialize");
+            assert_eq!(request.unwrap().validate().is_ok(), valid);
+        }
+    }
 
     #[test]
     fn collection_list_lookup_accepts_signed_i64_without_float_rounding() {
@@ -325,7 +376,7 @@ mod tests {
     #[test]
     fn collection_limits_inputs_and_rejects_nonfinite_scores() {
         assert!(CollectionPageInput {
-            pattern: "x".repeat(4097),
+            pattern: "x".repeat(4097).into(),
             ..page()
         }
         .validate()
@@ -335,7 +386,7 @@ mod tests {
             ..page()
         }
         .validate()
-        .is_err());
+        .is_ok());
         assert!(CollectionPageInput {
             kind: CollectionKind::List,
             pattern: "match*".into(),
@@ -357,7 +408,7 @@ mod tests {
                 value: "v".into(),
             },
             CollectionMutation::ListAppend {
-                value: "v".repeat(MAX_COLLECTION_VALUE_BYTES + 1),
+                value: "v".repeat(MAX_COLLECTION_VALUE_BYTES + 1).into(),
                 prepend: false,
             },
         ] {

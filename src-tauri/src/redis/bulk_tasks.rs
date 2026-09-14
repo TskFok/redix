@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use crate::error::AppError;
 use std::{
     collections::HashSet,
@@ -18,7 +19,7 @@ pub(crate) enum BulkDeleteTarget {
     },
 }
 impl BulkDeleteTarget {
-    pub(crate) async fn delete(&self, key: &str) -> Result<u64, AppError> {
+    pub(crate) async fn delete(&self, key: &RedisBytes) -> Result<u64, AppError> {
         let command = ::redis::cmd("UNLINK");
         let mut command = command;
         command.arg(key);
@@ -40,7 +41,7 @@ impl BulkDeleteTarget {
 #[derive(Clone, Debug, serde::Deserialize)]
 pub struct StartBulkDeleteInput {
     pub connection_id: String,
-    pub keys: Vec<String>,
+    pub keys: Vec<RedisBytes>,
 }
 impl StartBulkDeleteInput {
     pub(crate) fn normalize(mut self) -> Result<Self, AppError> {
@@ -49,7 +50,7 @@ impl StartBulkDeleteInput {
             || self.keys.is_empty()
             || self.keys.len() > 10_000
             || self.keys.iter().any(|key| key.len() > 16_384)
-            || self.keys.iter().map(String::len).sum::<usize>() > 4 * 1024 * 1024
+            || self.keys.iter().map(RedisBytes::len).sum::<usize>() > 4 * 1024 * 1024
         {
             return Err(AppError::InvalidInput);
         }
@@ -132,7 +133,7 @@ impl BulkTaskManager {
         mut execute: F,
     ) -> Result<BulkTask, AppError>
     where
-        F: FnMut(String) -> Fut + Send + 'static,
+        F: FnMut(RedisBytes) -> Fut + Send + 'static,
         Fut: Future<Output = Result<u64, AppError>> + Send + 'static,
     {
         let input = input.normalize()?;
@@ -219,7 +220,7 @@ mod tests {
     fn input(keys: &[&str]) -> StartBulkDeleteInput {
         StartBulkDeleteInput {
             connection_id: "local".into(),
-            keys: keys.iter().map(|key| key.to_string()).collect(),
+            keys: keys.iter().map(|key| (*key).into()).collect(),
         }
     }
 

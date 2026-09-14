@@ -19,6 +19,68 @@ describe("String 原始字节解码与保存", () => {
     encode.mockResolvedValue("AAEC"); save.mockResolvedValue({ byte_length: 3, ttl_ms: 4500 });
   });
   afterEach(() => { cleanup(); vi.useRealTimers(); });
+  it("初始 UTF8 含 CR 自动回退 Hex，保存仍提交原始回车字节", async () => {
+    getValue.mockResolvedValue(value("YQ1i"));
+    decode.mockImplementation(async ({ format }) => ({ text: format === "hex" ? "61 0D 62" : "a\rb", byte_length: 3 }));
+    encode.mockResolvedValue("YQ1iYw==");
+    render(<StringValueEditor connectionId="local" keyName="carriage-return" />);
+    await waitFor(() => expect(screen.getByLabelText("值格式")).toHaveValue("hex"));
+    expect(screen.getByLabelText("String 值")).toHaveValue("61 0D 62");
+    fireEvent.change(screen.getByLabelText("String 值"), { target: { value: "61 0D 62 63" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存值" }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith({ connection_id: "local", key: "carriage-return", base64: "YQ1iYw==" }));
+    expect(encode).toHaveBeenCalledWith({ text: "61 0D 62 63", format: "hex", compression: "none" });
+  });
+  it.each(["utf8", "ascii"])("显式选择 %s 时含 CR 的文本禁止编辑，切回 Base64 保留原始字节", async (format) => {
+    getValue.mockResolvedValue(value("YQ1i"));
+    decode.mockImplementation(async ({ format: next }) => {
+      if (next === "hex") return { text: "61 0D 62", byte_length: 3 };
+      if (next === "base64") return { text: "YQ1i", byte_length: 3 };
+      return { text: "a\rb", byte_length: 3 };
+    });
+    render(<StringValueEditor connectionId="local" keyName="carriage-return" />);
+    // Switch through Hex so this remains an explicit choice even before the fix.
+    await screen.findByLabelText("String 值");
+    fireEvent.change(screen.getByLabelText("值格式"), { target: { value: "hex" } });
+    await waitFor(() => expect(screen.getByLabelText("String 值")).toHaveValue("61 0D 62"));
+    fireEvent.change(screen.getByLabelText("值格式"), { target: { value: format } });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/原始字节已保留.*Hex.*Base64/);
+    expect(screen.queryByLabelText("String 值")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存值" })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("值格式"), { target: { value: "base64" } });
+    await waitFor(() => expect(screen.getByLabelText("String 值")).toHaveValue("YQ1i"));
+    expect(decode).toHaveBeenLastCalledWith({ base64: "YQ1i", format: "base64", compression: "none" });
+    expect(encode).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+  });
+  it("压缩后 UTF8 文本含 CR 也拒绝编辑且保留压缩的原始字节", async () => {
+    decode.mockImplementation(async ({ format, compression }) => ({
+      text: format === "hex" ? "00 FF 80" : compression === "gzip" ? "a\rb" : "plain", byte_length: 3,
+    }));
+    render(<StringValueEditor connectionId="local" keyName="compressed" />);
+    await screen.findByDisplayValue("plain");
+    fireEvent.change(screen.getByLabelText("压缩格式"), { target: { value: "gzip" } });
+    expect(await screen.findByRole("alert")).toHaveTextContent(/原始字节已保留.*Hex.*Base64/);
+    expect(screen.queryByLabelText("String 值")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存值" })).toBeDisabled();
+    expect(decode).toHaveBeenLastCalledWith({ base64: "AP+A", format: "utf8", compression: "gzip" });
+    expect(encode).not.toHaveBeenCalled(); expect(save).not.toHaveBeenCalled();
+  });
+  it("LF 文本仍可编辑，JSON 和只读结构视图不受 CR 检查影响", async () => {
+    decode.mockImplementation(async ({ format }) => ({
+      text: format === "utf8" || format === "ascii" ? "a\nb" : '{\r"value":1\r}', byte_length: 3,
+    }));
+    render(<StringValueEditor connectionId="local" keyName="line-feed" />);
+    expect(await screen.findByLabelText("String 值")).toHaveValue("a\nb");
+    expect(screen.getByLabelText("值格式")).toHaveValue("utf8");
+    fireEvent.change(screen.getByLabelText("值格式"), { target: { value: "ascii" } });
+    await waitFor(() => expect(screen.getByLabelText("String 值")).toHaveValue("a\nb"));
+    fireEvent.change(screen.getByLabelText("值格式"), { target: { value: "json" } });
+    await waitFor(() => expect(screen.getByLabelText("String 值")).not.toHaveAttribute("readonly"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("值格式"), { target: { value: "php" } });
+    await waitFor(() => expect(screen.getByLabelText("String 值")).toHaveAttribute("readonly"));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
   it("保存成功反馈自动消失，已保存的值继续显示", async () => {
     render(<StringValueEditor connectionId="local" keyName="binary" />);
     await screen.findByDisplayValue("00 FF 80");

@@ -1,3 +1,4 @@
+import { displayKey } from "../../lib/redisBytes";
 import Select from "../../components/Select";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
@@ -191,7 +192,7 @@ function SearchResults({ result, onNext, busy, includeContent }: {
             <tbody>
               {result.keys.map((item) => (
                 <tr key={item.key}>
-                  <th scope="row"><code>{item.key}</code></th>
+                  <th scope="row"><code>{displayKey(item.key)}</code></th>
                   <td>{item.key_type}</td>
                 </tr>
               ))}

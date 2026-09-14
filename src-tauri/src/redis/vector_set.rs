@@ -140,11 +140,12 @@ pub(crate) fn parse_vsim_reply(
 }
 
 pub(crate) fn build_vadd_command(
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     element: &VectorSetElementPayload,
     expected_dimension: Option<u32>,
 ) -> Result<Cmd, AppError> {
-    if key.trim().is_empty() {
+    let key = key.as_ref();
+    if key.len() > 65536 {
         return Err(AppError::InvalidInput);
     }
     element.validate(expected_dimension)?;
@@ -224,14 +225,22 @@ pub(crate) fn build_vrem_command(input: &DeleteVectorSetElementsInput) -> Result
     Ok(command)
 }
 
-pub(crate) fn build_vemb_command(key: &str, element: &str) -> Result<Cmd, AppError> {
+pub(crate) fn build_vemb_command(
+    key: impl AsRef<[u8]> + Send + Sync,
+    element: &str,
+) -> Result<Cmd, AppError> {
+    let key = key.as_ref();
     validate_key_and_element(key, element)?;
     let mut command = ::redis::cmd("VEMB");
     command.arg(key).arg(element);
     Ok(command)
 }
 
-pub(crate) fn build_vgetattr_command(key: &str, element: &str) -> Result<Cmd, AppError> {
+pub(crate) fn build_vgetattr_command(
+    key: impl AsRef<[u8]> + Send + Sync,
+    element: &str,
+) -> Result<Cmd, AppError> {
+    let key = key.as_ref();
     validate_key_and_element(key, element)?;
     let mut command = ::redis::cmd("VGETATTR");
     command.arg(key).arg(element);
@@ -399,8 +408,12 @@ fn text_value(value: Value) -> Result<Option<String>, AppError> {
     }
 }
 
-fn validate_key_and_element(key: &str, element: &str) -> Result<(), AppError> {
-    if key.trim().is_empty() || element.trim().is_empty() {
+fn validate_key_and_element(
+    key: impl AsRef<[u8]> + Send + Sync,
+    element: &str,
+) -> Result<(), AppError> {
+    let key = key.as_ref();
+    if key.len() > 65536 || element.trim().is_empty() {
         Err(AppError::InvalidInput)
     } else {
         Ok(())

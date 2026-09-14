@@ -39,3 +39,6 @@ pub mod local_products;
 pub mod value_codec;
 
 pub mod stream_advanced;
+
+pub mod redis_bytes;
+pub use redis_bytes::RedisBytes;

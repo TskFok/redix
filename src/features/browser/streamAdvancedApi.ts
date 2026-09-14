@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeBinary as invoke } from "../../lib/binaryIpc";
 import type { StreamPendingEntry } from "../../lib/types";
 
 export interface StreamGroupTarget { connection_id: string; key: string; group: string }

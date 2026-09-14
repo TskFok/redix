@@ -1,9 +1,10 @@
+use crate::domain::RedisBytes;
 use crate::error::AppError;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct GetStreamEntriesInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub start: String,
     pub end: String,
     pub cursor: Option<String>,
@@ -33,7 +34,7 @@ pub struct StreamEntriesPage {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AddStreamEntryInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub id: String,
     pub fields: Vec<StreamEntryField>,
 }
@@ -41,7 +42,7 @@ pub struct AddStreamEntryInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DeleteStreamEntriesInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub ids: Vec<String>,
 }
 
@@ -60,12 +61,8 @@ pub(crate) fn parse_stream_entry_id(id: &str) -> Result<(u64, u64), AppError> {
     Ok((parse(ms)?, parse(sequence)?))
 }
 
-fn validate_target(connection_id: &str, key: &str) -> Result<(), AppError> {
-    if connection_id.trim().is_empty()
-        || connection_id.len() > 4_096
-        || key.is_empty()
-        || key.len() > 65_536
-    {
+fn validate_target(connection_id: &str, key: &RedisBytes) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() || connection_id.len() > 4_096 || key.len() > 65_536 {
         return Err(AppError::InvalidInput);
     }
     Ok(())

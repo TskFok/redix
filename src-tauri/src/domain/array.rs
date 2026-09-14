@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use crate::error::AppError;
 
 pub const MAX_ARRAY_ELEMENTS_PER_READ: usize = 500;
@@ -33,7 +34,7 @@ pub struct ArrayCell {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ArraySummary {
-    pub key: String,
+    pub key: RedisBytes,
     pub length: String,
     pub count: String,
     pub next_index: String,
@@ -76,7 +77,7 @@ pub struct ArrayMutationResult {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ArrayKeyInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
 }
 
 impl ArrayKeyInput {
@@ -88,7 +89,7 @@ impl ArrayKeyInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct CreateArrayInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub mode: ArrayCreateMode,
     pub start_index: Option<String>,
     pub values: Vec<String>,
@@ -144,7 +145,7 @@ impl CreateArrayInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ArrayRangeInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub start: String,
     pub end: String,
 }
@@ -159,7 +160,7 @@ impl ArrayRangeInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ArrayScanInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub start: Option<String>,
     pub end: Option<String>,
     pub limit: usize,
@@ -178,7 +179,7 @@ impl ArrayScanInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ArrayElementInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub index: String,
 }
 
@@ -192,7 +193,7 @@ impl ArrayElementInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ArrayMultiGetInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub indices: Vec<String>,
 }
 
@@ -212,7 +213,7 @@ impl ArrayMultiGetInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SetArrayElementInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub index: String,
     pub value: String,
 }
@@ -228,7 +229,7 @@ impl SetArrayElementInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AppendArrayInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub values: Vec<String>,
 }
 
@@ -242,7 +243,7 @@ impl AppendArrayInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DeleteArrayElementsInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub indices: Vec<String>,
 }
 
@@ -262,7 +263,7 @@ impl DeleteArrayElementsInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DeleteArrayRangeInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub start: String,
     pub end: String,
 }
@@ -292,7 +293,7 @@ impl ArrayPredicate {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SearchArrayInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub start: Option<String>,
     pub end: Option<String>,
     pub predicates: Vec<ArrayPredicate>,
@@ -341,7 +342,7 @@ pub enum ArrayAggregateOperation {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AggregateArrayInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub operation: ArrayAggregateOperation,
     pub start: Option<String>,
     pub end: Option<String>,
@@ -380,8 +381,8 @@ pub fn normalize_array_index(value: &str) -> Result<String, AppError> {
         .map_err(|_| AppError::InvalidInput)
 }
 
-fn validate_connection_and_key(connection_id: &str, key: &str) -> Result<(), AppError> {
-    if connection_id.trim().is_empty() || key.trim().is_empty() {
+fn validate_connection_and_key(connection_id: &str, key: &RedisBytes) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() || key.len() > 65536 {
         Err(AppError::InvalidInput)
     } else {
         Ok(())

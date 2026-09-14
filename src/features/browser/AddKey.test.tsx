@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CreateArrayInput, CreateKeyInput, CreateVectorSetInput, KeyValue, RedisValue } from "../../lib/types";
+import { bytesToInput, keyToBytes } from "../../lib/redisBytes";
 import AddKey from "./AddKey";
 
 const { createKeyMock, createArrayMock, createVectorSetMock } = vi.hoisted(() => ({
@@ -44,21 +45,21 @@ function fillExample() {
 
 function expectValidOrdinaryValue(value: RedisValue) {
   if ("String" in value) {
-    expect(value.String.value.trim()).not.toBe("");
+    expect(bytesToInput(value.String.value, "utf8").trim()).not.toBe("");
   } else if ("Hash" in value) {
     expect(value.Hash.fields.length).toBeGreaterThan(0);
-    expect(value.Hash.fields.every(({ field, value: fieldValue }) => field.trim() !== "" && fieldValue !== "")).toBe(true);
+    expect(value.Hash.fields.every(({ field, value: fieldValue }) => bytesToInput(field, "utf8").trim() !== "" && fieldValue !== "")).toBe(true);
     expect(new Set(value.Hash.fields.map(({ field }) => field)).size).toBe(value.Hash.fields.length);
   } else if ("List" in value) {
     expect(value.List.items.length).toBeGreaterThan(0);
-    expect(value.List.items.every((item) => item.trim() !== "")).toBe(true);
+    expect(value.List.items.every((item) => bytesToInput(item, "utf8").trim() !== "")).toBe(true);
   } else if ("Set" in value) {
     expect(value.Set.members.length).toBeGreaterThan(0);
-    expect(value.Set.members.every((member) => member.trim() !== "")).toBe(true);
+    expect(value.Set.members.every((member) => bytesToInput(member, "utf8").trim() !== "")).toBe(true);
     expect(new Set(value.Set.members).size).toBe(value.Set.members.length);
   } else if ("SortedSet" in value) {
     expect(value.SortedSet.members.length).toBeGreaterThan(0);
-    expect(value.SortedSet.members.every(({ member, score }) => member.trim() !== "" && Number.isFinite(score))).toBe(true);
+    expect(value.SortedSet.members.every(({ member, score }) => bytesToInput(member, "utf8").trim() !== "" && Number.isFinite(score))).toBe(true);
   } else if ("Json" in value) {
     expect(value.Json.value).not.toBeNull();
     expect(JSON.parse(JSON.stringify(value.Json.value))).toEqual(value.Json.value);
@@ -67,7 +68,7 @@ function expectValidOrdinaryValue(value: RedisValue) {
     for (const entry of value.Stream.entries) {
       expect(entry.id).toMatch(/^(\*|\d+-\d+)$/);
       expect(entry.fields.length).toBeGreaterThan(0);
-      expect(entry.fields.every(({ field, value: fieldValue }) => field.trim() !== "" && fieldValue !== "")).toBe(true);
+      expect(entry.fields.every(({ field, value: fieldValue }) => bytesToInput(field, "utf8").trim() !== "" && fieldValue !== "")).toBe(true);
       expect(new Set(entry.fields.map(({ field }) => field)).size).toBe(entry.fields.length);
     }
   } else {
@@ -223,10 +224,12 @@ describe("AddKey 示例数据", () => {
     expect((screen.getByLabelText("键名") as HTMLInputElement).value).not.toBe(firstName);
   });
 
-  it("填充示例后清除之前的空键名错误", () => {
+  it("填充示例后清除之前的编码错误", () => {
     renderAddKey();
+    fireEvent.change(screen.getByLabelText("键名编码"), { target: { value: "hex" } });
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "GG" } });
     fireEvent.click(screen.getByRole("button", { name: "创建键" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("键名不能为空");
+    expect(screen.getByRole("alert")).toHaveTextContent(/Hex/i);
     fillExample();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -234,16 +237,103 @@ describe("AddKey 示例数据", () => {
   it("重复触发相同错误时重新开始 3 秒倒计时", () => {
     vi.useFakeTimers();
     renderAddKey();
+    fireEvent.change(screen.getByLabelText("键名编码"), { target: { value: "hex" } });
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "GG" } });
     fireEvent.click(screen.getByRole("button", { name: "创建键" }));
-    expect(screen.getByRole("alert")).toHaveTextContent("键名不能为空");
+    expect(screen.getByRole("alert")).toHaveTextContent(/Hex/i);
 
     act(() => { vi.advanceTimersByTime(2000); });
     fireEvent.click(screen.getByRole("button", { name: "创建键" }));
     act(() => { vi.advanceTimersByTime(1000); });
-    expect(screen.getByRole("alert")).toHaveTextContent("键名不能为空");
+    expect(screen.getByRole("alert")).toHaveTextContent(/Hex/i);
 
     act(() => { vi.advanceTimersByTime(2000); });
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("支持空键以及空字符串值", async () => {
+    renderAddKey();
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    await waitFor(() => expect(createKeyMock).toHaveBeenCalledWith({ connection_id: "local", key: "", ttl_ms: null, value: { String: { value: "" } } }));
+  });
+
+  it("二进制键名和字符串值按所选编码创建", async () => {
+    renderAddKey();
+    fireEvent.change(screen.getByLabelText("键名编码"), { target: { value: "hex" } });
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: "FF 00" } });
+    fireEvent.change(screen.getByLabelText("字符串值编码"), { target: { value: "base64" } });
+    fireEvent.change(screen.getByLabelText("字符串值"), { target: { value: "/4A=" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    await waitFor(() => expect(createKeyMock).toHaveBeenCalledTimes(1));
+    const input = createKeyMock.mock.calls[0][0] as CreateKeyInput;
+    expect(keyToBytes(input.key)).toEqual({ base64: "/wA=" });
+    expect(input.value).toEqual({ String: { value: { base64: "/4A=" } } });
+  });
+
+  it("二进制集合 JSON 支持空字段名、空值并拒绝非法编码", async () => {
+    renderAddKey(); chooseKind("hash");
+    fireEvent.change(screen.getByLabelText("集合值编码"), { target: { value: "base64" } });
+    fireEvent.change(screen.getByLabelText("集合值（JSON 数组）"), { target: { value: '[{"field":"/w==","value":"%%%"}]' } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/Base64/);
+    expect(createKeyMock).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("集合值（JSON 数组）"), { target: { value: '[{"field":"/w==","value":""},{"field":"","value":"gA=="}]' } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    await waitFor(() => expect(createKeyMock).toHaveBeenCalledWith(expect.objectContaining({ value: { Hash: { fields: [{ field: { base64: "/w==" }, value: "" }, { field: "", value: { base64: "gA==" } }] } } })));
+  });
+
+  it("文本键名保留首尾空格", async () => {
+    renderAddKey();
+    fireEvent.change(screen.getByLabelText("键名"), { target: { value: " key " } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    await waitFor(() => expect(createKeyMock).toHaveBeenCalledWith(expect.objectContaining({ key: " key " })));
+  });
+
+  it.each([["61 0a 62", "61 0a 63", "a\nc"], ["61 0d 0a 62", "61 0d 0a 63", "a\r\nc"]])("键名单行输入拒绝将 %s 转为 UTF8，后续编辑保留换行字节", async (before, after, expected) => {
+    renderAddKey();
+    fireEvent.change(screen.getByLabelText("键名编码"), { target: { value: "hex" } });
+    const input = screen.getByLabelText("键名");
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    fireEvent.change(input, { target: { value: before } });
+    fireEvent.change(screen.getByLabelText("键名编码"), { target: { value: "utf8" } });
+    expect(screen.getByLabelText("键名编码")).toHaveValue("hex");
+    expect(input).toHaveValue(before);
+    expect(screen.getByRole("alert")).toHaveTextContent(/单行输入/);
+    expect(createKeyMock).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: after } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    await waitFor(() => expect(createKeyMock).toHaveBeenCalledTimes(1));
+    expect(keyToBytes(createKeyMock.mock.calls[0][0].key)).toBe(expected);
+  });
+
+  it("String多行输入拒绝CRLF转UTF8并保留后续编辑的CR字节", async () => {
+    renderAddKey();
+    const input = screen.getByLabelText("字符串值");
+    expect(input).toBeInstanceOf(HTMLTextAreaElement);
+    fireEvent.change(screen.getByLabelText("字符串值编码"), { target: { value: "hex" } });
+    fireEvent.change(input, { target: { value: "61 0d 0a 62" } });
+    fireEvent.change(screen.getByLabelText("字符串值编码"), { target: { value: "utf8" } });
+    expect(screen.getByLabelText("字符串值编码")).toHaveValue("hex");
+    expect(input).toHaveValue("61 0d 0a 62");
+    expect(createKeyMock).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: "61 0d 0a 63" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    await waitFor(() => expect(createKeyMock).toHaveBeenCalledWith(expect.objectContaining({ value: { String: { value: "a\r\nc" } } })));
+  });
+
+  it("集合JSON转换按行UTF8时拒绝中间CR，继续编辑保留CR字节", async () => {
+    renderAddKey(); chooseKind("list");
+    fireEvent.change(screen.getByLabelText("集合值编码"), { target: { value: "hex" } });
+    const input = screen.getByLabelText("集合值（JSON 数组）");
+    expect(input).toBeInstanceOf(HTMLTextAreaElement);
+    fireEvent.change(input, { target: { value: '["61 0d 62"]' } });
+    fireEvent.change(screen.getByLabelText("集合值编码"), { target: { value: "utf8" } });
+    expect(screen.getByLabelText("集合值编码")).toHaveValue("hex");
+    expect(input).toHaveValue('["61 0d 62"]');
+    expect(createKeyMock).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '["61 0d 63"]' } });
+    fireEvent.click(screen.getByRole("button", { name: "创建键" }));
+    await waitFor(() => expect(createKeyMock).toHaveBeenCalledWith(expect.objectContaining({ value: { List: { items: ["a\rc"] } } })));
   });
 
   it("忙碌时禁用添加示例数据按钮", () => {

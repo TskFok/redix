@@ -1,3 +1,4 @@
+import { keyToBytes, rawBytes } from "../../lib/redisBytes";
 import type {
   KeyInfo,
   KeySummary,
@@ -84,7 +85,7 @@ function matchesRedisPattern(pattern: string, key: string): boolean {
   // question marks. Avoid translating user input into a regular expression.
   const encoder = new TextEncoder();
   const patternBytes = encoder.encode(pattern);
-  const keyBytes = encoder.encode(key);
+  const keyBytes = rawBytes(keyToBytes(key));
   let patternIndex = 0;
   let keyIndex = 0;
   let starPattern = -1;

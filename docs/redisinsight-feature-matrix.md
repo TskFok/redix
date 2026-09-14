@@ -10,10 +10,11 @@
 | Standalone、TLS、自定义 CA/mTLS、连接导入导出 | 已支持 | 保留凭据安全存储与无敏感信息导出 | `api/src/modules/database`、`database-import`、`certificate` |
 | Sentinel | 基础支持 | 种子回退、主节点发现、独立认证、重连刷新，并支持 SSH+TLS；不宣称无缝故障迁移 | `api/src/modules/redis-sentinel` |
 | SSH | 基础支持 | `ssh2` 严格主机校验，支持 Agent/Password/PrivateKey；TCP/握手/远端认证共享 6 秒预算，Agent 最多顺序尝试 32 个身份。本地 Agent IPC 仍可能不可中断并占用 worker/permit/CLI 锁；Standalone/Sentinel 可组合 TLS，Cluster+SSH 禁用。当前只在 macOS 自动化验证 | `api/src/modules/ssh` |
-| Cluster / 节点路由 / 节点观察 | 本批新增 | DB 0 普通命令 slot 路由、跨 primary UTF-8 键名完整 SCAN、16384 slot 拓扑摘要和 primary-only analysis 已支持；二进制键名导致对应节点可重试失败并保留游标；typed SlowLog/PubSub/Profiler 禁用，节点现从已有INFO提取version/mode/totalkeys/maxmemory，缺失/异常不视作零 | `api/src/modules/cluster-monitor`、`ui/src/pages/redis-cluster` |
+| Cluster / 节点路由 / 节点观察 | 本批新增 | DB 0 普通命令 slot 路由、跨 primary 任意二进制键名完整 SCAN、16384 slot 拓扑摘要和 primary-only analysis 已支持；键名从 SCAN 到寻址、TTL、重命名、删除均保留原始字节；typed SlowLog/PubSub/Profiler 禁用，节点现从已有INFO提取version/mode/totalkeys/maxmemory，缺失/异常不视作零 | `api/src/modules/cluster-monitor`、`ui/src/pages/redis-cluster` |
 | 普通键浏览、新增/改名/删除/TTL、导入导出 | 基础支持 | 保留集合分页/增量编辑；新增选中键后台删除、进度、取消和结果未知计数（最多10000键、4并发、20条会话任务），Cluster使用按槽位选定的直连主节点且不重发；按模式全库任务、后台导入/导出及重启恢复仍有差异 | `api/src/modules/browser`、`bulk-actions` |
 | 键树 | 缺失 | 支持可配置分隔符（默认 `:`，最多16字符）与平铺切换；列表2/5/10/30秒自动刷新默认关闭，选择键/查看详情/编辑及隐藏窗口时暂停 | `ui/src/pages/browser/components/key-tree` |
 | JSON 根文档与路径编辑 | 已支持 API，缺树 | 本轮增加对象/数组折叠、节点定位、特殊属性安全路径及渲染上限 | `api/src/modules/browser/rejson-rl` |
+| 二进制键与集合 | 已支持基础类型 | 任意字节键名（含空键/NUL/非法UTF-8）、Hash字段与值、List值、Set/Sorted Set成员；UTF-8/Hex/Base64输入和无损切换、集合分页/原位修改/Hash字段TTL、键重命名/批量删除/导入导出均按原始字节；旧文本JSON兼容，二进制用 `{base64}` 对象 | 本地 Browser/typed IPC |
 | String 值多格式解码 | 基础文本 | 新增原始字节读取、UTF-8/ASCII/Hex/Binary/Base64/JSON编辑，Gzip/Zlib/Deflate压缩，MessagePack（含CSharp LZ4）、PHP serialized与无schema Protobuf只读；PHP对象/引用仅结构化展示，BOM与二进制键保留。输入4MiB，截断值不可保存。Java/Pickle、schema驱动Protobuf、专用向量/日期/Markdown视图及ZSTD/LZ4/Snappy/Brotli等压缩仍未实现；结构化Worker限时并限制输出，库内解析前分配仍有边界 | `ui/src/pages/browser/components/value-decoder` |
 | Stream Group/消费者/Pending | 基础支持 | 保留消息范围分页/XADD/XDEL；新增XGROUP SETID、Pending范围/消费者分页、XCLAIM IDLE/TIME/RETRYCOUNT/FORCE/JUSTID。按目标源码核对，未发现Browser XREADGROUP/XAUTOCLAIM专用流程，撤销旧矩阵把它们列为目标差距的判断 | `api/src/modules/browser/stream` |
 | RedisSearch 索引与查询 | 已支持受限 NOCONTENT | 保留字段结果/RESP3/受限聚合；修复VECTOR创建，增加FLAT/HNSW完整配置与同连接版本校验；新增Text/Tag/Numeric/Geo可视过滤、预览和显式回填。新增typed二进制PARAMS/KNN专用UI、服务端schema验证、FLOAT32/FLOAT64、K≤200、距离结果；创建字段可显式设置AS查询别名用于JSONPath。更高级向量类型与完整过滤语法仍有差异 | `api/src/modules/browser/redisearch`、`ui/src/pages/vector-search` |
@@ -35,7 +36,7 @@
 | 前端回归 | 35 文件、297 项通过；两类既有 jsdom/重复 saved key 警告不计失败 |
 | Rust 常规回归 | 374 项通过、29 项默认 ignored；ignored 未计为实际通过，保留 5 个既有 Array dead-code 警告和测试 helper 警告 |
 | 隔离普通 Redis | 7 个实际流程通过；另 3 个 Redis Stack 流程因未配置环境而 early-skip |
-| 隔离 Cluster | launcher 安全单测 6 项、真实三主节点集成 2 项通过；覆盖跨 primary UTF-8 键名完整 SCAN、拓扑、analysis、CROSSSLOT 与无副作用门控 |
+| 隔离 Cluster | launcher 安全单测 6 项、真实三主节点集成 2 项通过；覆盖跨 primary 任意二进制键名完整 SCAN、拓扑、analysis、CROSSSLOT 与无副作用门控 |
 | SSH 路径兼容 focused | connections commands 32 项、ssh 模块 26 项、Sentinel 集成 8 项通过（另 2 项默认 ignored）；没有运行真实 sshd |
 | 前端生产构建 | TypeScript / Vite 94 模块通过 |
 | macOS 原生 release 构建 | `CARGO_NET_OFFLINE=true npm run tauri:build -- --no-bundle` 通过（1 分 16 秒）；未打包、签名、安装或发布 |

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { byteIdentity, byteLength, bytesFromInput, bytesToInput, bytesToSingleLineInput, bytesToMultilineInput, displayBytes, displayKey, isBinary, type ByteFormat, type RedisBytes } from "../../lib/redisBytes";
 import Toast from "../../components/Toast";
 import Select from "../../components/Select";
 import { useFeedbackState } from "../../components/useFeedbackState";
@@ -39,7 +40,10 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
   const [cursor, setCursor] = useState("0");
   const [history, setHistory] = useState<string[]>([]);
   const [pattern, setPattern] = useState("*");
-  const [appliedPattern, setAppliedPattern] = useState("*");
+  const [appliedPattern, setAppliedPattern] = useState<RedisBytes>("*");
+  const [patternFormat, setPatternFormat] = useState<ByteFormat>("utf8");
+  const [nameFormat, setNameFormat] = useState<ByteFormat>("utf8");
+  const [valueFormat, setValueFormat] = useState<ByteFormat>("utf8");
   const [editing, setEditing] = useState<CollectionEntry | null>(null);
   const [entryName, setEntryName] = useState("");
   const [value, setValue] = useState("");
@@ -53,7 +57,7 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
   const [trimCount, setTrimCount] = useState("1");
   const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([
     connectionId, keyName, kind, disabled, busy, cursor, pattern, appliedPattern,
-    editing?.id, entryName, value, score, prepend, order, ttlTarget?.id, fieldTtl, listIndex, trimCount,
+    editing?.id, entryName, value, nameFormat, valueFormat, patternFormat, score, prepend, order, ttlTarget?.id, fieldTtl, listIndex, trimCount,
   ]));
   const confirmationRef = useRef(confirm);
   confirmationRef.current = confirm;
@@ -65,12 +69,12 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
   const blocked = busy || disabled;
   const current = (token: number) => mounted.current && request.current === token;
 
-  const pageInput = (next: string, match: string, nextOrder = order) => ({
+  const pageInput = (next: string, match: RedisBytes, nextOrder = order) => ({
     connection_id: connectionId, key: keyName, kind, cursor: next, count: 100, pattern: match,
     ...(kind === "zset" ? { order: nextOrder } : {}),
   });
 
-  const load = async (next: string, match: string, previous: string[], nextOrder = order) => {
+  const load = async (next: string, match: RedisBytes, previous: string[], nextOrder = order) => {
     if (inFlight.current) return;
     const token = ++request.current;
     inFlight.current = true;
@@ -88,7 +92,7 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
       setTtlTarget(null);
       setIndexResult(null);
     } catch (caught) {
-      if (current(token)) setError(browserErrorMessage(caught, "集合读取失败；单页超过 2,000 条、4 MiB 或含非 UTF-8 数据时会拒绝返回。可缩小匹配范围后重试。"));
+      if (current(token)) setError(browserErrorMessage(caught, "集合读取失败；单页超过 2,000 条、4 MiB 时会拒绝返回。可缩小匹配范围后重试。"));
     } finally {
       if (current(token)) { inFlight.current = false; setBusy(false); }
     }
@@ -144,18 +148,51 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
 
   const save = () => {
     let mutation: CollectionMutation;
-    if (kind === "hash") mutation = { operation: "hash_set", field: editing?.id ?? entryName, value };
-    else if (kind === "set") mutation = { operation: "set_add", member: entryName };
-    else if (kind === "zset") {
-      if (!score.trim() || !Number.isFinite(Number(score))) { setError("分数必须是有限数值。"); return; }
-      mutation = { operation: "zset_add", member: editing?.id ?? entryName, score: Number(score) };
-    } else mutation = editing ? { operation: "list_set", index: editing.id, value } : { operation: "list_append", value, prepend };
-    const fields = Object.values(mutation).filter((item): item is string => typeof item === "string");
-    if (fields.some((item) => new TextEncoder().encode(item).length > 1024 * 1024)) { setError("单个字段或值不能超过 1 MiB。"); return; }
+    try {
+      const nameBytes = kind === "list" ? "" : editing?.id ?? bytesFromInput(entryName, nameFormat);
+      const valueBytes = kind === "hash" || kind === "list" ? bytesFromInput(value, valueFormat) : "";
+      if (byteLength(nameBytes) > 1024 * 1024 || byteLength(valueBytes) > 1024 * 1024) {
+        throw new Error("单个字段或值不能超过 1 MiB。");
+      }
+      if (kind === "hash") mutation = { operation: "hash_set", field: nameBytes, value: valueBytes };
+      else if (kind === "set") mutation = { operation: "set_add", member: nameBytes };
+      else if (kind === "zset") {
+        if (!score.trim() || !Number.isFinite(Number(score))) throw new Error("分数必须是有限数值。");
+        mutation = { operation: "zset_add", member: nameBytes, score: Number(score) };
+      } else {
+        if (editing && typeof editing.id !== "string") throw new Error("List 索引格式无效。");
+        mutation = editing ? { operation: "list_set", index: editing.id as string, value: valueBytes } : { operation: "list_append", value: valueBytes, prepend };
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "数据编码无效。");
+      return;
+    }
     void write(mutation, editing ? "确认保存此项修改？只更新这一项，其他数据保持不变。" : "确认添加这一项？Hash 同名字段或 ZSet 同名成员会被更新。");
   };
 
-  const edit = (entry: CollectionEntry) => { setTtlTarget(null); setEditing(entry); setEntryName(entry.id); setValue(entry.value); setScore(String(entry.score ?? 0)); };
+  const edit = (entry: CollectionEntry) => {
+    const nextNameFormat = isBinary(entry.id) ? "hex" : "utf8";
+    const nextValueFormat = isBinary(entry.value) ? "hex" : "utf8";
+    setTtlTarget(null); setEditing(entry);
+    setNameFormat(nextNameFormat); setValueFormat(nextValueFormat);
+    setEntryName(bytesToInput(entry.id, nextNameFormat)); setValue(bytesToInput(entry.value, nextValueFormat));
+    setScore(String(entry.score ?? 0));
+  };
+  const changeFormat = (text: string, format: ByteFormat, next: ByteFormat, setText: (value: string) => void, setFormat: (value: ByteFormat) => void, singleLine = false) => {
+    try {
+      setText((singleLine ? bytesToSingleLineInput : bytesToMultilineInput)(bytesFromInput(text, format), next)); setFormat(next); setError(null);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "数据编码无效。"); }
+  };
+  const formatSelect = (label: string, format: ByteFormat, change: (format: ByteFormat) => void, locked = blocked) => <label className="field"><span>{label}</span><Select aria-label={label} value={format} disabled={locked} onChange={(event) => change(event.target.value as ByteFormat)}><option value="utf8">UTF-8</option><option value="hex">Hex</option><option value="base64">Base64</option></Select></label>;
+  const search = () => {
+    if (blocked) return;
+    try {
+      const match = bytesFromInput(pattern, patternFormat);
+      if (byteLength(match) > 4096) throw new Error("匹配模式不能超过 4096 字节。");
+      void load("0", match, []);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "匹配模式编码无效。"); }
+  };
+
   const remove = (entry: CollectionEntry) => {
     const mutation: CollectionMutation = kind === "hash" ? { operation: "hash_delete", field: entry.id } : kind === "set" ? { operation: "set_remove", member: entry.id } : { operation: "zset_remove", member: entry.id };
     void write(mutation, "确认删除所选项？其他数据保持不变，删除最后一项后键会消失。");
@@ -165,7 +202,7 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
     if (!ttlTarget || !page?.hash_field_ttl_supported) return;
     const ttl = integerInRange(fieldTtl, 1n, 3153600000000n);
     if (ttl === null) { setError("TTL 必须是 1 到 3153600000000 之间的整数毫秒（最多 36500 天）。"); return; }
-    void write({ operation: "hash_expire", field: ttlTarget.id, ttl_ms: ttl }, `确认将字段「${ttlTarget.id}」的 TTL 设置为 ${ttl} 毫秒？到期后该字段会自动删除。`, {
+    void write({ operation: "hash_expire", field: ttlTarget.id, ttl_ms: ttl }, `确认将字段「${displayBytes(ttlTarget.id)}」的 TTL 设置为 ${ttl} 毫秒？到期后该字段会自动删除。`, {
       title: "确认设置字段 TTL", confirmLabel: "确认设置", danger: false,
     });
   };
@@ -173,7 +210,7 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
   const trimList = (fromHead: boolean) => {
     const count = integerInRange(trimCount, 1n, 9223372036854775806n);
     if (count === null) { setError("删除数量必须是 1 到 9223372036854775806 之间的整数。"); return; }
-    void write({ operation: "list_trim", count, from_head: fromHead }, `确认从 List「${keyName}」的${fromHead ? "头部" : "尾部"}删除 ${count} 项？数量超过长度时将清空整个 List，键也会删除。此操作不可撤销。`);
+    void write({ operation: "list_trim", count, from_head: fromHead }, `确认从 List「${displayKey(keyName)}」的${fromHead ? "头部" : "尾部"}删除 ${count} 项？数量超过长度时将清空整个 List，键也会删除。此操作不可撤销。`);
   };
 
   const lookupIndex = async () => {
@@ -203,8 +240,11 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
       const nextOrder = event.target.value as CollectionOrder;
       if (!blocked) void load("0", "*", [], nextOrder);
     }}><option value="score_asc">分数升序</option><option value="score_desc">分数降序</option><option value="scan">成员匹配扫描</option></Select></label>}
-    {kind !== "list" && (kind !== "zset" || order === "scan") && <form className="module-toolbar collection-search" onSubmit={(event) => { event.preventDefault(); if (!blocked && new TextEncoder().encode(pattern).length <= 4096) void load("0", pattern, []); }}>
-      <label className="field"><span>{kind === "hash" ? "字段匹配模式" : "成员匹配模式"}</span><input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段匹配模式" : "成员匹配模式"} value={pattern} maxLength={4096} disabled={blocked} onChange={(event) => setPattern(event.target.value)} /></label>
+    {kind !== "list" && (kind !== "zset" || order === "scan") && <form className="module-toolbar collection-search" onSubmit={(event) => { event.preventDefault(); search(); }}>
+      <div className="module-tab-content">
+      <label className="field"><span>{kind === "hash" ? "字段匹配模式" : "成员匹配模式"}</span><input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段匹配模式" : "成员匹配模式"} value={pattern} maxLength={12288} disabled={blocked} onChange={(event) => setPattern(event.target.value)} /></label>
+      {formatSelect("匹配模式编码", patternFormat, (next) => changeFormat(pattern, patternFormat, next, setPattern, setPatternFormat, true))}
+      </div>
       <button type="submit" className="button button-primary" disabled={blocked}>搜索</button>
     </form>}
     {kind === "list" && <div className="module-action-card">
@@ -215,9 +255,9 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
       <p className="form-help">索引从 0 开始，-1 表示尾项，-2 表示倒数第二项。</p>
       {indexResult && <div className="module-tab-content" aria-label="索引查询结果">
         {indexResult.entry ? <>
-          <span className="form-help">查询 {indexResult.index} · 绝对索引 {indexResult.entry.id}</span>
-          <code className="module-value">{indexResult.entry.value}</code>
-          <div className="module-row-actions"><button type="button" className="button button-quiet" disabled={blocked} aria-label={`编辑查询结果 ${indexResult.entry.id}`} onClick={() => indexResult.entry && edit(indexResult.entry)}>编辑查询结果</button></div>
+          <span className="form-help">查询 {indexResult.index} · 绝对索引 {displayBytes(indexResult.entry.id)}</span>
+          <code className="module-value">{displayBytes(indexResult.entry.value)}</code>
+          <div className="module-row-actions"><button type="button" className="button button-quiet" disabled={blocked} aria-label={`编辑查询结果 ${displayBytes(indexResult.entry.id)}`} onClick={() => indexResult.entry && edit(indexResult.entry)}>编辑查询结果</button></div>
         </> : <p className="module-empty-state">该索引不存在：{indexResult.index}。</p>}
       </div>}
     </div>}
@@ -226,13 +266,13 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
     <div className="module-table-wrap"><table className={`module-table browser-action-table${kind === "hash" ? " collection-table-hash" : ""}`}><thead><tr>
       {(kind === "hash" || kind === "list") && <th scope="col">{kind === "hash" ? "字段" : "索引"}</th>}
       <th scope="col">{kind === "set" || kind === "zset" ? "成员" : "值"}</th>{kind === "zset" && <th scope="col">分数</th>}{kind === "hash" && <th scope="col">字段 TTL</th>}<th scope="col">操作</th>
-    </tr></thead><tbody>{page?.entries.map((entry, index) => <tr key={`${index}:${entry.id}`}>
-      {(kind === "hash" || kind === "list") && <td><code className="module-value">{entry.id}</code></td>}
-      <td><code className="module-value">{entry.value}</code></td>{kind === "zset" && <td><code>{entry.score}</code></td>}
+    </tr></thead><tbody>{page?.entries.map((entry, index) => <tr key={`${index}:${byteIdentity(entry.id)}`}>
+      {(kind === "hash" || kind === "list") && <td><code className="module-value">{displayBytes(entry.id)}</code></td>}
+      <td><code className="module-value">{displayBytes(entry.value)}</code></td>{kind === "zset" && <td><code>{entry.score}</code></td>}
       {kind === "hash" && <td><code>{fieldTtlLabel(entry.ttl_ms)}</code></td>}
-      <td><div className="module-row-actions">{kind !== "set" && <button type="button" className="button button-quiet" disabled={blocked} aria-label={`编辑 ${entry.id}`} onClick={() => edit(entry)}>编辑</button>}
-        {kind === "hash" && <button type="button" className="button button-quiet" disabled={blocked || !page?.hash_field_ttl_supported || entry.ttl_ms === -2} aria-label={`设置字段 TTL ${entry.id}`} onClick={() => { setEditing(null); setTtlTarget(entry); setFieldTtl(entry.ttl_ms !== null && entry.ttl_ms > 0 ? String(entry.ttl_ms) : "60000"); }}>TTL</button>}
-        {kind !== "list" && <button type="button" className="button button-danger" disabled={blocked} aria-label={`删除 ${entry.id}`} onClick={() => remove(entry)}>删除</button>}</div></td>
+      <td><div className="module-row-actions">{kind !== "set" && <button type="button" className="button button-quiet" disabled={blocked} aria-label={`编辑 ${displayBytes(entry.id)}`} onClick={() => edit(entry)}>编辑</button>}
+        {kind === "hash" && <button type="button" className="button button-quiet" disabled={blocked || !page?.hash_field_ttl_supported || entry.ttl_ms === -2} aria-label={`设置字段 TTL ${displayBytes(entry.id)}`} onClick={() => { setEditing(null); setTtlTarget(entry); setFieldTtl(entry.ttl_ms !== null && entry.ttl_ms > 0 ? String(entry.ttl_ms) : "60000"); }}>TTL</button>}
+        {kind !== "list" && <button type="button" className="button button-danger" disabled={blocked} aria-label={`删除 ${displayBytes(entry.id)}`} onClick={() => remove(entry)}>删除</button>}</div></td>
     </tr>)}</tbody></table></div>
     {page && page.entries.length === 0 && <p className="module-empty-state">{page.ttl_ms === -2 ? "键已不存在。" : "本页没有匹配项。"}</p>}
     <div className="module-row-actions">
@@ -242,12 +282,12 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
       <button type="button" className="button button-secondary" disabled={blocked} onClick={() => void load("0", appliedPattern, [])}>刷新</button>
     </div>
     {kind === "hash" && ttlTarget && <form className="module-action-card" onSubmit={(event) => { event.preventDefault(); updateFieldTtl(); }}>
-      <div className="module-card-heading"><h4>字段 TTL · {ttlTarget.id}</h4></div>
+      <div className="module-card-heading"><h4>字段 TTL · {displayBytes(ttlTarget.id)}</h4></div>
       <p className="form-help">当前字段 TTL：{fieldTtlLabel(ttlTarget.ttl_ms)}。字段到期后自动删除；整个键的过期时间仍然生效。</p>
       <label className="field"><span>字段 TTL（毫秒）</span><input aria-label="字段 TTL（毫秒）" inputMode="numeric" maxLength={16} value={fieldTtl} disabled={blocked} onChange={(event) => setFieldTtl(event.target.value)} /></label>
       <div className="module-row-actions">
         <button type="submit" className="button button-primary" disabled={blocked}>设置 TTL</button>
-        <button type="button" className="button button-secondary" disabled={blocked || ttlTarget.ttl_ms === -1} onClick={() => void write({ operation: "hash_persist", field: ttlTarget.id }, `确认移除字段「${ttlTarget.id}」的 TTL？字段将不再单独过期。`, { title: "确认移除字段 TTL", confirmLabel: "确认移除", danger: false })}>移除 TTL</button>
+        <button type="button" className="button button-secondary" disabled={blocked || ttlTarget.ttl_ms === -1} onClick={() => void write({ operation: "hash_persist", field: ttlTarget.id }, `确认移除字段「${displayBytes(ttlTarget.id)}」的 TTL？字段将不再单独过期。`, { title: "确认移除字段 TTL", confirmLabel: "确认移除", danger: false })}>移除 TTL</button>
         <button type="button" className="button button-secondary" disabled={blocked} onClick={() => setTtlTarget(null)}>取消 TTL 编辑</button>
       </div>
     </form>}
@@ -260,10 +300,14 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
       </div>
     </div>}
     <form className="module-action-card" onSubmit={(event) => { event.preventDefault(); save(); }}>
-      <div className="module-card-heading"><h4>{editing ? `编辑 ${kind === "list" ? "索引" : "项"} ${editing.id}` : "添加一项"}</h4></div>
+      <div className="module-card-heading"><h4>{editing ? `编辑 ${kind === "list" ? "索引" : "项"} ${displayBytes(editing.id)}` : "添加一项"}</h4></div>
       <div className={kind === "zset" ? "module-form-grid" : "module-tab-content"}>
-        {kind !== "list" && <label className="field"><span>{kind === "hash" ? "字段名" : "成员"}</span><input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段名" : "成员"} value={entryName} disabled={blocked || editing !== null} onChange={(event) => setEntryName(event.target.value)} /></label>}
+        {kind !== "list" && <div className="module-tab-content">
+        <label className="field"><span>{kind === "hash" ? "字段名" : "成员"}</span><input autoCapitalize="off" autoCorrect="off" aria-label={kind === "hash" ? "字段名" : "成员"} value={entryName} disabled={blocked || editing !== null} onChange={(event) => setEntryName(event.target.value)} /></label>
+        {formatSelect(kind === "hash" ? "字段名编码" : "成员编码", nameFormat, (next) => changeFormat(entryName, nameFormat, next, setEntryName, setNameFormat, true), blocked || editing !== null)}
+        </div>}
         {(kind === "hash" || kind === "list") && <label className="field"><span>值</span><textarea autoCapitalize="off" autoCorrect="off" aria-label="值" value={value} disabled={blocked} onChange={(event) => setValue(event.target.value)} /></label>}
+        {(kind === "hash" || kind === "list") && formatSelect("值编码", valueFormat, (next) => changeFormat(value, valueFormat, next, setValue, setValueFormat))}
         {kind === "zset" && <label className="field"><span>分数</span><input autoCapitalize="off" autoCorrect="off" aria-label="分数" value={score} disabled={blocked} onChange={(event) => setScore(event.target.value)} /></label>}
       </div>
       {kind === "list" && !editing && <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={prepend} disabled={blocked} onChange={(event) => setPrepend(event.target.checked)} />添加到头部（默认尾部）</label>}

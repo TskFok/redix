@@ -1,3 +1,4 @@
+import { displayKey } from "../../lib/redisBytes";
 import Select from "../../components/Select";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
@@ -91,7 +92,7 @@ function StreamEntriesScope({ connectionId, streamKey, disabled = false, onChang
     if (kind === "delete" && selected.length === 0) return;
     const token = generation.current;
     const accepted = await confirm(
-      kind === "add" ? `确认向 Stream「${streamKey}」添加消息？` : `确认删除 Stream「${streamKey}」选中的 ${selected.length} 条消息？此操作不可撤销，已有 Pending 引用不会被自动确认。`,
+      kind === "add" ? `确认向 Stream「${displayKey(streamKey)}」添加消息？` : `确认删除 Stream「${displayKey(streamKey)}」选中的 ${selected.length} 条消息？此操作不可撤销，已有 Pending 引用不会被自动确认。`,
       kind === "add" ? { title: "确认添加消息", confirmLabel: "确认添加", danger: false } : undefined,
     );
     if (!accepted || token !== generation.current || mutation.current) return;

@@ -12,16 +12,17 @@ use crate::{
 const MAX_ARRAY_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
 pub(crate) fn parse_array_summary(
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     length: Value,
     count: Value,
     next_index: Value,
 ) -> Result<ArraySummary, AppError> {
-    if key.trim().is_empty() {
+    let key = key.as_ref();
+    if key.len() > 65536 {
         return Err(AppError::CommandFailed);
     }
     Ok(ArraySummary {
-        key: key.to_owned(),
+        key: key.into(),
         length: required_decimal(length)?,
         count: required_decimal(count)?,
         next_index: optional_decimal(next_index)?.unwrap_or_else(|| "0".to_owned()),
@@ -291,7 +292,11 @@ pub(crate) fn build_create_array_command(input: &CreateArrayInput) -> Result<Cmd
     Ok(command)
 }
 
-pub(crate) fn build_array_get_command(key: &str, index: &str) -> Result<Cmd, AppError> {
+pub(crate) fn build_array_get_command(
+    key: impl AsRef<[u8]> + Send + Sync,
+    index: &str,
+) -> Result<Cmd, AppError> {
+    let key = key.as_ref();
     let index = normalize_array_index(index)?;
     let mut command = ::redis::cmd("ARGET");
     command.arg(key).arg(index);
@@ -361,12 +366,13 @@ pub(crate) fn build_array_set_command(
 }
 
 pub(crate) fn build_array_append_command(
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     index: &str,
     values: &[String],
 ) -> Result<Cmd, AppError> {
+    let key = key.as_ref();
     let index = normalize_array_index(index)?;
-    if key.trim().is_empty()
+    if key.len() > 65536
         || values.is_empty()
         || values.len() > crate::domain::MAX_ARRAY_BATCH_ELEMENTS
     {
@@ -452,12 +458,13 @@ pub(crate) fn build_array_aggregate_command(input: &AggregateArrayInput) -> Resu
 }
 
 pub(crate) fn build_array_insert_command(
-    key: &str,
+    key: impl AsRef<[u8]> + Send + Sync,
     index: &str,
     values: &[String],
 ) -> Result<Cmd, AppError> {
+    let key = key.as_ref();
     let index = normalize_array_index(index)?;
-    if key.trim().is_empty() || values.is_empty() {
+    if key.len() > 65536 || values.is_empty() {
         return Err(AppError::InvalidInput);
     }
     let mut command = ::redis::cmd("ARINSERT");
@@ -468,8 +475,13 @@ pub(crate) fn build_array_insert_command(
     Ok(command)
 }
 
-pub(crate) fn build_array_ring_command(key: &str, start: &str, end: &str) -> Result<Cmd, AppError> {
-    if key.trim().is_empty() {
+pub(crate) fn build_array_ring_command(
+    key: impl AsRef<[u8]> + Send + Sync,
+    start: &str,
+    end: &str,
+) -> Result<Cmd, AppError> {
+    let key = key.as_ref();
+    if key.len() > 65536 {
         return Err(AppError::InvalidInput);
     }
     let mut command = ::redis::cmd("ARRING");
@@ -480,8 +492,11 @@ pub(crate) fn build_array_ring_command(key: &str, start: &str, end: &str) -> Res
     Ok(command)
 }
 
-pub(crate) fn build_array_info_command(key: &str) -> Result<Cmd, AppError> {
-    if key.trim().is_empty() {
+pub(crate) fn build_array_info_command(
+    key: impl AsRef<[u8]> + Send + Sync,
+) -> Result<Cmd, AppError> {
+    let key = key.as_ref();
+    if key.len() > 65536 {
         return Err(AppError::InvalidInput);
     }
     let mut command = ::redis::cmd("ARINFO");

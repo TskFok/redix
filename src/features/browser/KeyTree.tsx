@@ -1,3 +1,4 @@
+import { displayKey, isBinary, keyToBytes, bytesToInput } from "../../lib/redisBytes";
 import { useMemo, useState } from "react";
 
 import type { KeySummary } from "../../lib/types";
@@ -25,12 +26,13 @@ export function KeyRow({ summary, selected, checked, loading, onSelect, onToggle
   label?: string;
 }) {
   return <div className={`key-row${selected ? " key-row-selected" : ""}`}>
-    <input autoCapitalize="off" autoCorrect="off" className="key-row-checkbox" type="checkbox" aria-label={`选择键 ${summary.key}`}
+    <input autoCapitalize="off" autoCorrect="off" className="key-row-checkbox" type="checkbox" aria-label={`选择键 ${displayKey(summary.key)}`}
       checked={checked} onChange={() => onToggleSelect(summary.key)} disabled={loading} />
-    <button type="button" className="key-row-open" aria-label={summary.key || "（空键）"}
+    <button type="button" className="key-row-open" aria-label={displayKey(summary.key)}
       aria-pressed={selected} onClick={() => onSelect(summary.key)} disabled={loading}>
       <span className="key-row-main">
-        <code title={summary.key}>{label ?? (summary.key || "（空键）")}</code>
+        <code title={displayKey(summary.key)}>{label ?? displayKey(summary.key)}</code>
+        {isBinary(keyToBytes(summary.key)) && <span className="key-row-type">二进制</span>}
         {summary.key_type && <span className="key-row-type">{keyTypeLabel(summary.key_type)}</span>}
       </span>
     </button>
@@ -49,7 +51,9 @@ function buildFolders(keys: KeySummary[], separator: string): KeyFolder {
   const root: KeyFolder = { segment: "", prefix: "", folders: new Map(), leaves: [], count: keys.length };
   const folders = [root];
   for (const summary of keys) {
-    const segments = separator ? summary.key.split(separator) : [summary.key];
+    const rawKey = keyToBytes(summary.key);
+    const textKey = isBinary(rawKey) ? null : bytesToInput(rawKey, "utf8");
+    const segments = textKey !== null && separator ? textKey.split(separator) : [displayKey(summary.key)];
     let folder = root;
     // Keep deeply delimited names usable without creating unbounded nesting.
     const folderDepth = Math.min(segments.length - 1, 32);

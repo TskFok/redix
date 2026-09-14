@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use crate::{
     domain::{
         stream_entries::{parse_stream_entry_id, GetStreamEntriesInput},
@@ -11,7 +12,7 @@ const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct UpdateStreamGroupIdInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub group: String,
     pub last_delivered_id: String,
 }
@@ -19,7 +20,7 @@ pub struct UpdateStreamGroupIdInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct GetStreamPendingPageInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub group: String,
     pub consumer: Option<String>,
     pub start: String,
@@ -38,7 +39,7 @@ pub struct StreamPendingPage {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ClaimStreamPendingAdvancedInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub group: String,
     pub consumer: String,
     pub min_idle_ms: u64,

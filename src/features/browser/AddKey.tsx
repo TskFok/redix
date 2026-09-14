@@ -1,3 +1,4 @@
+import { byteIdentity, bytesFromInput, bytesToSingleLineInput, bytesToMultilineInput, keyFromBytes, type ByteFormat } from "../../lib/redisBytes";
 import Select from "../../components/Select";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
@@ -126,9 +127,11 @@ function parseValue(
   collectionText: string,
   jsonText: string,
   streamText: string,
+  stringFormat: ByteFormat = "utf8",
+  collectionFormat: ByteFormat = "utf8",
 ): RedisValue {
   if (kind === "string") {
-    return { String: { value: stringValue } };
+    return { String: { value: bytesFromInput(stringValue, stringFormat) } };
   }
   if (kind === "json") {
     return { Json: { value: JSON.parse(jsonText) } };
@@ -154,6 +157,28 @@ function parseValue(
       throw new Error("Stream 至少需要一条包含字段和值的记录。");
     }
     return { Stream: { entries } };
+  }
+
+  if (collectionFormat !== "utf8") {
+    let rows: unknown;
+    try { rows = JSON.parse(collectionText); } catch { throw new Error("Hex/Base64 集合值必须是 JSON 数组。"); }
+    if (!Array.isArray(rows) || rows.length === 0) throw new Error("集合至少需要一项数据。");
+    const parse = (text: unknown) => {
+      if (typeof text !== "string") throw new Error("编码字段必须是字符串。");
+      return bytesFromInput(text, collectionFormat);
+    };
+    if (kind === "list") return { List: { items: rows.map(parse) } };
+    if (kind === "set") return { Set: { members: [...new Map(rows.map((row) => { const bytes = parse(row); return [byteIdentity(bytes), bytes]; })).values()] } };
+    if (kind === "hash") {
+      const fields = rows.map((row) => ({ field: parse(row?.field), value: parse(row?.value) }));
+      if (new Set(fields.map(({ field }) => byteIdentity(field))).size !== fields.length) throw new Error("Hash 字段名不能重复。");
+      return { Hash: { fields } };
+    }
+    const members = rows.map((row) => {
+      if (typeof row?.score !== "number" || !Number.isFinite(row.score)) throw new Error("Sorted Set 分数必须是有限数字。");
+      return { member: parse(row.member), score: row.score };
+    });
+    return { SortedSet: { members } };
   }
 
   const lines = parseNonEmptyLines(collectionText);
@@ -207,6 +232,9 @@ export function AddKey({
   const dialogRef = useRef<HTMLFormElement>(null);
   const keyInputRef = useRef<HTMLInputElement>(null);
   const [key, setKey] = useState("");
+  const [keyFormat, setKeyFormat] = useState<ByteFormat>("utf8");
+  const [stringFormat, setStringFormat] = useState<ByteFormat>("utf8");
+  const [collectionFormat, setCollectionFormat] = useState<ByteFormat>("utf8");
   const [kind, setKind] = useState<CreateValueKind>("string");
   const [stringValue, setStringValue] = useState("");
   const [collectionText, setCollectionText] = useState("");
@@ -272,7 +300,8 @@ export function AddKey({
 
   const handleFillExample = () => {
     if (isBusy) return;
-    if (key.trim() === "") setKey(`example:${kind}:${crypto.randomUUID()}`);
+    if (key.trim() === "") { setKey(`example:${kind}:${crypto.randomUUID()}`); setKeyFormat("utf8"); }
+    setStringFormat("utf8"); setCollectionFormat("utf8");
     setError(null);
 
     switch (kind) {
@@ -315,14 +344,37 @@ export function AddKey({
     }
   };
 
+  const changeFormat = (text: string, format: ByteFormat, next: ByteFormat, setText: (value: string) => void, setFormat: (value: ByteFormat) => void, singleLine = false) => {
+    try { setText((singleLine ? bytesToSingleLineInput : bytesToMultilineInput)(bytesFromInput(text, format), next)); setFormat(next); setError(null); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "数据编码无效。"); }
+  };
+  const formatSelect = (label: string, format: ByteFormat, change: (format: ByteFormat) => void) => <label className="field"><span>{label}</span><Select aria-label={label} value={format} disabled={isBusy} onChange={(event) => change(event.target.value as ByteFormat)}><option value="utf8">UTF-8</option><option value="hex">Hex</option><option value="base64">Base64</option></Select></label>;
+  const changeCollectionFormat = (next: ByteFormat) => {
+    try {
+      if (collectionText === "") { setCollectionFormat(next); setError(null); return; }
+      const parsed = parseValue(kind, stringValue, collectionText, jsonText, streamText, stringFormat, collectionFormat);
+      let rows: unknown[] = [];
+      if ("Hash" in parsed) rows = parsed.Hash.fields.map(({ field, value }) => ({ field: bytesToMultilineInput(field, next), value: bytesToMultilineInput(value, next) }));
+      else if ("SortedSet" in parsed) rows = parsed.SortedSet.members.map(({ member, score }) => ({ member: bytesToMultilineInput(member, next), score }));
+      else if ("List" in parsed) rows = parsed.List.items.map((item) => bytesToMultilineInput(item, next));
+      else if ("Set" in parsed) rows = parsed.Set.members.map((item) => bytesToMultilineInput(item, next));
+      if (next === "utf8") {
+        // The line format cannot represent embedded newlines or empty entries losslessly.
+        const text = rows.map((row) => typeof row === "string" ? row : "field" in (row as object) ? `${(row as { field: string }).field}=${(row as { value: string }).value}` : `${(row as { member: string }).member}=${(row as { score: number }).score}`).join("\n");
+        const reparsed = parseValue(kind, "", text, "", "");
+        if (JSON.stringify(reparsed) !== JSON.stringify(parsed)) throw new Error("这些字节无法无损转换为按行 UTF-8 输入，请继续使用 Hex 或 Base64。");
+        setCollectionText(text);
+      } else setCollectionText(JSON.stringify(rows, null, 2));
+      setCollectionFormat(next); setError(null);
+    } catch (caught) { setError(caught instanceof Error ? caught.message : "集合编码无效。"); }
+  };
+
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (isBusy) return;
-    const normalizedKey = key.trim();
-    if (normalizedKey === "") {
-      setError("键名不能为空。");
-      return;
-    }
+    let normalizedKey: string;
+    try { normalizedKey = keyFromBytes(bytesFromInput(key, keyFormat)); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "键名编码无效。"); return; }
 
     const ttlTextValue = ttlText.trim();
     const ttlMs = ttlTextValue === "" ? null : Number(ttlTextValue);
@@ -350,7 +402,7 @@ export function AddKey({
           throw new Error("每个 Vector Set 元素的维度必须与设置值一致。");
         }
       } else {
-        value = parseValue(kind, stringValue, collectionText, jsonText, streamText);
+        value = parseValue(kind, stringValue, collectionText, jsonText, streamText, stringFormat, collectionFormat);
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "数据格式无效。");
@@ -421,6 +473,7 @@ export function AddKey({
           </button>
         </div>
         <div className="browser-add-key-grid">
+          <div className="module-tab-content">
           <label className="field">
             <span>键名</span>
             <input
@@ -433,6 +486,8 @@ export function AddKey({
               spellCheck={false}
             />
           </label>
+          {formatSelect("键名编码", keyFormat, (next) => changeFormat(key, keyFormat, next, setKey, setKeyFormat, true))}
+          </div>
           <label className="field">
             <span>数据类型</span>
             <Select value={kind} onChange={(event) => setKind(event.target.value as CreateValueKind)} disabled={isBusy}>
@@ -457,10 +512,10 @@ export function AddKey({
         </div>
 
         {kind === "string" ? (
-          <label className="field">
+          <><label className="field">
             <span>字符串值</span>
             <textarea autoCapitalize="off" autoCorrect="off" value={stringValue} onChange={(event) => setStringValue(event.target.value)} disabled={isBusy} />
-          </label>
+          </label>{formatSelect("字符串值编码", stringFormat, (next) => changeFormat(stringValue, stringFormat, next, setStringValue, setStringFormat))}</>
         ) : null}
         {kind === "json" ? (
           <label className="field">
@@ -505,18 +560,18 @@ export function AddKey({
           </>
         ) : null}
         {kind !== "string" && kind !== "json" && kind !== "stream" && kind !== "array" && kind !== "vectorset" ? (
-          <label className="field">
-            <span>{kind === "hash" || kind === "zset" ? "集合值（每行一项）" : "集合值（每行一个）"}</span>
+          <>{formatSelect("集合值编码", collectionFormat, changeCollectionFormat)}<label className="field">
+            <span>{collectionFormat !== "utf8" ? "集合值（JSON 数组）" : kind === "hash" || kind === "zset" ? "集合值（每行一项）" : "集合值（每行一个）"}</span>
             <textarea
               autoCapitalize="off"
               autoCorrect="off"
               value={collectionText}
               onChange={(event) => setCollectionText(event.target.value)}
               disabled={isBusy}
-              placeholder={kind === "hash" ? "field=value" : kind === "zset" ? "member=1" : "item"}
+              placeholder={collectionFormat !== "utf8" ? kind === "hash" ? '[{"field":"","value":""}]' : kind === "zset" ? '[{"member":"","score":1}]' : '[""]' : kind === "hash" ? "field=value" : kind === "zset" ? "member=1" : "item"}
               spellCheck={false}
             />
-          </label>
+          </label>{collectionFormat !== "utf8" && <p className="form-help">使用 JSON 数组；字段名、成员和值按所选编码填写，空字符串表示零字节。Hash 使用 field / value，Sorted Set 使用 member / score。</p>}</>
         ) : null}
         <div className="browser-add-key-footer">
           <label className="field">

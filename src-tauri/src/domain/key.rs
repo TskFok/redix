@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use crate::error::AppError;
 use std::collections::HashSet;
 
@@ -83,7 +84,7 @@ pub fn normalize_key_type(value: &str) -> Option<&'static str> {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct KeySummary {
-    pub key: String,
+    pub key: RedisBytes,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key_type: Option<String>,
 }
@@ -100,7 +101,7 @@ pub struct ScanPage {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ExportKeysInput {
     pub connection_id: String,
-    pub keys: Vec<String>,
+    pub keys: Vec<RedisBytes>,
 }
 
 impl ExportKeysInput {
@@ -108,7 +109,7 @@ impl ExportKeysInput {
         if self.connection_id.trim().is_empty()
             || self.keys.is_empty()
             || self.keys.len() > 1_000
-            || self.keys.iter().any(|key| key.trim().is_empty())
+            || self.keys.iter().any(|key| key.len() > 65536)
         {
             return Err(AppError::InvalidConnection);
         }
@@ -118,14 +119,14 @@ impl ExportKeysInput {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct ExportedKey {
-    pub key: String,
+    pub key: RedisBytes,
     pub ttl_ms: i64,
     pub value: RedisValue,
 }
 
 impl ExportedKey {
     pub fn validate(&self) -> Result<(), AppError> {
-        if self.key.trim().is_empty() || self.ttl_ms < -1 {
+        if self.key.len() > 65536 || self.ttl_ms < -1 {
             return Err(AppError::InvalidConnection);
         }
         self.value.validate()
@@ -163,20 +164,20 @@ pub struct ConnectionInfo {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct GetKeyInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SetKeyInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub value: RedisValue,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CreateKeyInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub value: RedisValue,
     pub ttl_ms: Option<i64>,
 }
@@ -194,14 +195,14 @@ impl CreateKeyInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RenameKeyInput {
     pub connection_id: String,
-    pub key: String,
-    pub new_key: String,
+    pub key: RedisBytes,
+    pub new_key: RedisBytes,
 }
 
 impl RenameKeyInput {
     pub fn validate(&self) -> Result<(), AppError> {
         validate_connection_and_key(&self.connection_id, &self.key)?;
-        if self.new_key.trim().is_empty() {
+        if self.new_key.len() > 65536 {
             return Err(AppError::InvalidConnection);
         }
         Ok(())
@@ -211,14 +212,14 @@ impl RenameKeyInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteKeysInput {
     pub connection_id: String,
-    pub keys: Vec<String>,
+    pub keys: Vec<RedisBytes>,
 }
 
 impl DeleteKeysInput {
     pub fn validate(&self) -> Result<(), AppError> {
         if self.connection_id.trim().is_empty()
             || self.keys.is_empty()
-            || self.keys.iter().any(|key| key.trim().is_empty())
+            || self.keys.iter().any(|key| key.len() > 65536)
         {
             return Err(AppError::InvalidConnection);
         }
@@ -229,7 +230,7 @@ impl DeleteKeysInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct KeyInfoInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
 }
 
 impl KeyInfoInput {
@@ -241,13 +242,13 @@ impl KeyInfoInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DeleteKeyInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SetKeyTtlInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub ttl_ms: i64,
 }
 
@@ -260,16 +261,16 @@ pub struct ExecuteCommandInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub enum RedisValue {
     String {
-        value: String,
+        value: RedisBytes,
     },
     Hash {
         fields: Vec<HashEntry>,
     },
     List {
-        items: Vec<String>,
+        items: Vec<RedisBytes>,
     },
     Set {
-        members: Vec<String>,
+        members: Vec<RedisBytes>,
     },
     SortedSet {
         members: Vec<SortedSetEntry>,
@@ -299,10 +300,9 @@ impl RedisValue {
             Self::Hash { fields } => {
                 let mut names = HashSet::with_capacity(fields.len());
                 if fields.is_empty()
-                    || fields.iter().any(|entry| entry.field.trim().is_empty())
                     || fields
                         .iter()
-                        .any(|entry| !names.insert(entry.field.as_str()))
+                        .any(|entry| !names.insert(entry.field.as_bytes()))
                 {
                     return Err(AppError::CommandFailed);
                 }
@@ -323,11 +323,7 @@ impl RedisValue {
                 }
             }
             Self::SortedSet { members } => {
-                if members.is_empty()
-                    || members
-                        .iter()
-                        .any(|entry| entry.member.trim().is_empty() || !entry.score.is_finite())
-                {
+                if members.is_empty() || members.iter().any(|entry| !entry.score.is_finite()) {
                     Err(AppError::CommandFailed)
                 } else {
                     Ok(())
@@ -362,13 +358,13 @@ impl RedisValue {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct HashEntry {
-    pub field: String,
-    pub value: String,
+    pub field: RedisBytes,
+    pub value: RedisBytes,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SortedSetEntry {
-    pub member: String,
+    pub member: RedisBytes,
     pub score: f64,
 }
 
@@ -386,7 +382,7 @@ pub struct StreamField {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct KeyInfo {
-    pub key: String,
+    pub key: RedisBytes,
     pub key_type: String,
     pub ttl_ms: i64,
     pub size: Option<u64>,
@@ -397,14 +393,14 @@ pub struct KeyInfo {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct KeyValue {
-    pub key: String,
+    pub key: RedisBytes,
     pub key_type: String,
     pub ttl_ms: i64,
     pub value: RedisValue,
 }
 
-fn validate_connection_and_key(connection_id: &str, key: &str) -> Result<(), AppError> {
-    if connection_id.trim().is_empty() || key.trim().is_empty() {
+fn validate_connection_and_key(connection_id: &str, key: &RedisBytes) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() || key.len() > 65536 {
         Err(AppError::InvalidConnection)
     } else {
         Ok(())

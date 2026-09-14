@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeBinary as invoke } from "../../lib/binaryIpc";
+import type { RedisBytes } from "../../lib/redisBytes";
 
 export type CollectionKind = "hash" | "list" | "set" | "zset";
 export type CollectionOrder = "scan" | "score_asc" | "score_desc";
@@ -9,11 +10,11 @@ export interface CollectionPageInput {
   kind: CollectionKind;
   cursor: string;
   count: number;
-  pattern: string;
+  pattern: RedisBytes;
   order?: CollectionOrder;
 }
 
-export interface CollectionEntry { id: string; value: string; score: number | null; ttl_ms: number | null }
+export interface CollectionEntry { id: RedisBytes; value: RedisBytes; score: number | null; ttl_ms: number | null }
 export interface CollectionPage {
   entries: CollectionEntry[];
   next_cursor: string;
@@ -24,15 +25,15 @@ export interface CollectionPage {
 }
 
 export type CollectionMutation =
-  | { operation: "hash_set"; field: string; value: string }
-  | { operation: "hash_delete"; field: string }
-  | { operation: "hash_expire"; field: string; ttl_ms: string }
-  | { operation: "hash_persist"; field: string }
-  | { operation: "set_add" | "set_remove"; member: string }
-  | { operation: "zset_add"; member: string; score: number }
-  | { operation: "zset_remove"; member: string }
-  | { operation: "list_set"; index: string; value: string }
-  | { operation: "list_append"; value: string; prepend: boolean }
+  | { operation: "hash_set"; field: RedisBytes; value: RedisBytes }
+  | { operation: "hash_delete"; field: RedisBytes }
+  | { operation: "hash_expire"; field: RedisBytes; ttl_ms: string }
+  | { operation: "hash_persist"; field: RedisBytes }
+  | { operation: "set_add" | "set_remove"; member: RedisBytes }
+  | { operation: "zset_add"; member: RedisBytes; score: number }
+  | { operation: "zset_remove"; member: RedisBytes }
+  | { operation: "list_set"; index: string; value: RedisBytes }
+  | { operation: "list_append"; value: RedisBytes; prepend: boolean }
   | { operation: "list_trim"; count: string; from_head: boolean };
 
 export interface CollectionMutationInput {

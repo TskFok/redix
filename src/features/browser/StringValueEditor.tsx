@@ -58,6 +58,11 @@ function StringValueEditorScope({ connectionId, keyName, disabled = false, onBus
     let actualFormat = nextFormat;
     try {
       result = await decodeStringValue({ base64: value.base64, format: nextFormat, compression: nextCompression });
+      // Textareas normalize CR to LF. Keep byte-editable text out of the DOM
+      // when that normalization could silently change the stored Redis value.
+      if ((nextFormat === "utf8" || nextFormat === "ascii") && result.text.includes("\r")) {
+        throw new Error("文本包含回车字节，请使用 Hex 或 Base64 编辑以保留原始字节。");
+      }
     } catch (reason) {
       if (!fallback || nextFormat !== "utf8" || nextCompression !== "none") throw reason;
       actualFormat = "hex";

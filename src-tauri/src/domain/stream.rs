@@ -1,11 +1,12 @@
+use crate::domain::RedisBytes;
 use crate::error::AppError;
 
 const MAX_STREAM_NAME_LENGTH: usize = 256;
 const MAX_PENDING_COUNT: u32 = 500;
 const MAX_ACK_ENTRIES: usize = 500;
 
-fn validate_connection_and_key(connection_id: &str, key: &str) -> Result<(), AppError> {
-    if connection_id.trim().is_empty() || key.trim().is_empty() {
+fn validate_connection_and_key(connection_id: &str, key: &RedisBytes) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() || key.len() > 65536 {
         return Err(AppError::InvalidConnection);
     }
     Ok(())
@@ -21,7 +22,7 @@ fn validate_stream_name(value: &str) -> Result<(), AppError> {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct GetStreamConsumerGroupsInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
 }
 
 impl GetStreamConsumerGroupsInput {
@@ -41,7 +42,7 @@ pub struct StreamConsumerGroup {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct CreateStreamConsumerGroupInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub name: String,
     pub last_delivered_id: String,
 }
@@ -62,7 +63,7 @@ impl CreateStreamConsumerGroupInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DeleteStreamConsumerGroupInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub name: String,
 }
 
@@ -76,7 +77,7 @@ impl DeleteStreamConsumerGroupInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct GetStreamConsumersInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub group: String,
 }
 
@@ -97,7 +98,7 @@ pub struct StreamConsumer {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct GetStreamPendingEntriesInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub group: String,
     pub count: u32,
     pub consumer: Option<String>,
@@ -132,7 +133,7 @@ pub struct StreamPendingEntry {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct AcknowledgeStreamPendingEntriesInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub group: String,
     pub entries: Vec<String>,
 }
@@ -156,7 +157,7 @@ impl AcknowledgeStreamPendingEntriesInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DeleteStreamConsumerInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub group: String,
     pub consumer: String,
 }
@@ -172,7 +173,7 @@ impl DeleteStreamConsumerInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ClaimStreamPendingEntriesInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub group: String,
     pub consumer: String,
     pub min_idle_ms: u64,

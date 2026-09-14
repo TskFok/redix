@@ -1,3 +1,5 @@
+import type { RedisBytes } from "./redisBytes";
+
 export type Workspace =
   | "browser"
   | "search-query"
@@ -631,7 +633,7 @@ export interface ExportKeysInput {
 }
 
 export interface ExportedKey {
-  key: string;
+  key: RedisBytes;
   ttl_ms: number;
   value: RedisValue;
 }
@@ -965,11 +967,11 @@ export interface VectorSimilarityQueryInput extends VectorSetKeyInput {
 }
 
 export type RedisValue =
-  | { String: { value: string } }
-  | { Hash: { fields: Array<{ field: string; value: string }> } }
-  | { List: { items: string[] } }
-  | { Set: { members: string[] } }
-  | { SortedSet: { members: Array<{ member: string; score: number }> } }
+  | { String: { value: RedisBytes } }
+  | { Hash: { fields: Array<{ field: RedisBytes; value: RedisBytes }> } }
+  | { List: { items: RedisBytes[] } }
+  | { Set: { members: RedisBytes[] } }
+  | { SortedSet: { members: Array<{ member: RedisBytes; score: number }> } }
   | { Json: { value: JsonValue } }
   | { Stream: { entries: StreamEntry[] } }
   | { Array: { length: string; count: string } }

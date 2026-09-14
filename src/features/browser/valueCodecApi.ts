@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { invokeBinary } from "../../lib/binaryIpc";
 import { isStructuredFormat, type ValueFormat } from "./codecFormats";
 export type { BasicValueFormat, ValueFormat } from "./codecFormats";
 export type ValueCompression = "none" | "gzip" | "zlib" | "deflate";
@@ -6,8 +7,8 @@ export interface StringValue { base64: string; total_bytes: number; ttl_ms: numb
 export interface StringValueTarget { connection_id: string; key: string }
 export interface DecodedStringValue { text: string; byte_length: number }
 export interface StringValueSaved { byte_length: number; ttl_ms: number }
-export const getStringValue = (input: StringValueTarget) => invoke<StringValue>("get_string_value", { input });
-export const setStringValue = (input: StringValueTarget & { base64: string }) => invoke<StringValueSaved>("set_string_value", { input });
+export const getStringValue = (input: StringValueTarget) => invokeBinary<StringValue>("get_string_value", { input });
+export const setStringValue = (input: StringValueTarget & { base64: string }) => invokeBinary<StringValueSaved>("set_string_value", { input });
 let activeDecoders = 0;
 const MAX_DECODERS = 2;
 const MAX_BYTES = 4 * 1024 * 1024;

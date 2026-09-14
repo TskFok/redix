@@ -1,4 +1,8 @@
-use crate::{domain::collection::*, error::AppError, redis::RedisService};
+use crate::{
+    domain::{collection::*, RedisBytes},
+    error::AppError,
+    redis::RedisService,
+};
 use ::redis::Value;
 
 impl RedisService {
@@ -121,7 +125,7 @@ impl RedisService {
     pub async fn mutate_collection(&self, input: CollectionMutationInput) -> Result<(), AppError> {
         let (script, arguments) = mutation_script(&input)?;
         let mut connection = self
-            .collection_write_connection(&input.connection_id, &input.key)
+            .collection_write_connection(&input.connection_id, input.key.as_bytes())
             .await?;
         // One atomic script first checks existence and type. Native HSET/SADD/ZADD/
         // PUSH commands would otherwise recreate a key that expired between page read and write.
@@ -146,7 +150,7 @@ impl RedisService {
 
 fn mutation_script(
     input: &CollectionMutationInput,
-) -> Result<(&'static str, Vec<String>), AppError> {
+) -> Result<(&'static str, Vec<RedisBytes>), AppError> {
     input.validate()?;
     const PREFIX: &str = "local t=redis.call('TYPE',KEYS[1]); if type(t)=='table' then t=t['ok'] end; if t=='none' then return 0 end; if t~=ARGV[1] then return 1 end; ";
     macro_rules! checked_script {
@@ -158,7 +162,7 @@ fn mutation_script(
             )
         };
     }
-    let (expected, script, values): (&str, &'static str, Vec<String>) = match &input.mutation {
+    let (expected, script, values): (&str, &'static str, Vec<RedisBytes>) = match &input.mutation {
         CollectionMutation::HashSet { field, value } => (
             "hash",
             // HSET clears a field's expiration. Read and restore it atomically on
@@ -190,7 +194,7 @@ fn mutation_script(
         CollectionMutation::HashExpire { field, ttl_ms } => (
             "hash",
             checked_script!("if redis.call('HEXISTS',KEYS[1],ARGV[2])==0 then return 4 end; local result=redis.call('HPEXPIRE',KEYS[1],ARGV[3],'FIELDS',1,ARGV[2]); if result[1]==-2 then return 4 end; if result[1]~=1 then return 5 end"),
-            vec![field.clone(), decimal_u64(ttl_ms)?.to_string()],
+            vec![field.clone(), decimal_u64(ttl_ms)?.to_string().into()],
         ),
         CollectionMutation::HashPersist { field } => (
             "hash",
@@ -210,7 +214,7 @@ fn mutation_script(
         CollectionMutation::ZsetAdd { member, score } => (
             "zset",
             checked_script!("redis.call('ZADD',KEYS[1],ARGV[2],ARGV[3])"),
-            vec![score.to_string(), member.clone()],
+            vec![score.to_string().into(), member.clone()],
         ),
         CollectionMutation::ZsetRemove { member } => (
             "zset",
@@ -220,7 +224,7 @@ fn mutation_script(
         CollectionMutation::ListSet { index, value } => (
             "list",
             checked_script!("redis.call('LSET',KEYS[1],ARGV[2],ARGV[3])"),
-            vec![index.clone(), value.clone()],
+            vec![index.clone().into(), value.clone()],
         ),
         CollectionMutation::ListAppend { value, prepend } => (
             "list",
@@ -242,11 +246,11 @@ fn mutation_script(
                 decimal_u64(count)?.to_string()
             } else {
                 format!("-{}", decimal_u64(count)? + 1)
-            }],
+            }.into()],
         ),
     };
     debug_assert!(script.starts_with(PREFIX));
-    let mut arguments = vec![expected.to_string()];
+    let mut arguments = vec![RedisBytes::from(expected)];
     arguments.extend(values);
     Ok((script, arguments))
 }
@@ -299,11 +303,11 @@ fn parse_page(
     let mut entries = Vec::new();
     let mut values = values.into_iter();
     while let Some(raw) = values.next() {
-        let id = text(raw)?;
+        let id = payload(raw)?;
         let (id, value, score) = match input.kind {
             CollectionKind::Hash => (
                 id,
-                text(values.next().ok_or(AppError::CommandFailed)?)?,
+                payload(values.next().ok_or(AppError::CommandFailed)?)?,
                 None,
             ),
             CollectionKind::Zset => {
@@ -316,7 +320,9 @@ fn parse_page(
                 (id.clone(), id, Some(score))
             }
             CollectionKind::List => (
-                (decimal_u64(&input.cursor)? + entries.len() as u64).to_string(),
+                (decimal_u64(&input.cursor)? + entries.len() as u64)
+                    .to_string()
+                    .into(),
                 id,
                 None,
             ),
@@ -382,12 +388,12 @@ fn parse_list_entry(
     .filter(|absolute| *absolute >= 0 && *absolute < total)
     .ok_or(AppError::CommandFailed)?;
     ensure_response_size(&value, 0, &mut 0, &mut 0)?;
-    let value = text(value)?;
+    let value = payload(value)?;
     if value.len() > MAX_COLLECTION_VALUE_BYTES {
         return Err(AppError::CommandFailed);
     }
     let entry = CollectionEntry {
-        id: absolute.to_string(),
+        id: absolute.to_string().into(),
         value,
         score: None,
         ttl_ms: None,
@@ -422,6 +428,14 @@ fn collection_command_error(error: ::redis::RedisError) -> AppError {
 fn array(value: Value) -> Result<Vec<Value>, AppError> {
     match value {
         Value::Array(values) => Ok(values),
+        _ => Err(AppError::CommandFailed),
+    }
+}
+
+fn payload(value: Value) -> Result<RedisBytes, AppError> {
+    match value {
+        Value::BulkString(bytes) => Ok(bytes.into()),
+        Value::SimpleString(value) => Ok(value.into()),
         _ => Err(AppError::CommandFailed),
     }
 }
@@ -474,6 +488,106 @@ mod tests {
     use super::*;
 
     #[test]
+    fn collection_binary_pages_preserve_raw_identifiers_values_and_list_lookup() {
+        for kind in [
+            CollectionKind::Hash,
+            CollectionKind::Set,
+            CollectionKind::Zset,
+            CollectionKind::List,
+        ] {
+            let mut values = vec![Value::BulkString(vec![0xff, 0])];
+            if kind == CollectionKind::Hash {
+                values.push(Value::BulkString(vec![0xfe, 0]));
+            } else if kind == CollectionKind::Zset {
+                values.push(text("1.5"));
+            }
+            let value = if kind == CollectionKind::List {
+                Value::Array(values)
+            } else {
+                Value::Array(vec![text("12"), Value::Array(values)])
+            };
+            let page = parse_page(value, &input(kind), 20, -1);
+            assert!(page.is_ok(), "binary {kind:?} reply must be accepted");
+            let page = serde_json::to_value(page.unwrap()).unwrap();
+            assert_eq!(
+                page["entries"][0]["id"],
+                if kind == CollectionKind::List {
+                    serde_json::json!("0")
+                } else {
+                    serde_json::json!({"base64": "/wA="})
+                }
+            );
+            assert_eq!(
+                page["entries"][0]["value"],
+                serde_json::json!({"base64": if kind == CollectionKind::Hash { "/gA=" } else { "/wA=" }})
+            );
+        }
+        let entry = parse_list_entry(Value::BulkString(vec![0xff, 0]), -1, 2);
+        assert!(entry.is_ok(), "binary LINDEX reply must be accepted");
+        assert_eq!(
+            serde_json::to_value(entry.unwrap()).unwrap()["value"],
+            serde_json::json!({"base64": "/wA="})
+        );
+    }
+
+    #[test]
+    fn collection_binary_cursor_and_score_are_rejected_as_invalid_metadata() {
+        for (kind, value) in [
+            (
+                CollectionKind::Set,
+                Value::Array(vec![Value::BulkString(vec![0xff]), Value::Array(vec![])]),
+            ),
+            (
+                CollectionKind::Zset,
+                Value::Array(vec![
+                    text("0"),
+                    Value::Array(vec![text("member"), Value::BulkString(vec![0xff])]),
+                ]),
+            ),
+        ] {
+            assert_eq!(
+                parse_page(value, &input(kind), 1, -1),
+                Err(AppError::CommandFailed)
+            );
+        }
+    }
+
+    #[test]
+    fn collection_binary_page_budget_includes_base64_and_repeated_member_ids() {
+        let page = |size| {
+            parse_page(
+                Value::Array(vec![
+                    text("12"),
+                    Value::Array(vec![Value::BulkString(vec![0xff; size])]),
+                ]),
+                &input(CollectionKind::Set),
+                2,
+                -1,
+            )
+        };
+        assert!(page(MAX_COLLECTION_VALUE_BYTES).is_ok());
+        // The raw member fits the 4 MiB response limit, while its base64 IPC
+        // representation repeated in id/value exceeds that same limit.
+        assert_eq!(
+            page(MAX_COLLECTION_VALUE_BYTES * 2),
+            Err(AppError::CommandFailed)
+        );
+    }
+
+    #[test]
+    fn collection_binary_mutations_send_original_bytes_to_lua() {
+        let request = serde_json::from_value::<CollectionMutationInput>(serde_json::json!({
+            "connection_id": "local", "key": {"base64": "/wA="}, "mutation": {
+                "operation": "hash_set", "field": {"base64": "/gA="}, "value": {"base64": "/QA="}
+            }
+        }));
+        assert!(request.is_ok(), "binary mutation must deserialize");
+        let (_, args) = mutation_script(&request.unwrap()).unwrap();
+        assert_eq!(args[1].as_bytes(), &[0xfe, 0]);
+        assert_eq!(args[2].as_bytes(), &[0xfd, 0]);
+    }
+
+    #[test]
     fn collection_numeric_mutation_arguments_use_redis_integer_format_without_lua_rounding() {
         for (mutation, argument_index, expected) in [
             (
@@ -507,7 +621,7 @@ mod tests {
                 mutation,
             })
             .unwrap();
-            assert_eq!(arguments[argument_index], expected);
+            assert_eq!(arguments[argument_index].as_bytes(), expected.as_bytes());
         }
     }
 
@@ -523,15 +637,11 @@ mod tests {
             (-1, i64::MAX as u64, "9223372036854775806"),
         ] {
             let entry = parse_list_entry(text("v"), index, total).unwrap().unwrap();
-            assert_eq!(entry.id, expected);
+            assert_eq!(entry.id.as_bytes(), expected.as_bytes());
         }
         assert_eq!(parse_list_entry(Value::Nil, i64::MIN, 1), Ok(None));
         assert_eq!(
             parse_list_entry(text("impossible"), -2, 1),
-            Err(AppError::CommandFailed)
-        );
-        assert_eq!(
-            parse_list_entry(Value::BulkString(vec![0xff]), 0, 1),
             Err(AppError::CommandFailed)
         );
         assert_eq!(
@@ -585,7 +695,7 @@ mod tests {
         let mut page = CollectionPage {
             entries: vec![CollectionEntry {
                 id: "f".into(),
-                value: String::new(),
+                value: "".into(),
                 score: None,
                 ttl_ms: None,
             }],
@@ -596,7 +706,7 @@ mod tests {
             hash_field_ttl_supported: None,
         };
         let overhead = serde_json::to_vec(&page).unwrap().len();
-        page.entries[0].value = "v".repeat(MAX_COLLECTION_RESPONSE_BYTES - overhead);
+        page.entries[0].value = "v".repeat(MAX_COLLECTION_RESPONSE_BYTES - overhead).into();
         assert!(ensure_serialized_size(&page).is_ok());
         assert_eq!(
             apply_hash_ttls(&mut page, vec![9_007_199_254_740_991]),
@@ -618,9 +728,9 @@ mod tests {
             -1,
         )
         .unwrap();
-        assert_eq!(page.entries[0].id, "high");
+        assert_eq!(page.entries[0].id.as_bytes(), b"high");
         assert_eq!(page.entries[0].score, Some(12.5));
-        assert_eq!(page.entries[1].id, "low");
+        assert_eq!(page.entries[1].id.as_bytes(), b"low");
         assert_eq!(page.next_cursor, "4");
         assert!(page.has_more);
     }
@@ -653,16 +763,15 @@ mod tests {
         ]);
         let page = parse_page(value, &input(CollectionKind::Hash), 30, 5000).unwrap();
         assert_eq!(page.entries.len(), 3);
-        assert_eq!(page.entries[2].id, "c");
+        assert_eq!(page.entries[2].id.as_bytes(), b"c");
         assert_eq!(page.next_cursor, "18446744073709551615");
         assert!(page.has_more);
     }
     #[test]
-    fn collection_oversized_or_binary_scan_fails_without_returning_a_partial_cursor() {
+    fn collection_oversized_scan_fails_without_returning_a_partial_cursor() {
         for values in [
             vec![text("x"); 2001],
             vec![Value::BulkString(vec![b'a'; 4 * 1024 * 1024 + 1])],
-            vec![Value::BulkString(vec![0xff])],
         ] {
             assert_eq!(
                 parse_page(
@@ -686,8 +795,8 @@ mod tests {
             60000,
         )
         .unwrap();
-        assert_eq!(page.entries[0].id, "500");
-        assert_eq!(page.entries[1].id, "501");
+        assert_eq!(page.entries[0].id.as_bytes(), b"500");
+        assert_eq!(page.entries[1].id.as_bytes(), b"501");
         assert!(!page.has_more);
         assert_eq!(page.next_cursor, "0");
     }

@@ -184,7 +184,7 @@ async fn deletes_distinct_keys_and_stops_when_original_connection_closes() {
             &manager,
             StartBulkDeleteInput {
                 connection_id: "isolated".into(),
-                keys: keys.clone(),
+                keys: keys.iter().map(Into::into).collect(),
             },
         )
         .await

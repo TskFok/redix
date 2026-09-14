@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use ::redis::{Cmd, Value};
 use std::collections::HashSet;
 
@@ -261,7 +262,7 @@ pub(crate) fn parse_search_query(
         return Err(AppError::CommandFailed);
     }
     let mut seen = HashSet::new();
-    if keys.iter().any(|key| !seen.insert(key.key.as_str())) {
+    if keys.iter().any(|key| !seen.insert(key.key.as_bytes())) {
         return Err(AppError::CommandFailed);
     }
     let next_offset =
@@ -288,7 +289,7 @@ fn parse_search_resp2(
     }
     let mut keys = Vec::with_capacity(values.len() / width);
     while let Some(value) = values.next() {
-        let key = strict_string(value, MAX_SEARCH_KEY_BYTES)?;
+        let key = redis_key(value)?;
         let fields = if content {
             parse_document_fields(values.next().ok_or(AppError::CommandFailed)?)?
         } else {
@@ -334,7 +335,7 @@ fn parse_search_resp3(
         let mut attributes = None;
         for (name, value) in pairs {
             match strict_string(name, MAX_SEARCH_NAME_BYTES)?.as_str() {
-                "id" if key.is_none() => key = Some(strict_string(value, MAX_SEARCH_KEY_BYTES)?),
+                "id" if key.is_none() => key = Some(redis_key(value)?),
                 "extra_attributes" if attributes.is_none() => attributes = Some(value),
                 "id" | "extra_attributes" => return Err(AppError::CommandFailed),
                 _ => {}
@@ -359,6 +360,18 @@ fn search_total(value: Value) -> Result<u64, AppError> {
         Value::Int(total) => u64::try_from(total).map_err(|_| AppError::CommandFailed),
         _ => Err(AppError::CommandFailed),
     }
+}
+
+fn redis_key(value: Value) -> Result<RedisBytes, AppError> {
+    let bytes = match unwrap_attribute(value) {
+        Value::BulkString(bytes) => bytes,
+        Value::SimpleString(text) | Value::VerbatimString { text, .. } => text.into_bytes(),
+        _ => return Err(AppError::CommandFailed),
+    };
+    if bytes.len() > MAX_SEARCH_KEY_BYTES {
+        return Err(AppError::CommandFailed);
+    }
+    Ok(bytes.into())
 }
 
 fn strict_string(value: Value, max_bytes: usize) -> Result<String, AppError> {
@@ -995,7 +1008,7 @@ mod tests {
             result
                 .keys
                 .iter()
-                .map(|item| item.key.as_str())
+                .map(|item| item.key.utf8().unwrap())
                 .collect::<Vec<_>>(),
             ["doc:1", "doc:2"]
         );

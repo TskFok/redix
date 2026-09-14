@@ -1,3 +1,4 @@
+import { displayKey } from "../../lib/redisBytes";
 import { useMemo, useState } from "react";
 import type { JsonValue, SearchKeyResult } from "../../lib/types";
 
@@ -34,7 +35,7 @@ export function SearchDocumentTable({ documents }: { documents: SearchKeyResult[
         const fields = new Map(document.fields?.map((field) => [field.name, field.value]));
         const extras = document.fields?.filter((field) => !columns.includes(field.name)) ?? [];
         return <tr key={document.key}>
-          <th scope="row"><code>{document.key}</code></th><td>{document.key_type}</td>
+          <th scope="row"><code>{displayKey(document.key)}</code></th><td>{document.key_type}</td>
           {columns.map((name) => <td key={name}>{fields.has(name)
             ? <DocumentValue key={`${document.key}:${name}`} value={fields.get(name)!} />
             : <span aria-label="字段不存在">—</span>}</td>)}

@@ -57,7 +57,7 @@ npm run clean # 清理构建产物与 Vite 缓存，保留已安装依赖
 
 `check:non-cloud` 只扫描产品源码目录和 `package.json`，不扫描 README、设计文档或范围说明。它用于阻止非本地产品入口意外进入代码和菜单文案。
 
-Browser 由后端使用 Redis `SCAN` 遍历当前数据库，跨批次去重后一次性返回所有匹配键，列表在扫描全部成功后显示，无需点击“加载更多”。默认扫描只返回 key，不执行逐键 `TYPE` 或其他元数据查询。选择类型时使用原生 `SCAN TYPE`（Redis 6.0+）重新遍历，返回的类型由筛选条件确定；清空类型重新扫描全部类型，键名过滤和刷新保留当前类型条件。JSON 筛选使用 RedisJSON 原生类型名 `ReJSON-RL`，Vector Set 使用 `vectorset`。类型、TTL、长度、内存等信息和内容在详情中按需读取。平铺和树形均使用虚拟滚动，只挂载可视区域附近的行。每次扫描数量只控制底层 SCAN 的 COUNT 提示，不限制最终键数量。全量结果保存在内存中，等待时间和内存占用随键数量增加；`SCAN TYPE` 仍然遍历键空间，不是类型索引查询。扫描结果不是某一时刻的严格快照，期间新增、删除、过期或类型变化的键可能与打开详情时不同。Cluster 会遍历所有 primary；节点失败或扫描中断时报错，不将部分结果显示为完整列表。当前键 DTO 只支持 UTF-8 键名，包含二进制键名的扫描可能失败。Workbench 只在当前本地连接上执行用户输入的 Redis 命令。
+Browser 由后端使用 Redis `SCAN` 遍历当前数据库，跨批次去重后一次性返回所有匹配键，列表在扫描全部成功后显示，无需点击“加载更多”。默认扫描只返回 key，不执行逐键 `TYPE` 或其他元数据查询。选择类型时使用原生 `SCAN TYPE`（Redis 6.0+）重新遍历，返回的类型由筛选条件确定；清空类型重新扫描全部类型，键名过滤和刷新保留当前类型条件。JSON 筛选使用 RedisJSON 原生类型名 `ReJSON-RL`，Vector Set 使用 `vectorset`。类型、TTL、长度、内存等信息和内容在详情中按需读取。平铺和树形均使用虚拟滚动，只挂载可视区域附近的行。每次扫描数量只控制底层 SCAN 的 COUNT 提示，不限制最终键数量。全量结果保存在内存中，等待时间和内存占用随键数量增加；`SCAN TYPE` 仍然遍历键空间，不是类型索引查询。扫描结果不是某一时刻的严格快照，期间新增、删除、过期或类型变化的键可能与打开详情时不同。Cluster 会遍历所有 primary；节点失败或扫描中断时报错，不将部分结果显示为完整列表。键名按原始字节传递，Standalone/Cluster 扫描支持非 UTF-8、NUL、空键及空格键名；二进制键在列表中以 Hex 显示并标记，选择和写操作使用原始字节身份。Workbench 只在当前本地连接上执行用户输入的 Redis 命令。
 
 Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新以及校验后的本地 JSON 导入导出；基础数据类型支持 String、Hash、List、Set、Sorted Set、Stream。Hash、List、Set、Sorted Set 使用有界分页和字段/成员/索引级增量写入，不用当前页重建整个键；Stream 使用有界 ID 范围分页，并支持显式添加和删除消息。Stream 详情还支持 Consumer Group 的创建/删除、消费者与 Pending 列表、Pending 确认、消费者删除和显式 XCLAIM 转移。转移需要选择消息并指定目标消费者、最小空闲时间，只操作满足条件的 Pending 消息，基础转移不启用 FORCE；高级面板支持 IDLE/TIME/RETRYCOUNT/FORCE，FORCE 必须显式选择并说明会新增 Pending 记录，不自动消费。RedisJSON 同时支持根文档编辑，以及路径级读取、保存、删除和数组追加。连接级模块能力通过 `MODULE LIST` 探测并按 session 缓存；探测失败或未检测到 RedisJSON/RedisSearch 时，不会阻断普通 Browser 流程，对应的路径编辑器或 Search / Query 工作区会稳定降级为不可用提示。RedisSearch / Query 工作区在 Search 2.0+ 可用时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引和有限的 `FT.SEARCH ... LIMIT` 查询（默认 NOCONTENT，可开启文档字段结果表），以及 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 查询；查询文本不持久化；Browser 的 Hash/JSON 键详情会显示匹配的索引摘要。
 
@@ -108,3 +108,9 @@ Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics、远
 - JSON 路径草稿在等价数据、TTL和模块信息刷新时保留；切键、切连接或服务端数据真正变化时正确重置。PHP/Protobuf保留字符串BOM，PHP对象、引用和二进制键按标记数据展示，不创建类实例。
 
 本轮对比、验证和剩余功能见 [交付记录](docs/local-parity-2026-09-07.md)。
+
+## 二进制键与集合（2026-09-14）
+
+Browser 的键名、String 值、Hash 字段名和值、List 值、Set/Sorted Set 成员现在支持任意字节。新建、重命名和集合编辑提供 UTF-8、Hex、Base64 编码选项；格式切换转换现有字节，非法编码会在发送前报错。非 UTF-8、包含控制字节或只有空白的数据默认以 Hex 展示。为防止文本控件改写换行字节，单行输入中的 CR/LF 以及多行输入中的 CR 保持 Hex/Base64 编辑；普通 LF 多行文本仍可使用 UTF-8。空键、空字段、空成员及纯空格数据均可无损表示。Hash 字段 TTL、List 索引查询、集合分页和原位更新保留原有语义与限额。
+
+导入导出的 JSON 兼容现有文本格式：有效 UTF-8 仍为字符串，其余字节表示为 `{"base64":"/wA="}`（示例字节 `ff 00`）。键名及上述值位置都接受这一形式，Base64 使用标准字母表和完整填充；导入按原始字节识别重复键。新建集合时，Hex/Base64 模式使用 JSON 数组，例如 Hash 的 `[{"field":"/w==","value":"AA=="}]`，Set/List 的 `["/w==",""]`，Sorted Set 的 `[{"member":"/w==","score":1}]`。

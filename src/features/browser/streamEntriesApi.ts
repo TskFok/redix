@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeBinary as invoke } from "../../lib/binaryIpc";
 export interface StreamEntryField { field: string; value: string }
 export interface StreamEntryRecord { id: string; fields: StreamEntryField[] }
 export interface StreamEntriesPage { entries: StreamEntryRecord[]; next_cursor: string | null; has_more: boolean }

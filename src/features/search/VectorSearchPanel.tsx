@@ -1,3 +1,4 @@
+import { displayKey } from "../../lib/redisBytes";
 import Select from "../../components/Select";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
@@ -73,6 +74,6 @@ function VectorSearchForm({ connectionId, index, attributes, enabled }: Props) {
     <code className="search-vector-preview">({filter})=&gt;[KNN {count} @{fieldName || "字段"} $向量 AS 距离]</code>
     <div><button type="button" className="button button-primary" disabled={!canRun} onClick={() => void execute()}>{busy ? "KNN 查询中…" : "执行 KNN 查询"}</button></div>
     {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
-    {result ? <div aria-live="polite"><p>返回 {result.returned} / Top {result.count} · {result.distance_metric} 距离（越小越近）。HNSW 为近似近邻；超时或文档变化可能减少结果。</p>{result.matches.length ? <table className="data-table"><thead><tr><th>键</th><th>距离</th></tr></thead><tbody>{result.matches.map((match) => <tr key={match.key}><td>{match.key}</td><td>{match.distance}</td></tr>)}</tbody></table> : <p>没有匹配的向量文档。</p>}</div> : null}
+    {result ? <div aria-live="polite"><p>返回 {result.returned} / Top {result.count} · {result.distance_metric} 距离（越小越近）。HNSW 为近似近邻；超时或文档变化可能减少结果。</p>{result.matches.length ? <table className="data-table"><thead><tr><th>键</th><th>距离</th></tr></thead><tbody>{result.matches.map((match) => <tr key={match.key}><td>{displayKey(match.key)}</td><td>{match.distance}</td></tr>)}</tbody></table> : <p>没有匹配的向量文档。</p>}</div> : null}
   </section>;
 }

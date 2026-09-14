@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use crate::error::AppError;
 
 const MAX_JSON_PATH_BYTES: usize = 512;
@@ -7,7 +8,7 @@ const MAX_JSON_ARRAY_APPEND_VALUES: usize = 500;
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct GetJsonPathInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub path: String,
 }
 
@@ -21,7 +22,7 @@ impl GetJsonPathInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SetJsonPathInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub path: String,
     pub value: serde_json::Value,
 }
@@ -37,7 +38,7 @@ impl SetJsonPathInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AppendJsonArrayInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub path: String,
     pub values: Vec<serde_json::Value>,
 }
@@ -53,7 +54,7 @@ impl AppendJsonArrayInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DeleteJsonPathInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub path: String,
 }
 
@@ -66,7 +67,7 @@ impl DeleteJsonPathInput {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct JsonPathValue {
-    pub key: String,
+    pub key: RedisBytes,
     pub path: String,
     pub found: bool,
     pub value: Option<serde_json::Value>,
@@ -75,7 +76,7 @@ pub struct JsonPathValue {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct JsonMutationResult {
-    pub key: String,
+    pub key: RedisBytes,
     pub path: String,
     pub affected: u64,
     pub new_length: Option<u64>,
@@ -144,8 +145,8 @@ pub fn validate_json_array_append(values: &[serde_json::Value]) -> Result<(), Ap
     Ok(())
 }
 
-fn validate_connection_and_key(connection_id: &str, key: &str) -> Result<(), AppError> {
-    if connection_id.trim().is_empty() || key.trim().is_empty() {
+fn validate_connection_and_key(connection_id: &str, key: &RedisBytes) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() || key.len() > 65536 {
         return Err(AppError::InvalidInput);
     }
 

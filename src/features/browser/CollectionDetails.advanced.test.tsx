@@ -125,7 +125,9 @@ describe("集合高级操作", () => {
     invokeMock.mockResolvedValueOnce({ ...listPage, next_cursor: "100", has_more: true }).mockResolvedValueOnce({ ...listPage, entries: [{ id: "100", value: "middle", score: null }] });
     const changed = vi.fn();
     render(<CollectionDetails connectionId="local" keyName="l" kind="list" onChanged={changed} />);
-    fireEvent.click(await screen.findByRole("button", { name: "下一页" }));
+    const nextPage = screen.getByRole("button", { name: "下一页" });
+    await waitFor(() => expect(nextPage).toBeEnabled());
+    fireEvent.click(nextPage);
     await screen.findByText("middle");
     fireEvent.change(screen.getByLabelText("删除数量"), { target: { value: "150" } });
     fireEvent.click(screen.getByRole("button", { name: label }));

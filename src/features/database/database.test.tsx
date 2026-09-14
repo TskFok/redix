@@ -182,7 +182,7 @@ describe("DatabasePage", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "数据库概览" })).toBeInTheDocument();
-    expect(screen.getByText("7.2.5")).toBeInTheDocument();
+    expect(await screen.findByText("7.2.5")).toBeInTheDocument();
     expect(screen.getByText("数据库 0")).toBeInTheDocument();
     expect(screen.getByText("数据库 1")).toBeInTheDocument();
     const clientPanel = screen.getByRole("heading", { name: "客户端" }).closest("section");

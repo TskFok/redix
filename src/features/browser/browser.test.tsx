@@ -1698,15 +1698,16 @@ describe("Redis Browser", () => {
     expect(onCreated).toHaveBeenCalled();
   });
 
-  it("拒绝空键名和后端重复键错误", async () => {
+  it("允许空键名并展示后端重复键错误", async () => {
     scanAllKeysMock.mockResolvedValue([]);
     render(<BrowserPage connectionId="local" />);
     await screen.findByText("没有匹配的键。");
     fireEvent.click(screen.getByRole("button", { name: "新增键" }));
+    createKeyMock.mockResolvedValueOnce({ ...stringDetail, key: "" });
     fireEvent.click(screen.getByRole("button", { name: "创建键" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("键名不能为空");
-    expect(createKeyMock).not.toHaveBeenCalled();
-
+    await waitFor(() => expect(createKeyMock).toHaveBeenCalledWith(expect.objectContaining({ key: "" })));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新增键" })).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "新增键" }));
     fireEvent.change(screen.getByLabelText("键名"), { target: { value: "existing" } });
     createKeyMock.mockRejectedValueOnce({ code: "COMMAND_FAILED", message: "duplicate" });
     fireEvent.click(screen.getByRole("button", { name: "创建键" }));

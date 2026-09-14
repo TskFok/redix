@@ -1,3 +1,5 @@
+import Select from "../../components/Select";
+import { bytesFromInput, bytesToInput, bytesToSingleLineInput, displayKey, isBinary, keyFromBytes, keyToBytes, type ByteFormat } from "../../lib/redisBytes";
 import { useEffect, useRef, useState } from "react";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
@@ -90,7 +92,9 @@ export function KeyDetails({
   const [searchIndexes, setSearchIndexes] = useState<KeySearchIndexSummary[]>([]);
   const [searchIndexesLoading, setSearchIndexesLoading] = useState(false);
   const [searchIndexesError, setSearchIndexesError, searchIndexesErrorToken] = useFeedbackState<string | null>(null);
-  const [renameDraft, setRenameDraft] = useState(detail?.key ?? "");
+  const initialRenameFormat = (key: string): ByteFormat => isBinary(keyToBytes(key)) ? "hex" : "utf8";
+  const [renameFormat, setRenameFormat] = useState<ByteFormat>(() => initialRenameFormat(detail?.key ?? ""));
+  const [renameDraft, setRenameDraft] = useState(() => bytesToInput(keyToBytes(detail?.key ?? ""), initialRenameFormat(detail?.key ?? "")));
   const [keyTtlDraft, setKeyTtlDraft] = useState("");
   const [detailTab, setDetailTab] = useState({ scope: "", id: "value" });
   const [localInfo, setLocalInfo] = useState<KeyInfo | null>(null);
@@ -117,7 +121,9 @@ export function KeyDetails({
     setConsumerGroupsBusy(false);
     setError(null);
     setJsonPathError(null);
-    setRenameDraft(detail?.key ?? "");
+    const format = initialRenameFormat(detail?.key ?? "");
+    setRenameFormat(format);
+    setRenameDraft(bytesToInput(keyToBytes(detail?.key ?? ""), format));
     setLocalInfo(null);
     onMetadataChange?.(null);
   }, [connectionId, detail?.key, onBusyChange]);
@@ -265,7 +271,7 @@ export function KeyDetails({
       return;
     }
     const operation = beginOperation(detail.key);
-    if (!await confirm(`确定删除键“${operation.key}”吗？此操作无法撤销。`)) {
+    if (!await confirm(`确定删除键“${displayKey(operation.key)}”吗？此操作无法撤销。`)) {
       return;
     }
     if (
@@ -325,11 +331,9 @@ export function KeyDetails({
   };
 
   const handleRename = async () => {
-    const nextKey = renameDraft.trim();
-    if (nextKey === "") {
-      setError("新键名不能为空。");
-      return;
-    }
+    let nextKey: string;
+    try { nextKey = keyFromBytes(bytesFromInput(renameDraft, renameFormat)); }
+    catch (caught) { setError(caught instanceof Error ? caught.message : "键名编码无效。"); return; }
     if (nextKey === detail.key) {
       setError("新键名必须与当前键名不同。");
       return;
@@ -345,7 +349,7 @@ export function KeyDetails({
         new_key: nextKey,
       });
       if (isCurrent(operation)) {
-        setRenameDraft(renamed.key);
+        setRenameDraft(bytesToInput(keyToBytes(renamed.key), renameFormat));
         if (onRenamed) {
           onRenamed(operation.key, renamed);
         } else {
@@ -497,7 +501,7 @@ export function KeyDetails({
       <div className="detail-header">
         <p className="eyebrow">DETAILS</p>
         <h2 id="key-details-title" className="sr-only">键详情</h2>
-        <code className="detail-key-name" title={detail.key}>{detail.key}</code>
+        <code className="detail-key-name" title={displayKey(detail.key)}>{displayKey(detail.key)}</code>
         <span className="detail-type">{keyTypeLabel(detail.key_type)}</span>
         <span className="detail-ttl-summary" title="生存时间">
           TTL {detail.ttl_ms < 0 ? "永久" : `${detail.ttl_ms} ms`}
@@ -537,7 +541,7 @@ export function KeyDetails({
               {isStreamDetail && <StreamEntries key={JSON.stringify([connectionId, detail.key])} connectionId={connectionId} streamKey={detail.key} disabled={busy} onBusyChange={handleChildBusy} />}
               {isArrayDetail ? (
                 <ArrayDetails
-                  key={`${connectionId}:${detail.key}`}
+                  key={JSON.stringify([connectionId, detail.key])}
                   connectionId={connectionId}
                   keyName={detail.key}
                   initialSummary={arraySummary ? {
@@ -552,7 +556,7 @@ export function KeyDetails({
               ) : null}
               {isVectorSetDetail ? (
                 <VectorSetDetails
-                  key={`${connectionId}:${detail.key}`}
+                  key={JSON.stringify([connectionId, detail.key])}
                   connectionId={connectionId}
                   keyName={detail.key}
                   initialSummary={vectorSetSummary ? {
@@ -583,7 +587,7 @@ export function KeyDetails({
                   busy={uiBusy || loading}
                   error={jsonPathError}
                   errorResetKey={jsonPathErrorToken}
-                  rootDeleteMessage={`确定删除整个 JSON 键“${detail.key}”吗？`}
+                  rootDeleteMessage={`确定删除整个 JSON 键“${displayKey(detail.key)}”吗？`}
                   onRead={handleJsonPathRead}
                   onMutate={handleJsonPathMutate}
                 />
@@ -595,7 +599,7 @@ export function KeyDetails({
             label: "消费者组",
             content: (
               <StreamConsumerGroups
-                key={`${connectionId}:${detail.key}`}
+                key={JSON.stringify([connectionId, detail.key])}
                 connectionId={connectionId}
                 streamKey={detail.key}
                 onBusyChange={setConsumerGroupsBusy}
@@ -678,6 +682,17 @@ export function KeyDetails({
             label: "键操作",
             content: <>
               <div className="detail-rename-row">
+                <label className="field"><span>新键名编码</span>
+                  <Select aria-label="新键名编码" value={renameFormat} disabled={uiBusy} onChange={(event) => {
+                    const format = event.target.value as ByteFormat;
+                    try {
+                      setRenameDraft(bytesToSingleLineInput(bytesFromInput(renameDraft, renameFormat), format));
+                      setRenameFormat(format); setError(null);
+                    } catch (caught) { setError(caught instanceof Error ? caught.message : "键名编码无效。"); }
+                  }}>
+                    <option value="utf8">UTF-8</option><option value="hex">Hex</option><option value="base64">Base64</option>
+                  </Select>
+                </label>
                 <label className="field">
                   <span>重命名</span>
                   <input

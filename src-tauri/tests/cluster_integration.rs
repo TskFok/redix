@@ -8,7 +8,7 @@ use redix_lib::{
     domain::{
         AnalyzeDatabaseInput, CliCommandInput, CliSessionInput, ClusterConfig, ClusterNodeRole,
         ConnectionEndpoint, ConnectionProfile, ExecuteCommandsInput, GetSlowLogsInput,
-        PublishPubSubInput, ScanCursor, ScanKeysInput, UpdateSlowLogConfigInput,
+        PublishPubSubInput, RedisBytes, ScanCursor, ScanKeysInput, UpdateSlowLogConfigInput,
     },
     error::AppError,
     persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
@@ -199,7 +199,7 @@ async fn cluster_collection_operations_target_each_keys_primary() {
             service
                 .mutate_collection(CollectionMutationInput {
                     connection_id: "cluster".into(),
-                    key: key.clone(),
+                    key: key.clone().into(),
                     mutation,
                 })
                 .await
@@ -225,7 +225,7 @@ async fn cluster_collection_operations_target_each_keys_primary() {
         let item = service
             .get_list_entry(ListIndexInput {
                 connection_id: "cluster".into(),
-                key: list.clone(),
+                key: list.clone().into(),
                 index: "-1".into(),
             })
             .await
@@ -245,7 +245,7 @@ async fn cluster_collection_operations_target_each_keys_primary() {
             zset_page
                 .entries
                 .iter()
-                .map(|entry| entry.id.as_str())
+                .map(|entry| entry.id.utf8().unwrap())
                 .collect::<Vec<_>>(),
             ["high", "mid"]
         );
@@ -426,15 +426,15 @@ async fn cluster_routes_scans_all_primaries_and_reports_topology_and_analysis() 
             type_page
                 .keys
                 .iter()
-                .map(|key| &key.key)
+                .map(|key| key.key.clone())
                 .collect::<HashSet<_>>(),
-            keys.iter().collect::<HashSet<_>>()
+            keys.iter().map(RedisBytes::from).collect::<HashSet<_>>()
         );
         assert!(
             type_page
                 .keys
                 .iter()
-                .map(|key| redis_slot(&key.key))
+                .map(|key| redis_slot(key.key.utf8().unwrap()))
                 .collect::<HashSet<_>>()
                 .len()
                 > 1,
@@ -447,17 +447,28 @@ async fn cluster_routes_scans_all_primaries_and_reports_topology_and_analysis() 
             );
         }
 
-        let hashes = service.scan_all_keys(redix_lib::domain::ScanAllKeysInput {
-            connection_id: "cluster".into(),
-            pattern: format!("{prefix}:*"),
-            count: 1,
-            key_type: Some("hash".into()),
-        }).await.unwrap();
-        assert!(hashes.iter().all(|key| key.key_type.as_deref() == Some("hash")));
+        let hashes = service
+            .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
+                connection_id: "cluster".into(),
+                pattern: format!("{prefix}:*"),
+                count: 1,
+                key_type: Some("hash".into()),
+            })
+            .await
+            .unwrap();
+        assert!(hashes
+            .iter()
+            .all(|key| key.key_type.as_deref() == Some("hash")));
         assert_eq!(
-            hashes.into_iter().map(|key| key.key).collect::<HashSet<_>>(),
-            expected_types.iter().filter(|(_, kind)| **kind == "hash")
-                .map(|(key, _)| key.clone()).collect::<HashSet<_>>()
+            hashes
+                .into_iter()
+                .map(|key| key.key)
+                .collect::<HashSet<_>>(),
+            expected_types
+                .iter()
+                .filter(|(_, kind)| **kind == "hash")
+                .map(|(key, _)| RedisBytes::from(key))
+                .collect::<HashSet<_>>()
         );
 
         let mut cursor = ScanCursor::Standalone(0);
@@ -495,7 +506,7 @@ async fn cluster_routes_scans_all_primaries_and_reports_topology_and_analysis() 
             "Cluster SCAN did not terminate within 512 pages"
         );
         assert!(observed_opaque_has_more);
-        assert_eq!(found, keys.iter().cloned().collect());
+        assert_eq!(found, keys.iter().map(RedisBytes::from).collect());
 
         let all_keys = service
             .scan_all_keys(redix_lib::domain::ScanAllKeysInput {
@@ -512,7 +523,7 @@ async fn cluster_routes_scans_all_primaries_and_reports_topology_and_analysis() 
                 .into_iter()
                 .map(|key| key.key)
                 .collect::<HashSet<_>>(),
-            keys.iter().cloned().collect()
+            keys.iter().map(RedisBytes::from).collect()
         );
 
         let analysis = service
@@ -908,7 +919,7 @@ async fn cluster_bulk_delete_uses_direct_primary_connections_for_all_slots() {
             &manager,
             StartBulkDeleteInput {
                 connection_id: "cluster".into(),
-                keys: keys.clone(),
+                keys: keys.iter().map(Into::into).collect(),
             },
         )
         .await
@@ -939,6 +950,229 @@ async fn cluster_bulk_delete_uses_direct_primary_connections_for_all_slots() {
                 .await
                 .unwrap(),
             0
+        );
+    }
+    service.close_connection("cluster").await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "由 scripts/test-local-cluster.py 启动隔离三主节点集群"]
+async fn cluster_binary_keys_preserve_scan_routing_rename_collection_and_bulk_delete() {
+    use redix_lib::domain::collection::{
+        CollectionKind, CollectionMutation, CollectionMutationInput, CollectionOrder,
+        CollectionPageInput, ListIndexInput,
+    };
+    use redix_lib::domain::{
+        CreateKeyInput, HashEntry, RedisValue, RenameKeyInput, ScanAllKeysInput,
+    };
+    use redix_lib::redis::bulk_tasks::{BulkTaskManager, BulkTaskStatus, StartBulkDeleteInput};
+    let seeds =
+        std::env::var("REDIX_TEST_REDIS_CLUSTER_URLS").expect("isolated cluster launcher required");
+    let service = cluster_service(&seeds);
+    service.open_connection("cluster").await.unwrap();
+    let topology = service.get_cluster_topology("cluster").await.unwrap();
+    let primaries: Vec<_> = topology
+        .nodes
+        .iter()
+        .filter(|node| node.role == ClusterNodeRole::Primary)
+        .collect();
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let prefix = format!("redix:binary:{suffix}:");
+    let mut tags = HashMap::new();
+    for candidate in 0..100_000 {
+        let tag = format!("{{binary-{suffix}-{candidate}}}");
+        let slot = redis_slot(&tag);
+        let owner = primaries
+            .iter()
+            .find(|node| {
+                node.slots
+                    .iter()
+                    .any(|range| range.start <= slot && slot <= range.end)
+            })
+            .unwrap();
+        tags.entry(owner.id.clone()).or_insert(tag);
+        if tags.len() == primaries.len() {
+            break;
+        }
+    }
+    assert_eq!(tags.len(), 3);
+    let raw_member: RedisBytes = vec![0xff, 0, 0x80].into();
+    let updated: RedisBytes = vec![0xfe, 0, 0xfd].into();
+    let mut remaining = Vec::new();
+    for tag in tags.values() {
+        let key = |suffix: &[u8]| {
+            let mut bytes = format!("{prefix}{tag}:").into_bytes();
+            bytes.extend_from_slice(suffix);
+            RedisBytes::from(bytes)
+        };
+        let string = key(&[0xff, 0, b's']);
+        let hash = key(&[0xff, 0, b'h']);
+        let list = key(&[0xff, 0, b'l']);
+        for (target, value) in [
+            (
+                &string,
+                RedisValue::String {
+                    value: raw_member.clone(),
+                },
+            ),
+            (
+                &hash,
+                RedisValue::Hash {
+                    fields: vec![HashEntry {
+                        field: raw_member.clone(),
+                        value: raw_member.clone(),
+                    }],
+                },
+            ),
+            (
+                &list,
+                RedisValue::List {
+                    items: vec![raw_member.clone()],
+                },
+            ),
+        ] {
+            let created = service
+                .create_key(CreateKeyInput {
+                    connection_id: "cluster".into(),
+                    key: target.clone(),
+                    value,
+                    ttl_ms: Some(60_000),
+                })
+                .await
+                .unwrap();
+            assert_eq!(&created.key, target);
+        }
+        assert_eq!(
+            service.get_key("cluster", &string).await.unwrap().value,
+            RedisValue::String {
+                value: raw_member.clone()
+            }
+        );
+        service
+            .mutate_collection(CollectionMutationInput {
+                connection_id: "cluster".into(),
+                key: hash.clone(),
+                mutation: CollectionMutation::HashSet {
+                    field: raw_member.clone(),
+                    value: updated.clone(),
+                },
+            })
+            .await
+            .unwrap();
+        let page = service
+            .get_collection_page(CollectionPageInput {
+                connection_id: "cluster".into(),
+                key: hash.clone(),
+                kind: CollectionKind::Hash,
+                cursor: "0".into(),
+                count: 10,
+                pattern: "*".into(),
+                order: CollectionOrder::Scan,
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.entries[0].id, raw_member);
+        assert_eq!(page.entries[0].value, updated);
+        service
+            .mutate_collection(CollectionMutationInput {
+                connection_id: "cluster".into(),
+                key: list.clone(),
+                mutation: CollectionMutation::ListAppend {
+                    value: updated.clone(),
+                    prepend: false,
+                },
+            })
+            .await
+            .unwrap();
+        let item = service
+            .get_list_entry(ListIndexInput {
+                connection_id: "cluster".into(),
+                key: list.clone(),
+                index: "-1".into(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.value, updated);
+        let renamed = key(&[0xfe, 0, b'r']);
+        assert_eq!(
+            redis::cluster_routing::Slot::for_key(&string),
+            redis::cluster_routing::Slot::for_key(&renamed)
+        );
+        let result = service
+            .rename_browser_key(RenameKeyInput {
+                connection_id: "cluster".into(),
+                key: string.clone(),
+                new_key: renamed.clone(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.key, renamed);
+        assert_eq!(
+            service.get_key("cluster", &string).await,
+            Err(AppError::KeyNotFound)
+        );
+        assert_eq!(
+            service.get_key("cluster", &renamed).await.unwrap().value,
+            RedisValue::String {
+                value: raw_member.clone()
+            }
+        );
+        remaining.extend([renamed, hash, list]);
+    }
+    let page = service
+        .scan_all_keys(ScanAllKeysInput {
+            connection_id: "cluster".into(),
+            pattern: format!("{prefix}*"),
+            count: 2,
+            key_type: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        page.iter()
+            .map(|entry| entry.key.clone())
+            .collect::<HashSet<_>>(),
+        remaining.iter().cloned().collect()
+    );
+    assert!(page.iter().all(|entry| entry.key.utf8().is_err()));
+    let manager = BulkTaskManager::default();
+    let task = service
+        .start_bulk_delete(
+            &manager,
+            StartBulkDeleteInput {
+                connection_id: "cluster".into(),
+                keys: remaining.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let result = manager
+                .list()
+                .unwrap()
+                .into_iter()
+                .find(|item| item.id == task.id)
+                .unwrap();
+            if result.status != BulkTaskStatus::Running {
+                break result;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.status, BulkTaskStatus::Completed);
+    assert_eq!(result.deleted, remaining.len() as u64);
+    assert_eq!(result.failed, 0);
+    for key in remaining {
+        assert_eq!(
+            service.get_key("cluster", key).await,
+            Err(AppError::KeyNotFound)
         );
     }
     service.close_connection("cluster").await.unwrap();

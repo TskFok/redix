@@ -1,3 +1,4 @@
+import { byteIdentity, displayBytes, isRedisBytes } from "../../lib/redisBytes";
 import { useEffect, useRef, useState } from "react";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
@@ -19,7 +20,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-function parseImportEntries(raw: string): ImportKeysInput["entries"] {
+export function parseImportEntries(raw: string): ImportKeysInput["entries"] {
   const parsed: unknown = JSON.parse(raw);
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new Error("导入文件必须是非空键数组。");
@@ -27,20 +28,21 @@ function parseImportEntries(raw: string): ImportKeysInput["entries"] {
 
   const keys = new Set<string>();
   for (const item of parsed) {
-    if (!isRecord(item) || typeof item.key !== "string" || item.key.trim() === "") {
+    if (!isRecord(item) || !isRedisBytes(item.key)) {
       throw new Error("导入文件包含无效键名。");
     }
-    if (keys.has(item.key)) {
+    const identity = byteIdentity(item.key);
+    if (keys.has(identity)) {
       throw new Error("导入文件中存在重复键。");
     }
-    keys.add(item.key);
+    keys.add(identity);
     if (
       typeof item.ttl_ms !== "number" ||
       !Number.isInteger(item.ttl_ms) ||
       item.ttl_ms < -1 ||
       !isRecord(item.value)
     ) {
-      throw new Error(`导入键“${item.key}”包含无效数据。`);
+      throw new Error(`导入键“${displayBytes(item.key)}”包含无效数据。`);
     }
   }
 

@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use std::collections::HashSet;
 
 use crate::error::AppError;
@@ -249,13 +250,13 @@ impl SearchIndexInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct GetKeySearchIndexesInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
 }
 
 impl GetKeySearchIndexesInput {
     pub fn validate(&self) -> Result<(), AppError> {
         validate_connection_id(&self.connection_id)?;
-        if self.key.trim().is_empty() || self.key.len() > MAX_SEARCH_KEY_BYTES {
+        if self.key.len() > MAX_SEARCH_KEY_BYTES {
             return Err(AppError::InvalidInput);
         }
         Ok(())
@@ -413,7 +414,7 @@ fn valid_vector_filter(value: &str) -> bool {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SearchVectorMatch {
-    pub key: String,
+    pub key: RedisBytes,
     pub distance: f64,
 }
 
@@ -464,7 +465,7 @@ impl SearchQueryInput {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct SearchKeyResult {
-    pub key: String,
+    pub key: RedisBytes,
     pub key_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<Vec<SearchDocumentField>>,

@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invokeBinary as invoke } from "../../lib/binaryIpc";
 export interface BulkTask {
   id: string;
   connection_id: string;

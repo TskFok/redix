@@ -95,7 +95,7 @@ pub(crate) fn key_summaries(
     keys.into_iter()
         .map(|key| {
             Ok(KeySummary {
-                key: String::from_utf8(key).map_err(|_| AppError::InvalidInput)?,
+                key: key.into(),
                 key_type: requested_type
                     .and_then(normalize_key_type)
                     .map(str::to_owned),
@@ -160,7 +160,7 @@ pub fn decode_key_value(key_type: &str, entries: Vec<String>) -> Result<RedisVal
     match key_type {
         "string" => match entries.as_slice() {
             [value] => Ok(RedisValue::String {
-                value: value.clone(),
+                value: value.clone().into(),
             }),
             _ => Err(AppError::CommandFailed),
         },
@@ -169,14 +169,18 @@ pub fn decode_key_value(key_type: &str, entries: Vec<String>) -> Result<RedisVal
             .map(|entry| {
                 let (field, value) = entry.split_once('=').ok_or(AppError::CommandFailed)?;
                 Ok(HashEntry {
-                    field: field.to_owned(),
-                    value: value.to_owned(),
+                    field: field.into(),
+                    value: value.into(),
                 })
             })
             .collect::<Result<Vec<_>, AppError>>()
             .map(|fields| RedisValue::Hash { fields }),
-        "list" => Ok(RedisValue::List { items: entries }),
-        "set" => Ok(RedisValue::Set { members: entries }),
+        "list" => Ok(RedisValue::List {
+            items: entries.into_iter().map(Into::into).collect(),
+        }),
+        "set" => Ok(RedisValue::Set {
+            members: entries.into_iter().map(Into::into).collect(),
+        }),
         "zset" => entries
             .into_iter()
             .map(|entry| {
@@ -186,7 +190,7 @@ pub fn decode_key_value(key_type: &str, entries: Vec<String>) -> Result<RedisVal
                     return Err(AppError::CommandFailed);
                 }
                 Ok(SortedSetEntry {
-                    member: member.to_owned(),
+                    member: member.into(),
                     score,
                 })
             })
@@ -353,10 +357,14 @@ mod tests {
     }
 
     #[test]
-    fn key_summaries_reject_non_utf8_names() {
+    fn key_summaries_preserve_binary_empty_and_whitespace_names() {
+        let page = super::key_summaries(vec![vec![0xff, 0], vec![], b" ".to_vec()], None)
+            .expect("Redis 键名必须保留任意字节");
         assert_eq!(
-            super::key_summaries(vec![vec![0xff]], None),
-            Err(AppError::InvalidInput)
+            serde_json::to_value(&page).unwrap(),
+            serde_json::json!([
+                {"key": {"base64": "/wA="}}, {"key": ""}, {"key": " "}
+            ])
         );
     }
 
@@ -400,7 +408,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             keys.iter()
-                .map(|item| item.key.as_str())
+                .map(|item| item.key.utf8().unwrap())
                 .collect::<Vec<_>>(),
             ["a", "b"]
         );
@@ -485,7 +493,7 @@ mod tests {
         let page = ScanPage {
             cursor: ScanCursor::Cluster("cluster:cursor".into()),
             keys: vec![KeySummary {
-                key: "x".repeat(4 * 1024 * 1024),
+                key: "x".repeat(4 * 1024 * 1024).into(),
                 key_type: None,
             }],
             has_more: true,

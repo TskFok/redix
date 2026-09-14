@@ -1,4 +1,6 @@
 import { useState } from "react";
+import Select from "../../components/Select";
+import { byteIdentity, bytesFromInput, bytesToInput, bytesToSingleLineInput, bytesToMultilineInput, isBinary, type ByteFormat, type RedisBytes } from "../../lib/redisBytes";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
 
@@ -18,6 +20,30 @@ interface KeyEditorProps {
   onSave: (value: RedisValue) => Promise<void>;
   onDelete: () => Promise<void>;
   onSetTtl: (ttlMs: number) => Promise<void>;
+}
+
+function mapValueBytes(value: RedisValue, convert: (value: RedisBytes, path: string) => RedisBytes): RedisValue {
+  if ("String" in value) return { String: { value: convert(value.String.value, "string") } };
+  if ("Hash" in value) return { Hash: { fields: value.Hash.fields.map((entry, index) => ({ field: convert(entry.field, `hash.${index}.field`), value: convert(entry.value, `hash.${index}.value`) })) } };
+  if ("List" in value) return { List: { items: value.List.items.map((entry, index) => convert(entry, `list.${index}`)) } };
+  if ("Set" in value) return { Set: { members: value.Set.members.map((entry, index) => convert(entry, `set.${index}`)) } };
+  if ("SortedSet" in value) return { SortedSet: { members: value.SortedSet.members.map((entry, index) => ({ ...entry, member: convert(entry.member, `sorted-set.${index}`) })) } };
+  return cloneRedisValue(value);
+}
+
+function prepareEditor(value: RedisValue) {
+  const formats: Record<string, ByteFormat> = {};
+  const draft = mapValueBytes(value, (bytes, path) => {
+    const format = isBinary(bytes) ? "hex" : "utf8";
+    formats[path] = format;
+    return bytesToInput(bytes, format);
+  });
+  return { draft, formats };
+}
+
+// Basic byte fields in the editor draft contain the text of their selected encoding.
+function draftText(value: RedisBytes): string {
+  return typeof value === "string" ? value : bytesToInput(value, "hex");
 }
 
 function formatJson(value: unknown): string {
@@ -57,7 +83,9 @@ export function KeyEditor({
   onDelete,
   onSetTtl,
 }: KeyEditorProps) {
-  const [draft, setDraft] = useState<RedisValue>(() => cloneRedisValue(value));
+  const [initial] = useState(() => prepareEditor(value));
+  const [draft, setDraft] = useState<RedisValue>(initial.draft);
+  const [formats, setFormats] = useState(initial.formats);
   const [jsonDraft, setJsonDraft] = useState(() =>
     "Json" in value ? formatJson(value.Json.value) : "",
   );
@@ -65,6 +93,19 @@ export function KeyEditor({
   const [validationError, setValidationError, validationErrorToken] = useFeedbackState<string | null>(null);
 
   const kind = redisValueKind(draft);
+
+  const encodingSelect = (path: string, label: string, text: RedisBytes, update: (text: string) => void, multiline = false) => <label className="field">
+    <span>{label}编码</span>
+    <Select aria-label={`${label}编码`} value={formats[path] ?? "utf8"} disabled={busy} onChange={(event) => {
+      const nextFormat = event.target.value as ByteFormat;
+      try {
+        const encoded = (multiline ? bytesToMultilineInput : bytesToSingleLineInput)(bytesFromInput(draftText(text), formats[path] ?? "utf8"), nextFormat);
+        update(encoded);
+        setFormats((previous) => ({ ...previous, [path]: nextFormat }));
+        setValidationError(null);
+      } catch (caught) { setValidationError(caught instanceof Error ? caught.message : "数据编码无效。"); }
+    }}><option value="utf8">UTF-8</option><option value="hex">Hex</option><option value="base64">Base64</option></Select>
+  </label>;
 
   const updateString = (next: string) => {
     setDraft({ String: { value: next } });
@@ -192,6 +233,13 @@ export function KeyEditor({
   };
 
   const removeRow = (index: number) => {
+    setFormats((previous) => Object.fromEntries(Object.entries(previous).flatMap(([path, format]) => {
+      const [prefix, row, ...tail] = path.split(".");
+      if (prefix !== kind || row === undefined || Number(row) < index) return [[path, format]];
+      if (Number(row) === index) return [];
+      return [[[prefix, String(Number(row) - 1), ...tail].join("."), format]];
+    })));
+
     if ("Hash" in draft) {
       setDraft({ Hash: { fields: draft.Hash.fields.filter((_, row) => row !== index) } });
     } else if ("List" in draft) {
@@ -215,7 +263,13 @@ export function KeyEditor({
   };
 
   const handleSave = async () => {
-    let nextValue = cloneRedisValue(draft);
+    let nextValue: RedisValue;
+    try {
+      nextValue = mapValueBytes(draft, (text, path) => bytesFromInput(draftText(text), formats[path] ?? "utf8"));
+    } catch (caught) {
+      setValidationError(caught instanceof Error ? caught.message : "数据编码无效。");
+      return;
+    }
     if ("Json" in nextValue) {
       try {
         nextValue = { Json: { value: JSON.parse(jsonDraft) } };
@@ -226,7 +280,7 @@ export function KeyEditor({
     }
     if ("Set" in nextValue) {
       nextValue = {
-        Set: { members: [...new Set(nextValue.Set.members)] },
+        Set: { members: [...new Map(nextValue.Set.members.map((member) => [byteIdentity(member), member])).values()] },
       };
     }
     if (
@@ -295,17 +349,18 @@ export function KeyEditor({
       </div>
 
       {"String" in draft ? (
-        <label className="field">
+        <><label className="field">
           <span>字符串值</span>
           <textarea
             autoCapitalize="off"
             autoCorrect="off"
-            value={draft.String.value}
+            value={draftText(draft.String.value)}
             onChange={(event) => updateString(event.target.value)}
             disabled={busy}
             spellCheck={false}
           />
         </label>
+        {encodingSelect("string", "字符串值", draft.String.value, updateString, true)}</>
       ) : null}
 
       {"Hash" in draft ? (
@@ -314,28 +369,34 @@ export function KeyEditor({
           <div className="editor-rows">
             {draft.Hash.fields.map((entry, index) => (
               <div className="editor-row editor-row-hash" key={`hash-${index}`}>
+                <div className="module-tab-content">
                 <label className="field">
                   <span>字段 {index + 1}</span>
                   <input
                     autoCapitalize="off"
                     autoCorrect="off"
                     aria-label={`字段 ${index + 1}`}
-                    value={entry.field}
+                    value={draftText(entry.field)}
                     onChange={(event) => updateHashField(index, "field", event.target.value)}
                     disabled={busy}
                   />
                 </label>
+                {encodingSelect(`hash.${index}.field`, `字段 ${index + 1}`, entry.field, (next) => updateHashField(index, "field", next))}
+                </div>
+                <div className="module-tab-content">
                 <label className="field">
                   <span>值 {index + 1}</span>
                   <input
                     autoCapitalize="off"
                     autoCorrect="off"
                     aria-label={`值 ${index + 1}`}
-                    value={entry.value}
+                    value={draftText(entry.value)}
                     onChange={(event) => updateHashField(index, "value", event.target.value)}
                     disabled={busy}
                   />
                 </label>
+                {encodingSelect(`hash.${index}.value`, `值 ${index + 1}`, entry.value, (next) => updateHashField(index, "value", next))}
+                </div>
                 <button
                   type="button"
                   className="button button-quiet row-remove"
@@ -360,17 +421,20 @@ export function KeyEditor({
           <div className="editor-rows">
             {draft.List.items.map((item, index) => (
               <div className="editor-row editor-row-single" key={`list-${index}`}>
+                <div className="module-tab-content">
                 <label className="field">
                   <span>元素 {index + 1}</span>
                   <input
                     autoCapitalize="off"
                     autoCorrect="off"
                     aria-label={`元素 ${index + 1}`}
-                    value={item}
+                    value={draftText(item)}
                     onChange={(event) => updateListItem(index, event.target.value)}
                     disabled={busy}
                   />
                 </label>
+                {encodingSelect(`list.${index}`, `元素 ${index + 1}`, item, (next) => updateListItem(index, next))}
+                </div>
                 <button
                   type="button"
                   className="button button-quiet row-remove"
@@ -395,17 +459,20 @@ export function KeyEditor({
           <div className="editor-rows">
             {draft.Set.members.map((member, index) => (
               <div className="editor-row editor-row-single" key={`set-${index}`}>
+                <div className="module-tab-content">
                 <label className="field">
                   <span>成员 {index + 1}</span>
                   <input
                     autoCapitalize="off"
                     autoCorrect="off"
                     aria-label={`成员 ${index + 1}`}
-                    value={member}
+                    value={draftText(member)}
                     onChange={(event) => updateSetMember(index, event.target.value)}
                     disabled={busy}
                   />
                 </label>
+                {encodingSelect(`set.${index}`, `成员 ${index + 1}`, member, (next) => updateSetMember(index, next))}
+                </div>
                 <button
                   type="button"
                   className="button button-quiet row-remove"
@@ -435,19 +502,22 @@ export function KeyEditor({
           <div className="editor-rows">
             {draft.SortedSet.members.map((entry, index) => (
               <div className="editor-row editor-row-zset" key={`zset-${index}`}>
+                <div className="module-tab-content">
                 <label className="field">
                   <span>成员 {index + 1}</span>
                   <input
                     autoCapitalize="off"
                     autoCorrect="off"
                     aria-label={`成员 ${index + 1}`}
-                    value={entry.member}
+                    value={draftText(entry.member)}
                     onChange={(event) =>
                       updateSortedSetMember(index, "member", event.target.value)
                     }
                     disabled={busy}
                   />
                 </label>
+                {encodingSelect(`sorted-set.${index}`, `成员 ${index + 1}`, entry.member, (next) => updateSortedSetMember(index, "member", next))}
+                </div>
                 <label className="field">
                   <span>分数 {index + 1}</span>
                   <input

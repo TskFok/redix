@@ -1,3 +1,4 @@
+use crate::domain::RedisBytes;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 use crate::error::AppError;
@@ -54,7 +55,7 @@ impl VectorSetElementPayload {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct VectorSetElementInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub element: String,
 }
 
@@ -68,7 +69,7 @@ impl VectorSetElementInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct VectorSetKeyInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
 }
 
 impl VectorSetKeyInput {
@@ -79,7 +80,7 @@ impl VectorSetKeyInput {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct VectorSetSummary {
-    pub key: String,
+    pub key: RedisBytes,
     pub total: String,
     pub dimension: Option<u32>,
     pub quantization: Option<String>,
@@ -116,7 +117,7 @@ pub struct VectorSimilarityResult {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct CreateVectorSetInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub dimension: u32,
     pub quantization: Option<String>,
     pub elements: Vec<VectorSetElementPayload>,
@@ -142,7 +143,7 @@ impl CreateVectorSetInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct AddVectorSetElementsInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub elements: Vec<VectorSetElementPayload>,
 }
 
@@ -162,7 +163,7 @@ impl AddVectorSetElementsInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ListVectorSetElementsInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub start: Option<String>,
     pub end: Option<String>,
     pub limit: usize,
@@ -192,7 +193,7 @@ impl ListVectorSetElementsInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct SetVectorSetAttributesInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub element: String,
     pub attributes: serde_json::Value,
 }
@@ -208,7 +209,7 @@ impl SetVectorSetAttributesInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct DeleteVectorSetElementsInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub elements: Vec<String>,
 }
 
@@ -228,7 +229,7 @@ impl DeleteVectorSetElementsInput {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct VectorSimilarityQueryInput {
     pub connection_id: String,
-    pub key: String,
+    pub key: RedisBytes,
     pub by_element: Option<String>,
     pub by_vector: Option<Vec<f64>>,
     pub by_vector_base64: Option<String>,
@@ -287,8 +288,8 @@ pub fn decode_fp32_base64(value: &str) -> Result<Vec<f32>, AppError> {
     Ok(values)
 }
 
-fn validate_connection_and_key(connection_id: &str, key: &str) -> Result<(), AppError> {
-    if connection_id.trim().is_empty() || key.trim().is_empty() {
+fn validate_connection_and_key(connection_id: &str, key: &RedisBytes) -> Result<(), AppError> {
+    if connection_id.trim().is_empty() || key.len() > 65536 {
         Err(AppError::InvalidInput)
     } else {
         Ok(())
