@@ -79,7 +79,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib redis::ssh::tests -- --ign
 
 CLI/Sentinel 需要 `redis-server`。真实 SSH fixture 位于 `src-tauri/tests/ssh.rs`，使用外部隔离 SSH/Redis 服务的 `REDIX_TEST_SSH_HOST`、`REDIX_TEST_SSH_PORT`、`REDIX_TEST_SSH_USERNAME`、`REDIX_TEST_SSH_KNOWN_HOSTS`、Redis host/port 及所选认证字段；本轮未运行真实 sshd fixture。SSH 单元测试不代表已通过 Linux/Windows 原生端到端测试。
 
-`.github/workflows/cross-platform.yml` 配置 macOS、Windows、Ubuntu 的前端、Rust、Web 与 native no-bundle 构建；macOS/Linux 安装 Redis 后执行隔离网络流程，Windows 显式跳过缺少 Redis 可执行文件的流程。CI 配置不等于 CI 已运行，本轮本机结果只代表 macOS。
+`.github/workflows/release.yml` 统一配置 Pull Request 验证与标签发布，直接推送 `main` 或其他分支不触发 CI。验证任务覆盖 macOS、Windows、Ubuntu 的前端、Rust、Web 与 native no-bundle 构建；macOS/Linux 安装 Redis 后执行隔离网络流程，Windows 显式跳过缺少 Redis 可执行文件的流程。标签发布必须先通过版本预检和全部跨平台验证。CI 配置不等于 CI 已运行，本轮本机结果只代表 macOS。
 
 ### Redis Stack 集成补充
 

@@ -49,7 +49,7 @@ npm run clean # 清理构建产物与 Vite 缓存，保留已安装依赖
 
 发布前必须保持工作区干净，且当前分支与 `origin` 上的同名分支完全同步。`release` 会检查各版本源一致性，运行发布脚本测试、前端测试、Rust 测试与构建检查；通过后同步更新 `package.json`、`package-lock.json`、`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml` 和 `src-tauri/Cargo.lock`，以中文提交版本变更，推送当前分支与 `vX.Y.Z` 标签。`--current` 保持版本号不变，强制将当前版本的本地和远程标签指向当前提交，适用于重新触发发布。
 
-标签推送会触发 GitHub Actions，再次校验标签与五个版本文件一致，构建 macOS arm64/x64、Windows 和 Linux 安装包，发布至 GitHub Releases 并自动生成发布说明。
+GitHub Actions 统一使用 `.github/workflows/release.yml`：直接推送 `main` 或其他分支不触发 CI，Pull Request 仅运行跨平台验证。`npm run release` 推送的 `v*` 标签只触发这一个工作流；标签与五个版本文件的一致性预检、macOS/Windows/Linux 跨平台验证全部通过后，才构建 macOS arm64/x64、Windows 和 Linux 安装包，发布至 GitHub Releases 并自动生成发布说明。
 
 `clean` 仅删除 `node_modules/.vite`、`dist` 和 `src-tauri/target`，不会删除 `node_modules` 中已安装的依赖；清理后可直接重新运行开发或构建命令。
 

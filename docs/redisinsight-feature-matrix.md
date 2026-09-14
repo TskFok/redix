@@ -42,7 +42,7 @@
 | macOS 原生 release 构建 | `CARGO_NET_OFFLINE=true npm run tauri:build -- --no-bundle` 通过（1 分 16 秒）；未打包、签名、安装或发布 |
 | 范围与格式 | non-cloud、范围扫描正反例、cargo fmt --check、git diff --check 通过 |
 
-未运行 Redis Stack、真实 sshd、真实 TLS/mTLS 组合、Windows/Linux 原生验证或完整 Tauri 桌面交互端到端；`.github/workflows/cross-platform.yml` 只是 CI 配置，本轮未在 GitHub 上执行，不能据此宣称三平台通过。响应限制主要约束解析、IPC 与展示，不能替代服务端资源限制或 Redis 客户端底层协议读取的内存限制。
+未运行 Redis Stack、真实 sshd、真实 TLS/mTLS 组合、Windows/Linux 原生验证或完整 Tauri 桌面交互端到端；`.github/workflows/release.yml` 中的跨平台验证只是 CI 配置，本轮未在 GitHub 上执行，不能据此宣称三平台通过。响应限制主要约束解析、IPC 与展示，不能替代服务端资源限制或 Redis 客户端底层协议读取的内存限制。
 
 ## 本轮验证与审查
 
