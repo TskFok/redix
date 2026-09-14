@@ -1,6 +1,6 @@
 [package]
 name = "redix"
-version = "0.1.0"
+version = "1.0.0"
 description = "Redix Redis desktop client"
 authors = ["Redix"]
 edition = "2021"
