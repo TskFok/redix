@@ -464,7 +464,7 @@ export function ArrayDetails({
 
           {state.cells.length > 0 ? (
             <div className="module-table-wrap">
-              <table className="module-table">
+              <table className="module-table browser-action-table">
                 <caption>Array 索引 {state.rangeStart} 至 {state.rangeEnd}</caption>
                 <thead><tr><th scope="col">索引</th><th scope="col">值</th><th scope="col">操作</th></tr></thead>
                 <tbody>

@@ -223,7 +223,7 @@ function CollectionDetailsSession({ connectionId, keyName, kind, disabled = fals
     </div>}
     {error && <Toast kind="error" message={error} onClose={() => setError(null)} resetKey={errorToken} />}
     {busy && <p role="status" className="loading-state">正在处理集合数据…</p>}
-    <div className="module-table-wrap"><table className="module-table"><thead><tr>
+    <div className="module-table-wrap"><table className={`module-table browser-action-table${kind === "hash" ? " collection-table-hash" : ""}`}><thead><tr>
       {(kind === "hash" || kind === "list") && <th scope="col">{kind === "hash" ? "字段" : "索引"}</th>}
       <th scope="col">{kind === "set" || kind === "zset" ? "成员" : "值"}</th>{kind === "zset" && <th scope="col">分数</th>}{kind === "hash" && <th scope="col">字段 TTL</th>}<th scope="col">操作</th>
     </tr></thead><tbody>{page?.entries.map((entry, index) => <tr key={`${index}:${entry.id}`}>

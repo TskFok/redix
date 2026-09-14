@@ -471,7 +471,7 @@ export function StreamConsumerGroups({
             </p>
           ) : (
             <div className="stream-table-wrap">
-              <table className="stream-groups-table">
+              <table className="stream-groups-table browser-action-table">
                 <thead>
                   <tr>
                     <th>名称</th>

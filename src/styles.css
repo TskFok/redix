@@ -2279,6 +2279,27 @@ input[type="checkbox"]:hover:not(:disabled) {
   overflow-wrap: anywhere;
 }
 
+.browser-action-table th {
+  white-space: nowrap;
+}
+
+.browser-action-table tbody td {
+  vertical-align: middle;
+}
+
+/* Reserve room for row actions before distributing the data columns. */
+.browser-action-table th:last-child,
+.browser-action-table td:last-child,
+.collection-table-hash th:nth-child(3),
+.collection-table-hash td:nth-child(3) {
+  width: 1%;
+  white-space: nowrap;
+}
+
+.browser-action-table .module-row-actions {
+  flex-wrap: nowrap;
+}
+
 .module-form-grid-wide {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
