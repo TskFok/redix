@@ -7,7 +7,7 @@ import type { KeySummary } from "../../lib/types";
 
 afterEach(cleanup);
 
-const summaries = (keys: string[]): KeySummary[] => keys.map((key) => ({ key, key_type: "string", ttl_ms: -1, size: 3 }));
+const summaries = (keys: string[]): KeySummary[] => keys.map((key) => ({ key, key_type: "string" }));
 
 function Harness({ keys = ["user", "user:1", "user:2", "cache:one"], pattern = "*", loading = false, onPatternChange = vi.fn() }: {
   keys?: string[];
@@ -92,10 +92,10 @@ describe("键树浏览", () => {
     ]);
     expect(screen.getByRole("button", { name: "展开前缀 user:" })).toHaveTextContent("3");
     fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:" }));
-    const users = screen.getByRole("list", { name: "前缀 user: 的键" });
-    expect(within(users).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
-      "展开前缀 user:profile:", "user:1", "user:2",
+    expect(within(tree).getAllByRole("button").map((button) => button.getAttribute("aria-label"))).toEqual([
+      "展开前缀 cache:", "折叠前缀 user:", "展开前缀 user:profile:", "user:1", "user:2", "alpha", "zebra",
     ]);
+    expect(screen.getByRole("button", { name: "user:1" }).closest("li")).toHaveAttribute("aria-level", "2");
     fireEvent.click(screen.getByRole("button", { name: "展开前缀 user:profile:" }));
     fireEvent.click(screen.getByRole("button", { name: "user:profile:name" }));
     expect(screen.getByLabelText("已打开的键")).toHaveTextContent("user:profile:name");

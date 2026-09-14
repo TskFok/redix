@@ -1,7 +1,8 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { KeySummary } from "../../lib/types";
 import { KeyRow, KeyTree } from "./KeyTree";
 import ScanFilterDialog from "./ScanFilterDialog";
+import VirtualKeyRows from "./VirtualKeyRows";
 
 interface KeyListProps {
   pattern: string;
@@ -46,6 +47,7 @@ export function KeyList({
   const hasFilters = (pattern.trim() || "*") !== "*" || keyType !== "";
   // Detail requests block interactions without adding a scan status above the keys.
   const controlsDisabled = loading || busy;
+  const checkedKeys = useMemo(() => new Set(selectedKeys), [selectedKeys]);
   return (
     <section className="browser-list-panel" aria-labelledby="key-list-title">
       <div className="browser-panel-heading">
@@ -100,18 +102,11 @@ export function KeyList({
         <KeyTree key={JSON.stringify([pattern, keyType, separator])} separator={separator} keys={keys} selectedKey={selectedKey}
           selectedKeys={selectedKeys} loading={controlsDisabled} onSelect={onSelect} onToggleSelect={onToggleSelect} />
       ) : (
-        <ul className="key-list" aria-label="Redis 键列表">
-          {keys.map((summary) => {
-            const selected = summary.key === selectedKey;
-            const checked = selectedKeys.includes(summary.key);
-            return (
-              <li key={summary.key}>
-                <KeyRow summary={summary} selected={selected} checked={checked} loading={controlsDisabled}
-                  onSelect={onSelect} onToggleSelect={onToggleSelect} />
-              </li>
-            );
-          })}
-        </ul>
+        <VirtualKeyRows key={JSON.stringify([pattern, keyType])} items={keys} label="Redis 键列表"
+          rowKey={(summary) => summary.key}
+          renderRow={(summary) => <KeyRow summary={summary} selected={summary.key === selectedKey}
+            checked={checkedKeys.has(summary.key)} loading={controlsDisabled}
+            onSelect={onSelect} onToggleSelect={onToggleSelect} />} />
       )}
     </section>
   );

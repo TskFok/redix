@@ -75,7 +75,9 @@ export function BrowserPage({
   connectionIdRef.current = connectionId;
   const mountedRef = useRef(false);
   const scanLoadingRef = useRef(false);
-  const deferredScanRef = useRef<string | null>(null);
+  const deferredScanRef = useRef<{ pattern: string; keyType: string } | null>(null);
+  const keyTypeRef = useRef(state.keyType);
+  keyTypeRef.current = state.keyType;
   const scanRequestRef = useRef(0);
   const detailRequestRef = useRef(0);
   const moduleProbeRequestRef = useRef(0);
@@ -95,10 +97,10 @@ export function BrowserPage({
   }, []);
 
   const scanAll = useCallback(
-    async (requestedPattern: string) => {
+    async (requestedPattern: string, requestedType = keyTypeRef.current) => {
       if (!mountedRef.current) return;
       if (databaseSwitchingRef.current) {
-        deferredScanRef.current = requestedPattern;
+        deferredScanRef.current = { pattern: requestedPattern, keyType: requestedType };
         return;
       }
       if (scanLoadingRef.current) return;
@@ -106,6 +108,7 @@ export function BrowserPage({
       deferredScanRef.current = null;
       scanLoadingRef.current = true;
       scannedPatternRef.current = requestedPattern;
+      keyTypeRef.current = requestedType;
       const requestedScanCount = scanCountRef.current;
       const requestId = scanRequestRef.current + 1;
       scanRequestRef.current = requestId;
@@ -114,6 +117,7 @@ export function BrowserPage({
       setState((current) => ({
         ...current,
         pattern: requestedPattern,
+        keyType: requestedType,
         keys: [],
         selectedKey: null,
         selectedKeys: [],
@@ -129,7 +133,7 @@ export function BrowserPage({
           connection_id: connectionId,
           pattern: requestedPattern,
           count: requestedScanCount,
-          key_type: null,
+          key_type: requestedType || null,
         });
         if (!mountedRef.current || scanRequestRef.current !== requestId) return;
         setState((current) => applyScanResult(current, keys));
@@ -174,7 +178,7 @@ export function BrowserPage({
       pattern: "*",
       loading: true,
     });
-    void scanAll("*");
+    void scanAll("*", "");
 
     return () => {
       mountedRef.current = false;
@@ -193,7 +197,7 @@ export function BrowserPage({
     const pending = deferredScanRef.current;
     if (!databaseSwitching && pending) {
       deferredScanRef.current = null;
-      void scanAll(pending);
+      void scanAll(pending.pattern, pending.keyType);
     }
   }, [databaseSwitching, scanAll]);
 
@@ -276,11 +280,18 @@ export function BrowserPage({
   };
 
   const handleKeyTypeChange = (keyType: string) => {
-    if (state.loading || detailLoading || detailActionLoading) {
+    if (state.loading || detailLoading || detailActionLoading || keyType === state.keyType) {
       return;
     }
-    detailRequestRef.current += 1;
-    setState((current) => applyKeyTypeFilter(current, keyType));
+    if (debounceRef.current !== null) {
+      window.clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
+    const requestedPattern = state.pattern.trim() || "*";
+    if (state.pattern !== requestedPattern) {
+      skipDebounceForPatternRef.current = requestedPattern;
+    }
+    void scanAll(requestedPattern, keyType);
   };
 
   const handleRefresh = () => {
@@ -388,7 +399,7 @@ export function BrowserPage({
       error: null,
       keys: current.keys.map((summary) =>
         summary.key === detail.key
-          ? { ...summary, key_type: detail.key_type, ttl_ms: detail.ttl_ms }
+          ? { ...summary, key_type: detail.key_type }
           : summary,
       ),
     }, current.keyType));
@@ -410,7 +421,6 @@ export function BrowserPage({
               ...summary,
               key: detail.key,
               key_type: detail.key_type,
-              ttl_ms: detail.ttl_ms,
             }
           : summary,
       ),

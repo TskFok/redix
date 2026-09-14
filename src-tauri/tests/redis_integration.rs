@@ -1065,12 +1065,12 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
             break;
         }
     }
-    for (key, key_type, size, _) in &expected {
+    for (key, key_type, _, _) in &expected {
         let summary = summaries
             .get(*key)
             .ok_or_else(|| format!("SCAN did not return {key_type} test key"))?;
-        if summary.key_type != *key_type || summary.size != Some(*size) {
-            return Err(format!("SCAN metadata does not match {key_type} test key"));
+        if serde_json::to_value(summary).unwrap() != serde_json::json!({"key": key}) {
+            return Err(format!("default SCAN must return only the name of {key_type} test key"));
         }
     }
 
@@ -1099,7 +1099,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         })
         .await
         .map_err(|error| error.code().to_owned())?;
-    if all_hashes.len() != 1 || all_hashes[0].key != keys.hash || all_hashes[0].key_type != "hash" {
+    if all_hashes.len() != 1 || all_hashes[0].key != keys.hash || all_hashes[0].key_type.as_deref() != Some("hash") {
         return Err("full Browser scan must preserve type filtering across pages".into());
     }
 
@@ -1116,7 +1116,7 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
     if filtered
         .keys
         .iter()
-        .any(|summary| summary.key_type != "hash")
+        .any(|summary| summary.key_type.as_deref() != Some("hash"))
     {
         return Err("SCAN type filtering returned a non-hash key".into());
     }

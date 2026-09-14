@@ -80,7 +80,7 @@ export default function ScanFilterDialog({
         </p>
         <label className="browser-filter browser-filter-type field">
           <span>类型过滤</span>
-          <Select aria-label="类型过滤" value={keyType} onChange={(event) => onKeyTypeChange(event.target.value)} disabled={loading}>
+          <Select aria-label="类型过滤" aria-describedby="key-type-filter-hint" value={keyType} onChange={(event) => onKeyTypeChange(event.target.value)} disabled={loading}>
             <option value="">全部类型</option>
             <option value="string">String</option>
             <option value="hash">Hash</option>
@@ -93,6 +93,9 @@ export default function ScanFilterDialog({
             {vectorSetSupported ? <option value="vectorset">Vector Set</option> : null}
           </Select>
         </label>
+        <p id="key-type-filter-hint" className="browser-helper">
+          默认只加载键名；类型筛选会重新扫描，需要 Redis 6.0 或更高版本。
+        </p>
         {showSeparator ? (
           <label className="field browser-filter">
             <span>键树分隔符</span>

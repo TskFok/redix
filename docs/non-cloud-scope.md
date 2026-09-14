@@ -9,7 +9,7 @@
 - 连接配置导入导出；普通导出只包含可迁移 profile 元数据，不包含密码、CA PEM、客户端证书、SSH 私钥/口令或 SSH 本机路径。
 - 使用系统钥匙串保存本地连接密码；前端 DTO 和连接列表不暴露密码。
 - Standalone TLS 的启用/关闭、服务端证书校验、自定义 CA 和 mTLS；TLS 材料继续保存在本机安全存储，不写普通 JSON 文档。
-- Browser 使用 `SCAN`、`MATCH`、`COUNT` 分页列出键，并读取键类型、TTL 和值。
+- Browser 默认使用 `SCAN`、`MATCH`、`COUNT` 仅遍历键名，不执行逐键 `TYPE` pipeline。类型筛选使用原生 `SCAN TYPE`（Redis 6.0+）重新遍历，清空筛选重新扫描全部类型；名称过滤和刷新保留类型条件。类型和其他元数据、内容在打开详情时按需读取。平铺和树形列表均使用虚拟滚动。
 - Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新和校验后的本地 JSON 导入导出。
 - String 的有界原始字节读取（最多4MiB，截断只读），以及 Hash、List、Set、Sorted Set 的有界分页和原位字段/成员/索引编辑；原位操作不以当前页重建键，保留未加载数据和 TTL。Stream 按 ID 范围每页最多读取 500 条，支持有界添加与显式选中删除。
 - Stream Consumer Group 支持创建/删除 Group、读取消费者与 Pending 列表、确认 Pending 条目、删除消费者和显式 XCLAIM；Claim 单次最多 500 个具体 ID，指定消费者与最小空闲毫秒，高级转移可显式指定 FORCE/IDLE/TIME/RETRYCOUNT；Pending 支持范围/消费者过滤及分页，每页最多500条。

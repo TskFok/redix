@@ -622,12 +622,7 @@ export interface ScanPage {
 
 export interface KeySummary {
   key: string;
-  key_type: string;
-  ttl_ms: number;
-  size: number | null;
-  memory_bytes?: number | null;
-  encoding?: string | null;
-  idle_seconds?: number | null;
+  key_type?: string;
 }
 
 export interface ExportKeysInput {

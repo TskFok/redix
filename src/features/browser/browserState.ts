@@ -12,7 +12,7 @@ export type { JsonValue };
 export interface BrowserPageState {
   pattern: string;
   keyType: string;
-  // Complete scan results, including keys hidden by the current type filter.
+  // Complete results for the current server-side query; local edits may change a key's type.
   keys: KeySummary[];
   selectedKey: string | null;
   selectedKeys: string[];
@@ -47,17 +47,21 @@ function matchesKeyType(summary: KeySummary, keyType: string): boolean {
     return true;
   }
 
-  const actual = summary.key_type.trim().toLowerCase();
+  const actual = summary.key_type?.trim().toLowerCase();
   if (requested === "json") {
     return actual === "json" || actual === "rejson-rl" || actual === "rejson-rs";
   }
   if (requested === "zset" || requested === "sortedset" || requested === "sorted-set") {
     return actual === "zset" || actual === "sortedset" || actual === "sorted-set";
   }
+  if (requested === "vectorset" || requested === "vector-set") {
+    return actual === "vectorset" || actual === "vector-set";
+  }
   return actual === requested;
 }
 
 export function filterKeysByType(keys: KeySummary[], keyType: string): KeySummary[] {
+  if (keyType.trim() === "") return keys;
   return keys.filter((summary) => matchesKeyType(summary, keyType));
 }
 
@@ -146,8 +150,6 @@ export function applyCreatedKey(current: BrowserPageState, detail: KeyValue): Br
   keysByName.set(detail.key, {
     key: detail.key,
     key_type: detail.key_type,
-    ttl_ms: detail.ttl_ms,
-    size: null,
   });
   const selected = current.selectedKey === detail.key;
   return applyKeyTypeFilter({
@@ -162,7 +164,8 @@ export function applyScanResult(
   current: BrowserPageState,
   keys: KeySummary[],
 ): BrowserPageState {
-  const keysByName = new Map(keys.map((summary) => [summary.key, summary]));
+  const keysByName = new Map<string, KeySummary>();
+  for (const summary of keys) keysByName.set(summary.key, summary);
   return {
     ...current,
     keys: [...keysByName.values()],

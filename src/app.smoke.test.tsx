@@ -370,10 +370,10 @@ describe("Redix 应用壳", () => {
     expect(screen.queryByRole("button", { name: "加载更多" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "string" } });
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
-    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 user:2" }));
-    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
+    fireEvent.click(await screen.findByRole("checkbox", { name: "选择键 user:2" }));
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(3);
     expect(scanAllKeysMock).toHaveBeenLastCalledWith({
-      connection_id: "local", pattern: "user:*", count: 100, key_type: null,
+      connection_id: "local", pattern: "user:*", count: 100, key_type: "string",
     });
 
     fireEvent.click(screen.getByRole("button", { name: section }));
@@ -386,7 +386,7 @@ describe("Redix 应用壳", () => {
     fireEvent.click(screen.getByRole("button", { name: "Browser" }));
     await screen.findByRole("heading", { name: "数据浏览" });
 
-    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(3);
     expect(screen.getByRole("button", { name: "平铺" })).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByRole("button", { name: "user:1" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "user:2" })).toBeEnabled();
@@ -420,8 +420,8 @@ describe("Redix 应用壳", () => {
 
     await act(async () => {
       finishScan([
-        { key: "first-key", key_type: "string", ttl_ms: -1, size: 5 },
-        { key: "last-key", key_type: "hash", ttl_ms: -1, size: 2 },
+        { key: "first-key", key_type: "string" },
+        { key: "last-key", key_type: "hash" },
       ]);
       await scanning;
     });
@@ -455,6 +455,8 @@ describe("Redix 应用壳", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "选择键 db-zero" }));
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "string" } });
+    await screen.findByRole("button", { name: "db-zero" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 db-zero" }));
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
 
     fireEvent.click(screen.getByRole("button", { name: "Database" }));
@@ -471,7 +473,7 @@ describe("Redix 应用壳", () => {
     expect(screen.getByLabelText("键过滤")).toHaveValue("*");
     expect(screen.getByLabelText("类型过滤")).toHaveValue("");
     expect(selectDatabaseMock).toHaveBeenCalledWith({ connection_id: "local", database: 1 });
-    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(3);
     expect(scanAllKeysMock).toHaveBeenLastCalledWith({
       connection_id: "local", pattern: "*", count: 100, key_type: null,
     });
@@ -493,6 +495,8 @@ describe("Redix 应用壳", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "选择键 db-zero" }));
     fireEvent.click(screen.getByRole("button", { name: "筛选" }));
     fireEvent.change(screen.getByLabelText("类型过滤"), { target: { value: "string" } });
+    await screen.findByRole("button", { name: "db-zero" });
+    fireEvent.click(screen.getByRole("checkbox", { name: "选择键 db-zero" }));
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
 
     fireEvent.change(screen.getByRole("combobox", { name: "切换数据库" }), { target: { value: "1" } });
@@ -507,7 +511,7 @@ describe("Redix 应用壳", () => {
     expect(screen.getByLabelText("类型过滤")).toHaveValue("");
     fireEvent.click(screen.getByRole("button", { name: "关闭筛选" }));
     expect(selectDatabaseMock).toHaveBeenCalledWith({ connection_id: "local", database: 1 });
-    expect(scanAllKeysMock).toHaveBeenCalledTimes(2);
+    expect(scanAllKeysMock).toHaveBeenCalledTimes(3);
     expect(scanAllKeysMock).toHaveBeenLastCalledWith({ connection_id: "local", pattern: "*", count: 100, key_type: null });
     fireEvent.click(screen.getByRole("button", { name: "Database" }));
     expect(await screen.findByText("当前数据库：1")).toBeInTheDocument();
@@ -683,7 +687,7 @@ describe("Redix 应用壳", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: "选择键 remote-key" }));
 
     await act(async () => {
-      finishLocalScan([{ key: "late-local-key", key_type: "string", ttl_ms: -1, size: 5 }]);
+      finishLocalScan([{ key: "late-local-key", key_type: "string" }]);
       await localScan;
     });
 

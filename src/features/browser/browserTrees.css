@@ -10,10 +10,23 @@
   background: var(--color-surface-selected);
 }
 
-.key-tree-panel { min-height: 0; }
-.key-tree { display: block; margin-top: 8px; }
-.key-tree li { margin-block: 4px; }
-.key-tree-children { list-style: none; padding-inline-start: 14px; border-inline-start: 1px solid var(--color-border); }
+.browser-list-panel > .key-tree-panel { display: flex; flex-direction: column; flex: 1 1 0; min-height: 144px; }
+.key-list.key-virtual-list {
+  display: block;
+  flex: 1 1 0;
+  min-height: 144px;
+  overflow: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+}
+.key-virtual-list > li { margin: 0; }
+.key-virtual-row { box-sizing: border-box; padding-block: 2px; }
+.key-virtual-row .key-row,
+.key-virtual-row .key-tree-folder { height: 44px; min-height: 0; padding: 0; }
+.key-virtual-row .key-tree-folder { padding-inline: 10px; }
+.key-virtual-row .key-row-main { flex-direction: row; align-items: center; gap: 8px; }
+.key-virtual-row .key-row-main code { flex: 1; }
+.key-virtual-row .key-row-type { flex-shrink: 0; }
 .key-tree-folder {
   display: flex;
   align-items: center;

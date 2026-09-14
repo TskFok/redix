@@ -84,12 +84,8 @@ pub fn normalize_key_type(value: &str) -> Option<&'static str> {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct KeySummary {
     pub key: String,
-    pub key_type: String,
-    pub ttl_ms: i64,
-    pub size: Option<u64>,
-    pub memory_bytes: Option<u64>,
-    pub encoding: Option<String>,
-    pub idle_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_type: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

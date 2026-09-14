@@ -60,7 +60,7 @@ use super::{
     },
     key_ops::{
         decode_json_value, decode_stream_entry, encode_json_value, encode_stream_entry,
-        ensure_cluster_scan_page_size, load_key_summaries,
+        ensure_cluster_scan_page_size, key_summaries, scan_key_names,
     },
     observability::{
         map_pubsub_error, parse_slow_log_config_reply, parse_slow_log_reply, ProfilerManager,
@@ -330,6 +330,7 @@ struct CapabilityConnection {
 #[derive(Clone)]
 struct RedisClusterScanBackend {
     factory: Arc<ClusterNodeConnectionFactory>,
+    key_type: Option<String>,
 }
 
 impl ClusterScanBackend for RedisClusterScanBackend {
@@ -345,15 +346,15 @@ impl ClusterScanBackend for RedisClusterScanBackend {
                 .factory
                 .connection_for_node_id(&node.node_id, &node.endpoint)
                 .await?;
-            let (next_cursor, keys) = ::redis::cmd("SCAN")
-                .arg(cursor)
-                .arg("MATCH")
-                .arg(pattern)
-                .arg("COUNT")
-                .arg(count)
-                .query_async::<(u64, Vec<Vec<u8>>)>(&mut connection)
-                .await
-                .map_err(|_| AppError::ClusterNodeUnavailable)?;
+            let (next_cursor, keys) = scan_key_names(
+                &mut connection,
+                cursor,
+                pattern,
+                count,
+                self.key_type.as_deref(),
+            )
+            .await
+            .map_err(|_| AppError::ClusterNodeUnavailable)?;
             if keys.iter().any(|key| std::str::from_utf8(key).is_err()) {
                 return Err(AppError::ClusterNodeUnavailable);
             }
@@ -1497,7 +1498,7 @@ impl RedisOperations for RedisService {
 
     async fn scan_keys(&self, input: ScanKeysInput) -> Result<ScanPage, AppError> {
         input.validate()?;
-        let requested_type = input.key_type.as_deref().and_then(normalize_key_type);
+        let requested_type = input.key_type.as_deref();
         let (snapshot, _) = self.active_snapshot(&input.connection_id).await?;
         if matches!(snapshot.target, ConnectionTarget::Cluster(_)) {
             let mut routed = snapshot.client.connection().await?;
@@ -1508,6 +1509,7 @@ impl RedisOperations for RedisService {
                 ScanCursor::Standalone(_) => return Err(AppError::InvalidInput),
             };
             let backend = RedisClusterScanBackend {
+                key_type: input.key_type.clone(),
                 factory: snapshot
                     .cluster_node_factory
                     .ok_or(AppError::ClusterNodeUnavailable)?,
@@ -1521,7 +1523,7 @@ impl RedisOperations for RedisService {
                 input.count,
             )
             .await?;
-            let keys = load_key_summaries(&mut routed, page.keys, requested_type).await?;
+            let keys = key_summaries(page.keys, requested_type)?;
             let page = ScanPage {
                 cursor: ScanCursor::Cluster(page.cursor),
                 keys,
@@ -1538,21 +1540,15 @@ impl RedisOperations for RedisService {
             ScanCursor::Cluster(_) => return Err(AppError::InvalidInput),
         };
         let mut connection = snapshot.client.connection().await?;
-        let (cursor, keys): (u64, Vec<String>) = ::redis::cmd("SCAN")
-            .arg(standalone_cursor)
-            .arg("MATCH")
-            .arg(&input.pattern)
-            .arg("COUNT")
-            .arg(input.count)
-            .query_async::<(u64, Vec<String>)>(&mut connection)
-            .await
-            .map_err(map_command_error)?;
-        let summaries = load_key_summaries(
+        let (cursor, keys) = scan_key_names(
             &mut connection,
-            keys.into_iter().map(String::into_bytes).collect(),
+            standalone_cursor,
+            &input.pattern,
+            input.count,
             requested_type,
         )
         .await?;
+        let summaries = key_summaries(keys, requested_type)?;
 
         Ok(ScanPage {
             cursor: ScanCursor::Standalone(cursor),
@@ -3885,6 +3881,7 @@ mod tests {
         .encode()
         .unwrap();
         let backend = RedisClusterScanBackend {
+            key_type: None,
             factory: Arc::new(
                 crate::redis::ClusterNodeConnectionFactory::new(None, None, None).unwrap(),
             ),
@@ -3913,6 +3910,7 @@ mod tests {
         let factory =
             Arc::new(crate::redis::ClusterNodeConnectionFactory::new(None, None, None).unwrap());
         let backend = RedisClusterScanBackend {
+            key_type: None,
             factory: factory.clone(),
         };
         let successful_node = crate::redis::ClusterScanNode {

@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 
 import type { KeySummary } from "../../lib/types";
-import { formatSize, formatTtl, keyTypeLabel } from "./browserState";
+import { keyTypeLabel } from "./browserState";
+import VirtualKeyRows from "./VirtualKeyRows";
 import "./browserTrees.css";
 
 interface KeyRowsProps {
@@ -30,11 +31,7 @@ export function KeyRow({ summary, selected, checked, loading, onSelect, onToggle
       aria-pressed={selected} onClick={() => onSelect(summary.key)} disabled={loading}>
       <span className="key-row-main">
         <code title={summary.key}>{label ?? (summary.key || "（空键）")}</code>
-        <span className="key-row-type">{keyTypeLabel(summary.key_type)}</span>
-      </span>
-      <span className="key-row-meta">
-        <span><span className="sr-only">TTL </span>{formatTtl(summary.ttl_ms)}</span>
-        <span><span className="sr-only">大小 </span>{formatSize(summary.size)}</span>
+        {summary.key_type && <span className="key-row-type">{keyTypeLabel(summary.key_type)}</span>}
       </span>
     </button>
   </div>;
@@ -81,31 +78,43 @@ export function KeyTree({ keys, separator = ":", selectedKey, selectedKeys, load
   const root = useMemo(() => buildFolders(keys, separator), [keys, separator]);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const checked = useMemo(() => new Set(selectedKeys), [selectedKeys]);
-  const renderFolder = (folder: KeyFolder, depth: number): React.ReactNode => <>
-    {[...folder.folders.values()].map((child) => <li key={`folder:${child.prefix}`}>
-      <button type="button" className="key-tree-folder" aria-expanded={expanded.has(child.prefix)}
-        aria-label={`${expanded.has(child.prefix) ? "折叠" : "展开"}前缀 ${child.prefix}`}
-        title={child.prefix} onClick={() => setExpanded((current) => {
-          const next = new Set(current);
-          if (next.has(child.prefix)) next.delete(child.prefix); else next.add(child.prefix);
-          return next;
-        })}>
-        <span aria-hidden="true">{expanded.has(child.prefix) ? "▾" : "▸"}</span>
-        <code>{child.segment || "（空段）"}{separator}</code>
-        <span className="key-tree-count">{child.count}</span>
-      </button>
-      {expanded.has(child.prefix) ? <ul className="key-tree-children" aria-label={`前缀 ${child.prefix} 的键`}>
-        {renderFolder(child, depth + 1)}
-      </ul> : null}
-    </li>)}
-    {folder.leaves.map(({ summary, label }) => <li key={`key:${summary.key}`}>
-      <KeyRow summary={summary} label={depth ? label : undefined} selected={selectedKey === summary.key}
-        checked={checked.has(summary.key)} loading={loading} onSelect={onSelect} onToggleSelect={onToggleSelect} />
-    </li>)}
-  </>;
+  type TreeRow = { id: string; depth: number } & (
+    { folder: KeyFolder } | { summary: KeySummary; label: string }
+  );
+  const rows = useMemo(() => {
+    const visible: TreeRow[] = [];
+    const visit = (folder: KeyFolder, depth: number) => {
+      for (const child of folder.folders.values()) {
+        visible.push({ id: `folder:${child.prefix}`, folder: child, depth });
+        if (expanded.has(child.prefix)) visit(child, depth + 1);
+      }
+      for (const leaf of folder.leaves) {
+        visible.push({ id: `key:${leaf.summary.key}`, ...leaf, depth });
+      }
+    };
+    visit(root, 0);
+    return visible;
+  }, [root, expanded]);
 
   return <div className="key-tree-panel">
     <p className="browser-helper">{separator ? `按 ${separator} 前缀自动分类，目录优先，按名称排序。` : "按完整键名排序。"}数量为匹配键总数。</p>
-    <ul className="key-list key-tree" aria-label="Redis 键树">{renderFolder(root, 0)}</ul>
+    <VirtualKeyRows items={rows} label="Redis 键树" rowKey={(row) => row.id} rowDepth={(row) => row.depth}
+      renderRow={(row) => {
+        if (!("folder" in row)) return <KeyRow summary={row.summary} label={row.depth ? row.label : undefined}
+          selected={selectedKey === row.summary.key} checked={checked.has(row.summary.key)} loading={loading}
+          onSelect={onSelect} onToggleSelect={onToggleSelect} />;
+        const child = row.folder;
+        return <button type="button" className="key-tree-folder" aria-expanded={expanded.has(child.prefix)}
+          aria-label={`${expanded.has(child.prefix) ? "折叠" : "展开"}前缀 ${child.prefix}`}
+          title={child.prefix} onClick={() => setExpanded((current) => {
+            const next = new Set(current);
+            if (next.has(child.prefix)) next.delete(child.prefix); else next.add(child.prefix);
+            return next;
+          })}>
+          <span aria-hidden="true">{expanded.has(child.prefix) ? "▾" : "▸"}</span>
+          <code>{child.segment || "（空段）"}{separator}</code>
+          <span className="key-tree-count">{child.count}</span>
+        </button>;
+      }} />
   </div>;
 }

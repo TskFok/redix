@@ -35,7 +35,7 @@ describe("Browser 状态 helper", () => {
 
     expect(next).toEqual({
       ...current,
-      keys: [selected, { key: "user:2", key_type: "string", ttl_ms: 5000, size: null }],
+      keys: [selected, { key: "user:2", key_type: "string" }],
     });
     expect(current.keys).toEqual([selected]);
   });
@@ -58,7 +58,7 @@ describe("Browser 状态 helper", () => {
     const next = applyCreatedKey(current, created);
 
     expect(next.keys).toEqual([
-      { key: "user:1", key_type: "string", ttl_ms: 5000, size: null }, another,
+      { key: "user:1", key_type: "string" }, another,
     ]);
     expect(next.selectedKey).toBe("user:1");
     expect(next.selectedKeys).toEqual(["user:1", "user:2"]);
@@ -80,7 +80,7 @@ describe("Browser 状态 helper", () => {
     });
 
     expect(next.keys).toEqual([
-      original, { key: "user:2", key_type: "hash", ttl_ms: -1, size: null },
+      original, { key: "user:2", key_type: "hash" },
     ]);
     expect(filterKeysByType(next.keys, next.keyType)).toEqual([original]);
     expect(filterKeysByType(next.keys, "").map((key) => key.key)).toEqual(["user:1", "user:2"]);
@@ -102,7 +102,7 @@ describe("Browser 状态 helper", () => {
       key: "user:1", key_type: "hash", ttl_ms: -1, value: { Hash: { fields: [] } },
     });
 
-    expect(next.keys).toEqual([{ key: "user:1", key_type: "hash", ttl_ms: -1, size: null }]);
+    expect(next.keys).toEqual([{ key: "user:1", key_type: "hash" }]);
     expect(next.selectedKey).toBeNull();
     expect(next.selectedKeys).toEqual([]);
     expect(next.detail).toBeNull();
@@ -172,8 +172,8 @@ describe("Browser 状态 helper", () => {
       loading: true,
       error: "旧错误",
     }, [
-      { key: "user:1", key_type: "string", ttl_ms: -1, size: 1 },
-      { key: "user:2", key_type: "hash", ttl_ms: -1, size: 2 },
+      { key: "user:1", key_type: "string" },
+      { key: "user:2", key_type: "hash" },
     ]);
 
     expect(next.keys.map((key) => key.key)).toEqual(["user:1", "user:2"]);
@@ -213,7 +213,7 @@ describe("Browser 状态 helper", () => {
   it("空的全量结果清空上一轮缓存和选择", () => {
     const next = applyScanResult({
       ...initialBrowserPageState,
-      keys: [{ key: "old", key_type: "string", ttl_ms: -1, size: 1 }],
+      keys: [{ key: "old", key_type: "string" }],
       selectedKey: "old",
       selectedKeys: ["old"],
     }, []);
