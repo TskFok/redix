@@ -106,7 +106,8 @@ describe("Stream Consumer Groups", () => {
   it("创建 Group 前校验名称并提交起始 ID", async () => {
     render(<StreamConsumerGroups connectionId="local" streamKey="events" />);
 
-    await screen.findByText("workers");
+    // 等待详情初始化完成，避免其清空错误提示的 effect 覆盖表单校验结果。
+    await screen.findByText("1-0");
     fireEvent.click(screen.getByRole("button", { name: "创建 Group" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("名称不能为空");
     expect(createGroupMock).not.toHaveBeenCalled();
