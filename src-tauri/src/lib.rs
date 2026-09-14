@@ -87,6 +87,7 @@ pub fn run() {
             commands::stream_entries::add_stream_entry,
             commands::stream_entries::delete_stream_entries,
             commands::collection::get_collection_page,
+            commands::collection::get_list_entry,
             commands::collection::mutate_collection,
             commands::search_aggregate::aggregate_search,
             commands::browser::get_browser_key,

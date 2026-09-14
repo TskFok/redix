@@ -114,6 +114,150 @@ fn redis_slot(key: &str) -> u16 {
     crc % 16_384
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "由 scripts/test-local-cluster.py 启动隔离三主节点集群"]
+async fn cluster_collection_operations_target_each_keys_primary() {
+    use redix_lib::domain::collection::*;
+    let seeds =
+        std::env::var("REDIX_TEST_REDIS_CLUSTER_URLS").expect("isolated cluster launcher required");
+    let service = cluster_service(&seeds);
+    service.open_connection("cluster").await.unwrap();
+    let topology = service.get_cluster_topology("cluster").await.unwrap();
+    let primaries: Vec<_> = topology
+        .nodes
+        .iter()
+        .filter(|node| node.role == ClusterNodeRole::Primary)
+        .collect();
+    let suffix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let mut tags = HashMap::new();
+    for candidate in 0..100_000 {
+        let tag = format!("{{collections-{suffix}-{candidate}}}");
+        let slot = redis_slot(&tag);
+        let owner = primaries
+            .iter()
+            .find(|node| {
+                node.slots
+                    .iter()
+                    .any(|range| range.start <= slot && slot <= range.end)
+            })
+            .unwrap();
+        tags.entry(owner.id.clone()).or_insert(tag);
+        if tags.len() == primaries.len() {
+            break;
+        }
+    }
+    assert_eq!(tags.len(), 3);
+    for tag in tags.values() {
+        let hash = format!("{tag}:hash");
+        let list = format!("{tag}:list");
+        let zset = format!("{tag}:zset");
+        service
+            .execute_command("cluster", &format!("HSET {hash} field value"))
+            .await
+            .unwrap();
+        service
+            .execute_command("cluster", &format!("RPUSH {list} first middle last"))
+            .await
+            .unwrap();
+        service
+            .execute_command("cluster", &format!("ZADD {zset} -5 low 20 high 0 mid"))
+            .await
+            .unwrap();
+        for (key, mutation) in [
+            (
+                &hash,
+                CollectionMutation::HashExpire {
+                    field: "field".into(),
+                    ttl_ms: "60000".into(),
+                },
+            ),
+            (
+                &hash,
+                CollectionMutation::HashSet {
+                    field: "field".into(),
+                    value: "updated".into(),
+                },
+            ),
+            (
+                &list,
+                CollectionMutation::ListTrim {
+                    count: "1".into(),
+                    from_head: true,
+                },
+            ),
+            (
+                &list,
+                CollectionMutation::ListTrim {
+                    count: "1".into(),
+                    from_head: false,
+                },
+            ),
+        ] {
+            service
+                .mutate_collection(CollectionMutationInput {
+                    connection_id: "cluster".into(),
+                    key: key.clone(),
+                    mutation,
+                })
+                .await
+                .unwrap();
+        }
+        let request = |key: &str, kind, order| CollectionPageInput {
+            connection_id: "cluster".into(),
+            key: key.into(),
+            kind,
+            order,
+            cursor: "0".into(),
+            count: 2,
+            pattern: "*".into(),
+        };
+        let hash_page = service
+            .get_collection_page(request(&hash, CollectionKind::Hash, CollectionOrder::Scan))
+            .await
+            .unwrap();
+        assert_eq!(hash_page.entries[0].value, "updated");
+        assert!(hash_page.entries[0]
+            .ttl_ms
+            .is_some_and(|ttl| ttl > 0 && ttl <= 60000));
+        let item = service
+            .get_list_entry(ListIndexInput {
+                connection_id: "cluster".into(),
+                key: list.clone(),
+                index: "-1".into(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(item.id, "0");
+        assert_eq!(item.value, "middle");
+        let zset_page = service
+            .get_collection_page(request(
+                &zset,
+                CollectionKind::Zset,
+                CollectionOrder::ScoreDesc,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            zset_page
+                .entries
+                .iter()
+                .map(|entry| entry.id.as_str())
+                .collect::<Vec<_>>(),
+            ["high", "mid"]
+        );
+        assert_eq!(zset_page.next_cursor, "2");
+        service
+            .execute_command("cluster", &format!("DEL {hash} {list} {zset}"))
+            .await
+            .unwrap();
+    }
+    service.close_connection("cluster").await.unwrap();
+}
+
 async fn prepare_node_slow_logs(seeds: &str) -> Vec<(String, i64, u64, u64)> {
     let mut states = Vec::new();
     for seed in seeds.split(',') {

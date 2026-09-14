@@ -61,6 +61,8 @@ Browser 由后端使用 Redis `SCAN` 遍历当前数据库，跨批次去重后�
 
 Browser 支持新增键、重命名、批量删除、元数据刷新、类型过滤、显式刷新以及校验后的本地 JSON 导入导出；基础数据类型支持 String、Hash、List、Set、Sorted Set、Stream。Hash、List、Set、Sorted Set 使用有界分页和字段/成员/索引级增量写入，不用当前页重建整个键；Stream 使用有界 ID 范围分页，并支持显式添加和删除消息。Stream 详情还支持 Consumer Group 的创建/删除、消费者与 Pending 列表、Pending 确认、消费者删除和显式 XCLAIM 转移。转移需要选择消息并指定目标消费者、最小空闲时间，只操作满足条件的 Pending 消息，基础转移不启用 FORCE；高级面板支持 IDLE/TIME/RETRYCOUNT/FORCE，FORCE 必须显式选择并说明会新增 Pending 记录，不自动消费。RedisJSON 同时支持根文档编辑，以及路径级读取、保存、删除和数组追加。连接级模块能力通过 `MODULE LIST` 探测并按 session 缓存；探测失败或未检测到 RedisJSON/RedisSearch 时，不会阻断普通 Browser 流程，对应的路径编辑器或 Search / Query 工作区会稳定降级为不可用提示。RedisSearch / Query 工作区在 Search 2.0+ 可用时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引和有限的 `FT.SEARCH ... LIMIT` 查询（默认 NOCONTENT，可开启文档字段结果表），以及 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 查询；查询文本不持久化；Browser 的 Hash/JSON 键详情会显示匹配的索引摘要。
 
+Hash 详情支持字段 TTL 的查看、按毫秒设置及移除，需 Redis 7.4+ 和对应命令权限；字段 TTL 批量读取，旧版本仍可浏览和编辑普通 Hash，编辑已有字段时保留其过期时间。整个键的 TTL 仍然生效。List 支持任意正负索引查询（0 为首项，-1 为尾项），查询结果可按绝对索引编辑，并可在确认后按数量删除头部或尾部；删除数量达到或超过长度时，整个键会消失。Sorted Set 默认按分数升序分页，可切换降序或成员匹配扫描；排序由 Redis 对整个集合执行，同分成员按字典顺序排列，降序时一并反转。并发修改可能移动 List 索引或 Sorted Set 的分页位置，操作前可刷新确认。
+
 检测到对应命令集后，Browser 还支持 Redis Array 的连续/稀疏创建、范围读取、扫描、单元格编辑、追加、按索引或区间删除、ARGREP 搜索和 AROP 聚合；Vector Set 支持受限维度的元素创建与批量添加、分页浏览、向量/属性读取与编辑、FP32 向量下载、VSIM 相似度查询和元素删除。两类模块都通过 typed IPC 接入，模块缺失时只禁用对应类型和详情操作，不影响普通 Redis 键浏览；单次批量与响应大小均有固定上限。
 
 Workbench 支持本地内置命令目录、命令前缀提示、多行批量执行、遇错继续策略、Raw/Text/JSON 结果格式和复制。命令历史按连接保存到应用数据目录的版本化 JSON 文件；AUTH、HELLO、ACL、CONFIG 命令族不会写入历史，也不使用 `localStorage`。

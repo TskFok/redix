@@ -8,17 +8,27 @@ impl RedisService {
     ) -> Result<CollectionPage, AppError> {
         input.validate()?;
         let mut connection = self.connection(&input.connection_id).await?;
-        let (type_name, length_command, read_command) = match input.kind {
+        let (type_name, length_command, mut read_command) = match input.kind {
             CollectionKind::Hash => ("hash", "HLEN", "HSCAN"),
             CollectionKind::List => ("list", "LLEN", "LRANGE"),
             CollectionKind::Set => ("set", "SCARD", "SSCAN"),
             CollectionKind::Zset => ("zset", "ZCARD", "ZSCAN"),
         };
+        if input.kind == CollectionKind::Zset {
+            read_command = match input.order {
+                CollectionOrder::Scan => "ZSCAN",
+                CollectionOrder::ScoreAsc => "ZRANGE",
+                CollectionOrder::ScoreDesc => "ZREVRANGE",
+            };
+        }
         let mut read = ::redis::cmd(read_command);
         read.arg(&input.key);
-        if input.kind == CollectionKind::List {
+        if input.kind == CollectionKind::List || input.order != CollectionOrder::Scan {
             let start = decimal_u64(&input.cursor)?;
             read.arg(start).arg(start + input.count as u64 - 1);
+            if input.kind == CollectionKind::Zset {
+                read.arg("WITHSCORES");
+            }
         } else {
             read.arg(&input.cursor)
                 .arg("MATCH")
@@ -38,19 +48,81 @@ impl RedisService {
             .add_command(read)
             .query_async(&mut connection)
             .await
-            .map_err(|_| AppError::CommandFailed)?;
+            .map_err(collection_command_error)?;
         if actual_type == "none" {
             return Err(AppError::KeyNotFound);
         }
         if actual_type != type_name {
             return Err(AppError::UnsupportedDataType);
         }
-        parse_page(value, &input, total, ttl)
+        let mut page = parse_page(value, &input, total, ttl)?;
+        if input.kind == CollectionKind::Hash {
+            let mut command = ::redis::cmd("HPTTL");
+            command.arg(&input.key).arg("FIELDS");
+            if page.entries.is_empty() {
+                // An empty MATCH page still reports capability without scanning more fields.
+                command.arg(1).arg("");
+            } else {
+                command.arg(page.entries.len());
+                for entry in &page.entries {
+                    command.arg(&entry.id);
+                }
+            }
+            match command.query_async::<Vec<i64>>(&mut connection).await {
+                Ok(ttls) => {
+                    if page.entries.is_empty() {
+                        if ttls.len() != 1 {
+                            return Err(AppError::CommandFailed);
+                        }
+                        page.hash_field_ttl_supported = Some(true);
+                    } else {
+                        apply_hash_ttls(&mut page, ttls)?;
+                    }
+                }
+                Err(error) if unavailable_hash_ttl(&error) => {
+                    page.hash_field_ttl_supported = Some(false);
+                }
+                Err(error) => return Err(collection_command_error(error)),
+            }
+        }
+        ensure_serialized_size(&page)?;
+        Ok(page)
+    }
+
+    pub async fn get_list_entry(
+        &self,
+        input: ListIndexInput,
+    ) -> Result<Option<CollectionEntry>, AppError> {
+        input.validate()?;
+        let index = decimal_i64(&input.index)?;
+        let mut connection = self.connection(&input.connection_id).await?;
+        // Keep i64 indexing and length in native Redis/Rust integers, outside Lua doubles.
+        let (actual_type, total, value): (String, u64, Value) = ::redis::pipe()
+            .atomic()
+            .cmd("TYPE")
+            .arg(&input.key)
+            .cmd("LLEN")
+            .arg(&input.key)
+            .cmd("LINDEX")
+            .arg(&input.key)
+            .arg(index)
+            .query_async(&mut connection)
+            .await
+            .map_err(collection_command_error)?;
+        if actual_type == "none" {
+            return Err(AppError::KeyNotFound);
+        }
+        if actual_type != "list" {
+            return Err(AppError::UnsupportedDataType);
+        }
+        parse_list_entry(value, index, total)
     }
 
     pub async fn mutate_collection(&self, input: CollectionMutationInput) -> Result<(), AppError> {
         let (script, arguments) = mutation_script(&input)?;
-        let mut connection = self.connection(&input.connection_id).await?;
+        let mut connection = self
+            .collection_write_connection(&input.connection_id, &input.key)
+            .await?;
         // One atomic script first checks existence and type. Native HSET/SADD/ZADD/
         // PUSH commands would otherwise recreate a key that expired between page read and write.
         let result: i64 = ::redis::cmd("EVAL")
@@ -60,11 +132,13 @@ impl RedisService {
             .arg(arguments)
             .query_async(&mut connection)
             .await
-            .map_err(|_| AppError::CommandFailed)?;
+            .map_err(collection_command_error)?;
         match result {
             2 => Ok(()),
             0 => Err(AppError::KeyNotFound),
             1 => Err(AppError::UnsupportedDataType),
+            3 => Err(AppError::UnsupportedFeature),
+            4 => Err(AppError::KeyNotFound),
             _ => Err(AppError::CommandFailed),
         }
     }
@@ -87,12 +161,40 @@ fn mutation_script(
     let (expected, script, values): (&str, &'static str, Vec<String>) = match &input.mutation {
         CollectionMutation::HashSet { field, value } => (
             "hash",
-            checked_script!("redis.call('HSET',KEYS[1],ARGV[2],ARGV[3])"),
+            // HSET clears a field's expiration. Read and restore it atomically on
+            // Redis 7.4+, and retain ordinary editing on older Redis versions.
+            checked_script!(r#"
+                local ttl=redis.pcall('HPTTL',KEYS[1],'FIELDS',1,ARGV[2])
+                if ttl.err then
+                    local e=string.lower(ttl.err)
+                    if not string.find(e,'unknown command',1,true) and not string.find(e,'unknown redis command',1,true) then return 3 end
+                elseif ttl[1]>=0 and not redis.acl_check_cmd('HPEXPIRE',KEYS[1],string.format('%.0f',ttl[1]),'FIELDS',1,ARGV[2]) then
+                    return 3
+                end
+                -- HPTTL reports logical expiry without deleting the last field.
+                -- HEXISTS performs lazy expiry so the key cannot be recreated below.
+                if not ttl.err and ttl[1]==-2 then redis.call('HEXISTS',KEYS[1],ARGV[2]) end
+                if redis.call('EXISTS',KEYS[1])==0 then return 0 end
+                redis.call('HSET',KEYS[1],ARGV[2],ARGV[3])
+                if not ttl.err and ttl[1]>=0 then
+                    redis.call('HPEXPIRE',KEYS[1],string.format('%.0f',ttl[1]),'FIELDS',1,ARGV[2])
+                end
+            "#),
             vec![field.clone(), value.clone()],
         ),
         CollectionMutation::HashDelete { field } => (
             "hash",
             checked_script!("redis.call('HDEL',KEYS[1],ARGV[2])"),
+            vec![field.clone()],
+        ),
+        CollectionMutation::HashExpire { field, ttl_ms } => (
+            "hash",
+            checked_script!("if redis.call('HEXISTS',KEYS[1],ARGV[2])==0 then return 4 end; local result=redis.call('HPEXPIRE',KEYS[1],ARGV[3],'FIELDS',1,ARGV[2]); if result[1]==-2 then return 4 end; if result[1]~=1 then return 5 end"),
+            vec![field.clone(), decimal_u64(ttl_ms)?.to_string()],
+        ),
+        CollectionMutation::HashPersist { field } => (
+            "hash",
+            checked_script!("if redis.call('HEXISTS',KEYS[1],ARGV[2])==0 then return 4 end; local result=redis.call('HPERSIST',KEYS[1],'FIELDS',1,ARGV[2]); if result[1]==-2 then return 4 end; if result[1]~=1 and result[1]~=-1 then return 5 end"),
             vec![field.clone()],
         ),
         CollectionMutation::SetAdd { member } => (
@@ -129,6 +231,19 @@ fn mutation_script(
             },
             vec![value.clone()],
         ),
+        CollectionMutation::ListTrim { count, from_head } => (
+            "list",
+            if *from_head {
+                checked_script!("redis.call('LTRIM',KEYS[1],ARGV[2],-1)")
+            } else {
+                checked_script!("redis.call('LTRIM',KEYS[1],0,ARGV[2])")
+            },
+            vec![if *from_head {
+                decimal_u64(count)?.to_string()
+            } else {
+                format!("-{}", decimal_u64(count)? + 1)
+            }],
+        ),
     };
     debug_assert!(script.starts_with(PREFIX));
     let mut arguments = vec![expected.to_string()];
@@ -146,34 +261,36 @@ fn parse_page(
     // SCAN COUNT is only a hint. Reject an oversized reply as a whole, never truncate
     // and return its cursor (which would silently skip unseen members).
     ensure_response_size(&value, 0, &mut 0, &mut 0)?;
-    let (next_cursor, values) = if input.kind == CollectionKind::List {
-        let values = array(value)?;
-        if values.len() > input.count {
-            return Err(AppError::CommandFailed);
-        }
-        let end = decimal_u64(&input.cursor)? + values.len() as u64;
-        (
-            (if end < total && !values.is_empty() {
-                end
-            } else {
-                0
-            })
-            .to_string(),
-            values,
-        )
-    } else {
-        let mut outer = array(value)?.into_iter();
-        let cursor = text(outer.next().ok_or(AppError::CommandFailed)?)?;
-        let cursor = decimal_u64(&cursor)
-            .map_err(|_| AppError::CommandFailed)?
-            .to_string();
-        let values = array(outer.next().ok_or(AppError::CommandFailed)?)?;
-        if outer.next().is_some() {
-            return Err(AppError::CommandFailed);
-        }
-        (cursor, values)
-    };
     let paired = matches!(input.kind, CollectionKind::Hash | CollectionKind::Zset);
+    let (next_cursor, values) =
+        if input.kind == CollectionKind::List || input.order != CollectionOrder::Scan {
+            let values = array(value)?;
+            let entry_count = values.len() / if paired { 2 } else { 1 };
+            if entry_count > input.count {
+                return Err(AppError::CommandFailed);
+            }
+            let end = decimal_u64(&input.cursor)? + entry_count as u64;
+            (
+                (if end < total && !values.is_empty() {
+                    end
+                } else {
+                    0
+                })
+                .to_string(),
+                values,
+            )
+        } else {
+            let mut outer = array(value)?.into_iter();
+            let cursor = text(outer.next().ok_or(AppError::CommandFailed)?)?;
+            let cursor = decimal_u64(&cursor)
+                .map_err(|_| AppError::CommandFailed)?
+                .to_string();
+            let values = array(outer.next().ok_or(AppError::CommandFailed)?)?;
+            if outer.next().is_some() {
+                return Err(AppError::CommandFailed);
+            }
+            (cursor, values)
+        };
     if (paired && values.len() % 2 != 0)
         || values.len() > MAX_COLLECTION_PAGE_ENTRIES * if paired { 2 } else { 1 }
     {
@@ -205,7 +322,12 @@ fn parse_page(
             ),
             CollectionKind::Set => (id.clone(), id, None),
         };
-        entries.push(CollectionEntry { id, value, score });
+        entries.push(CollectionEntry {
+            id,
+            value,
+            score,
+            ttl_ms: None,
+        });
     }
     let page = CollectionPage {
         entries,
@@ -213,16 +335,88 @@ fn parse_page(
         next_cursor,
         total: total.to_string(),
         ttl_ms,
+        hash_field_ttl_supported: None,
     };
+    ensure_serialized_size(&page)?;
+    Ok(page)
+}
+
+fn ensure_serialized_size(value: &impl serde::Serialize) -> Result<(), AppError> {
     // Include JSON escaping and repeated member identities in the IPC byte budget.
-    if serde_json::to_vec(&page)
+    if serde_json::to_vec(value)
         .map_err(|_| AppError::CommandFailed)?
         .len()
         > MAX_COLLECTION_RESPONSE_BYTES
     {
         return Err(AppError::CommandFailed);
     }
-    Ok(page)
+    Ok(())
+}
+
+fn apply_hash_ttls(page: &mut CollectionPage, ttls: Vec<i64>) -> Result<(), AppError> {
+    if ttls.len() != page.entries.len() || ttls.iter().any(|ttl| *ttl < -2) {
+        return Err(AppError::CommandFailed);
+    }
+    for (entry, ttl) in page.entries.iter_mut().zip(ttls) {
+        entry.ttl_ms = Some(ttl);
+    }
+    page.entries.retain(|entry| entry.ttl_ms != Some(-2));
+    page.hash_field_ttl_supported = Some(true);
+    ensure_serialized_size(page)
+}
+
+fn parse_list_entry(
+    value: Value,
+    index: i64,
+    total: u64,
+) -> Result<Option<CollectionEntry>, AppError> {
+    if value == Value::Nil {
+        return Ok(None);
+    }
+    let total = i64::try_from(total).map_err(|_| AppError::CommandFailed)?;
+    let absolute = if index < 0 {
+        total.checked_add(index)
+    } else {
+        Some(index)
+    }
+    .filter(|absolute| *absolute >= 0 && *absolute < total)
+    .ok_or(AppError::CommandFailed)?;
+    ensure_response_size(&value, 0, &mut 0, &mut 0)?;
+    let value = text(value)?;
+    if value.len() > MAX_COLLECTION_VALUE_BYTES {
+        return Err(AppError::CommandFailed);
+    }
+    let entry = CollectionEntry {
+        id: absolute.to_string(),
+        value,
+        score: None,
+        ttl_ms: None,
+    };
+    ensure_serialized_size(&entry)?;
+    Ok(Some(entry))
+}
+
+fn unavailable_hash_ttl(error: &::redis::RedisError) -> bool {
+    let detail = error.to_string().to_ascii_lowercase();
+    detail.contains("unknown command")
+        || detail.contains("unknown redis command")
+        || detail.contains("noperm")
+        || detail.contains("no permissions")
+        || detail.contains("permission denied")
+}
+
+fn collection_command_error(error: ::redis::RedisError) -> AppError {
+    if unavailable_hash_ttl(&error) {
+        AppError::UnsupportedFeature
+    } else if error.code() == Some("WRONGTYPE")
+        || error
+            .into_server_errors()
+            .is_some_and(|errors| errors.iter().any(|(_, error)| error.code() == "WRONGTYPE"))
+    {
+        AppError::UnsupportedDataType
+    } else {
+        AppError::CommandFailed
+    }
 }
 
 fn array(value: Value) -> Result<Vec<Value>, AppError> {
@@ -278,6 +472,158 @@ fn ensure_response_size(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collection_numeric_mutation_arguments_use_redis_integer_format_without_lua_rounding() {
+        for (mutation, argument_index, expected) in [
+            (
+                CollectionMutation::HashExpire {
+                    field: "f".into(),
+                    ttl_ms: "00042".into(),
+                },
+                2,
+                "42",
+            ),
+            (
+                CollectionMutation::ListTrim {
+                    count: "00002".into(),
+                    from_head: true,
+                },
+                1,
+                "2",
+            ),
+            (
+                CollectionMutation::ListTrim {
+                    count: "9223372036854775806".into(),
+                    from_head: false,
+                },
+                1,
+                "-9223372036854775807",
+            ),
+        ] {
+            let (_, arguments) = mutation_script(&CollectionMutationInput {
+                connection_id: "local".into(),
+                key: "key".into(),
+                mutation,
+            })
+            .unwrap();
+            assert_eq!(arguments[argument_index], expected);
+        }
+    }
+
+    #[test]
+    fn collection_list_index_results_preserve_integers_beyond_javascript_and_lua_precision() {
+        for (index, total, expected) in [
+            (
+                9_007_199_254_740_993,
+                9_007_199_254_740_995,
+                "9007199254740993",
+            ),
+            (-2, 9_007_199_254_740_995, "9007199254740993"),
+            (-1, i64::MAX as u64, "9223372036854775806"),
+        ] {
+            let entry = parse_list_entry(text("v"), index, total).unwrap().unwrap();
+            assert_eq!(entry.id, expected);
+        }
+        assert_eq!(parse_list_entry(Value::Nil, i64::MIN, 1), Ok(None));
+        assert_eq!(
+            parse_list_entry(text("impossible"), -2, 1),
+            Err(AppError::CommandFailed)
+        );
+        assert_eq!(
+            parse_list_entry(Value::BulkString(vec![0xff]), 0, 1),
+            Err(AppError::CommandFailed)
+        );
+        assert_eq!(
+            parse_list_entry(text(&"x".repeat(MAX_COLLECTION_VALUE_BYTES + 1)), 0, 1),
+            Err(AppError::CommandFailed)
+        );
+        assert_eq!(
+            parse_list_entry(text(&"\0".repeat(MAX_COLLECTION_VALUE_BYTES)), 0, 1),
+            Err(AppError::CommandFailed)
+        );
+    }
+
+    #[test]
+    fn collection_hash_ttl_batch_maps_persistent_fields_and_filters_expired_fields() {
+        let mut page = parse_page(
+            Value::Array(vec![
+                text("42"),
+                Value::Array(vec![
+                    text("permanent"),
+                    text("p"),
+                    text("expiring"),
+                    text("e"),
+                    text("expired"),
+                    text("x"),
+                ]),
+            ]),
+            &input(CollectionKind::Hash),
+            3,
+            -1,
+        )
+        .unwrap();
+        apply_hash_ttls(&mut page, vec![-1, 1200, -2]).unwrap();
+        assert_eq!(page.hash_field_ttl_supported, Some(true));
+        assert_eq!(page.entries.len(), 2);
+        assert_eq!(page.entries[0].ttl_ms, Some(-1));
+        assert_eq!(page.entries[1].ttl_ms, Some(1200));
+        assert_eq!(page.next_cursor, "42");
+        assert!(page.has_more);
+        assert_eq!(
+            apply_hash_ttls(&mut page, vec![-1]),
+            Err(AppError::CommandFailed)
+        );
+        assert_eq!(
+            apply_hash_ttls(&mut page, vec![-1, -3]),
+            Err(AppError::CommandFailed)
+        );
+    }
+
+    #[test]
+    fn collection_hash_ttl_metadata_remains_within_final_ipc_budget() {
+        let mut page = CollectionPage {
+            entries: vec![CollectionEntry {
+                id: "f".into(),
+                value: String::new(),
+                score: None,
+                ttl_ms: None,
+            }],
+            next_cursor: "0".into(),
+            has_more: false,
+            total: "1".into(),
+            ttl_ms: -1,
+            hash_field_ttl_supported: None,
+        };
+        let overhead = serde_json::to_vec(&page).unwrap().len();
+        page.entries[0].value = "v".repeat(MAX_COLLECTION_RESPONSE_BYTES - overhead);
+        assert!(ensure_serialized_size(&page).is_ok());
+        assert_eq!(
+            apply_hash_ttls(&mut page, vec![9_007_199_254_740_991]),
+            Err(AppError::CommandFailed)
+        );
+    }
+
+    #[test]
+    fn collection_sorted_zset_parses_rank_page_and_preserves_server_order() {
+        let request: CollectionPageInput = serde_json::from_value(serde_json::json!({
+            "connection_id": "local", "key": "key", "kind": "zset", "cursor": "2",
+            "count": 2, "pattern": "*", "order": "score_desc"
+        }))
+        .unwrap();
+        let page = parse_page(
+            Value::Array(vec![text("high"), text("12.5"), text("low"), text("-3")]),
+            &request,
+            5,
+            -1,
+        )
+        .unwrap();
+        assert_eq!(page.entries[0].id, "high");
+        assert_eq!(page.entries[0].score, Some(12.5));
+        assert_eq!(page.entries[1].id, "low");
+        assert_eq!(page.next_cursor, "4");
+        assert!(page.has_more);
+    }
     fn text(value: &str) -> Value {
         Value::BulkString(value.as_bytes().to_vec())
     }
@@ -289,6 +635,7 @@ mod tests {
             cursor: "0".into(),
             count: 2,
             pattern: "*".into(),
+            order: CollectionOrder::Scan,
         }
     }
     #[test]

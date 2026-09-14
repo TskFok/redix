@@ -617,6 +617,45 @@ impl RedisService {
         Ok(self.active_snapshot(connection_id).await?.0.target)
     }
 
+    /// Pin collection writes to one socket: ClusterConnection can replay an EVAL
+    /// after an ambiguous failure, which would remove additional List elements.
+    pub(crate) async fn collection_write_connection(
+        &self,
+        connection_id: &str,
+        key: &str,
+    ) -> Result<RoutedConnection, AppError> {
+        let (snapshot, _) = self.active_snapshot(connection_id).await?;
+        let mut connection = snapshot.client.connection().await?;
+        if matches!(connection, RoutedConnection::Cluster(_)) {
+            let slot = ::redis::cluster_routing::Slot::for_key(key);
+            let nodes = load_cluster_nodes(&mut connection, snapshot.profile.tls).await?;
+            let mut owners = nodes.iter().filter(|node| {
+                node.role == ClusterNodeRole::Primary
+                    && node.slots.iter().any(|range| {
+                        // Slot's integer representation stays inside redis-rs.
+                        (range.start..=range.end).any(|number| {
+                            ::redis::cluster_routing::Slot::new(number) == Some(slot)
+                        })
+                    })
+            });
+            let owner = owners.next().ok_or(AppError::ClusterTopologyFailed)?;
+            if owners.next().is_some() {
+                return Err(AppError::ClusterTopologyFailed);
+            }
+            let factory = snapshot
+                .cluster_node_factory
+                .as_ref()
+                .ok_or(AppError::ClusterNodeUnavailable)?;
+            let direct = factory.connection(&owner.endpoint).await?;
+            connection = RoutedConnection::Standalone(
+                super::standalone_transport::ManagedMultiplexedConnection::direct(direct),
+            );
+        }
+        self.ensure_generation_current(connection_id, snapshot.token)
+            .await?;
+        Ok(connection)
+    }
+
     async fn node_scoped_connection(
         &self,
         connection_id: &str,

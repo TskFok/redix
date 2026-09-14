@@ -33,7 +33,7 @@ impl Drop for DriverGuard {
 }
 
 impl ManagedMultiplexedConnection {
-    fn direct(connection: redis::aio::MultiplexedConnection) -> Self {
+    pub(crate) fn direct(connection: redis::aio::MultiplexedConnection) -> Self {
         Self {
             connection,
             _driver: None,

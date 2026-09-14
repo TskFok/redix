@@ -7,8 +7,8 @@ const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 
 const page = (value: string, next = "0"): CollectionPage => ({
-  entries: [{ id: value, value, score: null }], next_cursor: next,
-  has_more: next !== "0", total: "2500", ttl_ms: 59000,
+  entries: [{ id: value, value, score: null, ttl_ms: null }], next_cursor: next,
+  has_more: next !== "0", total: "2500", ttl_ms: 59000, hash_field_ttl_supported: null,
 });
 
 describe("CollectionDetails", () => {
