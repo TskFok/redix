@@ -466,7 +466,10 @@ pub(crate) fn map_connection_error(error: redis::RedisError) -> AppError {
             {
                 return AppError::AuthenticationFailed;
             }
-            let reason = if detail.contains("connection refused") {
+            // Windows WSAECONNREFUSED uses localized wording instead of "connection refused".
+            let connection_refused =
+                detail.contains("connection refused") || detail.ends_with("(os error 10061)");
+            let reason = if connection_refused {
                 Some(ConnectionFailureReason::Refused)
             } else if detail.contains("timed out") || detail.contains("deadline has elapsed") {
                 Some(ConnectionFailureReason::Timeout)
@@ -642,6 +645,26 @@ mod tests {
                 "CONNECTION_FAILED",
                 "连接被拒绝",
             ),
+            (
+                "Connection refused (os error 111)",
+                "CONNECTION_FAILED",
+                "连接被拒绝",
+            ),
+            (
+                "No connection could be made because the target machine actively refused it. (os error 10061)",
+                "CONNECTION_FAILED",
+                "连接被拒绝",
+            ),
+            (
+                "由于目标计算机积极拒绝，无法连接。 (os error 10061)",
+                "CONNECTION_FAILED",
+                "连接被拒绝",
+            ),
+            (
+                "private-secret redis://operator:private-secret@host (os error 10061)",
+                "CONNECTION_FAILED",
+                "连接被拒绝",
+            ),
             ("timed out", "CONNECTION_FAILED", "超时"),
             (
                 "Password authentication failed - AuthenticationFailed: private-secret",
@@ -667,6 +690,7 @@ mod tests {
                 "{result}"
             );
             assert!(!result.to_string().contains("private-secret"), "{result}");
+            assert!(!result.to_string().contains("redis://"), "{result}");
         }
     }
 

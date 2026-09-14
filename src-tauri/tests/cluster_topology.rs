@@ -801,7 +801,7 @@ async fn spawn_topology_cluster_info_options(
     gate_keyspace: bool,
     fail_keyspace: bool,
     multi_info_error: Option<&'static str>,
-    gate_scan_metadata: bool,
+    gate_scan: bool,
 ) -> (
     u16,
     Arc<AtomicUsize>,
@@ -905,20 +905,19 @@ async fn spawn_topology_cluster_info_options(
                                 }
                             }
                             (Some(b"DBSIZE"), _) => ":7\r\n".into(),
-                            (Some(b"SCAN"), _) => "*2\r\n$1\r\n0\r\n*1\r\n$3\r\nkey\r\n".into(),
-                            (Some(b"TYPE"), _) => "+string\r\n".into(),
-                            (Some(b"PTTL"), _) => ":-1\r\n".into(),
-                            (Some(b"STRLEN"), _) => ":5\r\n".into(),
-                            (Some(b"MEMORY"), _) => "$-1\r\n".into(),
-                            (Some(b"OBJECT"), Some(b"IDLETIME")) => {
-                                if gate_scan_metadata {
+                            (Some(b"SCAN"), _) => {
+                                if gate_scan {
                                     if let Some((entered, resume)) = gate.lock().await.take() {
                                         let _ = entered.send(());
                                         let _ = resume.await;
                                     }
                                 }
-                                "$-1\r\n".into()
+                                "*2\r\n$1\r\n0\r\n*1\r\n$3\r\nkey\r\n".into()
                             }
+                            (Some(b"TYPE"), _) => "+string\r\n".into(),
+                            (Some(b"PTTL"), _) => ":-1\r\n".into(),
+                            (Some(b"STRLEN"), _) => ":5\r\n".into(),
+                            (Some(b"MEMORY"), _) => "$-1\r\n".into(),
                             (Some(b"OBJECT"), _) => "$-1\r\n".into(),
                             (Some(b"INFO"), _) => "$21\r\nredis_version:7.0.0\r\n\r\n".into(),
                             (Some(b"MODULE"), _) => "*0\r\n".into(),
@@ -1131,10 +1130,19 @@ async fn scan_all_keys_rejects_a_replaced_cluster_generation() {
             })
             .await
     });
-    entered.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered)
+        .await
+        .expect("SCAN request did not reach the test gate")
+        .unwrap();
     service.open_connection("topology-cluster").await.unwrap();
     resume.send(()).unwrap();
-    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), request)
+            .await
+            .expect("SCAN request did not finish after the test gate was released")
+            .unwrap(),
+        Err(AppError::OperationCancelled)
+    );
 }
 
 #[tokio::test]
@@ -1159,7 +1167,10 @@ async fn scan_all_keys_rejects_results_after_switching_a_standalone_database() {
             })
             .await
     });
-    entered.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered)
+        .await
+        .expect("SCAN request did not reach the test gate")
+        .unwrap();
     service
         .select_database(redix_lib::domain::SelectDatabaseInput {
             connection_id: "topology-cluster".into(),
@@ -1168,7 +1179,13 @@ async fn scan_all_keys_rejects_results_after_switching_a_standalone_database() {
         .await
         .unwrap();
     resume.send(()).unwrap();
-    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), request)
+            .await
+            .expect("SCAN request did not finish after the test gate was released")
+            .unwrap(),
+        Err(AppError::OperationCancelled)
+    );
 }
 
 #[tokio::test]
@@ -1193,11 +1210,20 @@ async fn cluster_scan_rejects_a_page_after_the_active_generation_is_closed() {
             })
             .await
     });
-    entered.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered)
+        .await
+        .expect("SCAN request did not reach the test gate")
+        .unwrap();
     service.close_connection("topology-cluster").await.unwrap();
     resume.send(()).unwrap();
 
-    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), request)
+            .await
+            .expect("SCAN request did not finish after the test gate was released")
+            .unwrap(),
+        Err(AppError::OperationCancelled)
+    );
 }
 
 #[tokio::test]
@@ -1222,11 +1248,20 @@ async fn cluster_scan_rejects_a_page_after_the_active_generation_is_replaced() {
             })
             .await
     });
-    entered.await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), entered)
+        .await
+        .expect("SCAN request did not reach the test gate")
+        .unwrap();
     service.open_connection("topology-cluster").await.unwrap();
     resume.send(()).unwrap();
 
-    assert_eq!(request.await.unwrap(), Err(AppError::OperationCancelled));
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), request)
+            .await
+            .expect("SCAN request did not finish after the test gate was released")
+            .unwrap(),
+        Err(AppError::OperationCancelled)
+    );
 }
 
 #[tokio::test]
