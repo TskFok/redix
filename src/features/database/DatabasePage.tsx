@@ -361,11 +361,11 @@ export function DatabasePage({
                       </td>
                       <td>
                         {isCurrent ? (
-                          <span className="database-current-badge">当前</span>
+                          <span className="button button-compact database-select-action database-current-badge">当前</span>
                         ) : (
                           <button
                             type="button"
-                            className="button button-secondary button-compact"
+                            className="button button-secondary button-compact database-select-action"
                             onClick={() => void handleSelectDatabase(database.database)}
                             disabled={state.switching || databaseSwitching}
                           >

@@ -3732,17 +3732,16 @@ input[type="checkbox"]:hover:not(:disabled) {
   border-bottom: 0;
 }
 
+.database-select-action {
+  width: 100%;
+  max-width: 160px;
+}
+
 .database-current-badge {
-  display: inline-flex;
-  min-height: 28px;
-  align-items: center;
-  padding: 4px 8px;
-  border: 1px solid var(--color-success-border);
-  border-radius: var(--radius-sm);
+  border-color: var(--color-success-border);
   color: var(--color-success-text);
   background: var(--color-success-surface);
-  font-family: inherit;
-  font-size: 10px;
+  cursor: default;
 }
 
 .database-module-list {
