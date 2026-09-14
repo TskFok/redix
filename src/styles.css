@@ -2839,6 +2839,7 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 .stream-messages-table td {
+  vertical-align: middle;
   white-space: normal;
   overflow-wrap: anywhere;
 }
