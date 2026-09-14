@@ -269,6 +269,7 @@ export default function App() {
   const currentSection = activeNavigation ?? navigationItems[0];
   const canAccessWorkspace = connectionWorkspaceOpen && activeProfile !== null;
   const isBrowserWorkspace = canAccessWorkspace && activeSection === "browser";
+  const isWorkbenchWorkspace = canAccessWorkspace && activeSection === "workbench";
   const canAccessLocalResources = (section: AppSection) =>
     section === "connections" || section === "query-library" || section === "settings";
   const showConnectionPage =
@@ -320,7 +321,7 @@ export default function App() {
   ];
 
   return (
-    <main className={`app-shell${canAccessWorkspace ? "" : " app-shell-home"}${isBrowserWorkspace ? " app-shell-browser" : ""}`}>
+    <main className={`app-shell${canAccessWorkspace ? "" : " app-shell-home"}${isBrowserWorkspace ? " app-shell-browser" : ""}${isWorkbenchWorkspace ? " app-shell-workbench" : ""}`}>
       {canAccessWorkspace ? (
       <aside className="app-sidebar" aria-label="产品侧边栏">
         <AppBrand />
@@ -402,7 +403,7 @@ export default function App() {
       )}
 
       <section className="app-main">
-        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}${isBrowserWorkspace ? " workspace-browser" : ""}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
+        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}${isBrowserWorkspace ? " workspace-browser" : ""}${isWorkbenchWorkspace ? " workspace-workbench" : ""}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
           {showConnectionPage ? (
             <ConnectionPage
               activeConnectionId={activeProfile?.id ?? null}

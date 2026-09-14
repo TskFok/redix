@@ -568,19 +568,22 @@ input[type="number"] {
   overflow-y: auto;
 }
 
-.app-shell.app-shell-browser {
+.app-shell.app-shell-browser,
+.app-shell.app-shell-workbench {
   height: 100dvh;
   min-height: 0;
 }
 
-.workspace.workspace-browser {
+.workspace.workspace-browser,
+.workspace.workspace-workbench {
   display: flex;
   flex-direction: column;
   padding-bottom: 24px;
   overflow: hidden;
 }
 
-.workspace-browser > .workspace-context {
+.workspace-browser > .workspace-context,
+.workspace-workbench > .workspace-context {
   flex-shrink: 0;
 }
 
@@ -935,7 +938,7 @@ input[type="number"] {
 .connection-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: 20px;
 }
 
@@ -1145,6 +1148,7 @@ code {
   flex-direction: row;
   align-items: center;
   gap: 8px;
+  margin-top: auto;
   padding-top: 20px;
 }
 
@@ -3302,19 +3306,53 @@ input[type="checkbox"]:hover:not(:disabled) {
 
 /* Workbench */
 
+.workbench-page {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.workbench-page > :not(.workbench-layout) {
+  flex-shrink: 0;
+}
+
 .workbench-layout {
   display: grid;
   grid-template-columns: minmax(300px, 0.74fr) minmax(0, 1.26fr);
+  grid-template-rows: minmax(0, 1fr);
   align-items: stretch;
   gap: 12px;
-  min-height: 580px;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 0;
+  overflow: hidden;
 }
 
 .workbench-command-column {
-  display: grid;
+  display: flex;
   min-width: 0;
-  grid-template-rows: minmax(340px, 1fr) minmax(160px, auto);
+  flex-direction: column;
   gap: 12px;
+}
+
+.workbench-command-column,
+.workbench-result-panel {
+  position: relative;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.workbench-command-column > *,
+.workbench-result-panel > * {
+  flex-shrink: 0;
+}
+
+.workbench-command-panel {
+  flex-grow: 1;
 }
 
 .workbench-command-panel,
@@ -3439,10 +3477,8 @@ input[type="checkbox"]:hover:not(:disabled) {
 .workbench-history-list {
   display: grid;
   gap: 4px;
-  max-height: 220px;
   margin: 14px -4px 0;
   padding: 0 4px;
-  overflow-y: auto;
   list-style: none;
 }
 
@@ -3484,10 +3520,6 @@ input[type="checkbox"]:hover:not(:disabled) {
   font-size: 9px;
 }
 
-.workbench-result-panel {
-  min-height: 580px;
-}
-
 .command-result-actions {
   display: flex;
   align-items: end;
@@ -3512,10 +3544,8 @@ input[type="checkbox"]:hover:not(:disabled) {
 .command-batch-results {
   display: grid;
   gap: 10px;
-  max-height: 540px;
   margin: 18px 0 0;
   padding: 0 4px;
-  overflow: auto;
   list-style: none;
 }
 
@@ -3543,7 +3573,6 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 .command-batch-results .command-result-pre {
-  max-height: 260px;
   margin-top: 8px;
 }
 
@@ -3563,7 +3592,6 @@ input[type="checkbox"]:hover:not(:disabled) {
 }
 
 .command-result-pre {
-  max-height: 520px;
   margin: 0;
   padding: 13px;
   overflow: auto;
@@ -4381,13 +4409,15 @@ input[type="checkbox"]:hover:not(:disabled) {
     overflow: visible;
   }
 
-  .app-shell-browser .app-main {
+  .app-shell-browser .app-main,
+  .app-shell-workbench .app-main {
     min-height: 0;
     flex: 1 1 0;
     overflow: hidden;
   }
 
-  .app-shell-browser .app-navigation {
+  .app-shell-browser .app-navigation,
+  .app-shell-workbench .app-navigation {
     min-width: 0;
     flex: 1 1 auto;
   }
@@ -4509,20 +4539,13 @@ input[type="checkbox"]:hover:not(:disabled) {
     min-height: 0;
   }
 
-  .browser-layout {
+  .browser-layout,
+  .workbench-layout {
     grid-template-rows: repeat(2, minmax(0, 1fr));
   }
 
   .browser-panel-heading {
     flex-direction: row;
-  }
-
-  .workbench-result-panel {
-    min-height: 260px;
-  }
-
-  .workbench-command-column {
-    grid-template-rows: auto auto;
   }
 
   .command-form textarea {
