@@ -29,7 +29,7 @@ npm run check:non-cloud
 npm run test:release
 npm run test:frontend
 npm run test:rust
-npm run test:redis:local # 需要 redis-server；自动创建并清理隔离实例
+npm run test:redis:local # 需要 redis-server 7.4+（覆盖 Hash 字段 TTL）；自动创建并清理隔离实例
 npm run test:redis:cluster # 需要 redis-server 与 redis-cli；自动创建并清理隔离三主节点
 npm run test:redis:stack # 需要本机 Docker 与预先下载的 redis:8.4.5；隔离模块测试
 npm run build
