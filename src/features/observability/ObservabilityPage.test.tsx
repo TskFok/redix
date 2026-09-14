@@ -118,6 +118,97 @@ afterEach(() => {
 });
 
 describe("ObservabilityPage", () => {
+  it("Pub/Sub 中文输入法组合中的 Enter 不发送，完成输入后 Enter 正常发送", async () => {
+    render(<ObservabilityPage connectionId="local" />);
+    fireEvent.click(screen.getByRole("tab", { name: /Pub\/Sub/ }));
+    const messageInput = screen.getByRole("textbox", { name: "消息" });
+    fireEvent.compositionStart(messageInput);
+    fireEvent.change(messageInput, { target: { value: "中文消息" } });
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter", isComposing: true });
+    });
+
+    expect(publishPubSubMock).not.toHaveBeenCalled();
+    expect(messageInput).toHaveValue("中文消息");
+    expect(screen.queryByText(/消息已发送/)).not.toBeInTheDocument();
+
+    fireEvent.compositionEnd(messageInput);
+    await act(async () => {
+      fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter", isComposing: false });
+    });
+
+    expect(publishPubSubMock).toHaveBeenCalledExactlyOnceWith({
+      connection_id: "local",
+      channel: "events",
+      message: "中文消息",
+    });
+    expect(messageInput).toHaveValue("");
+    expect(screen.getByText(/消息已发送/)).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      module: "Pub/Sub",
+      tab: /Pub\/Sub/,
+      start: "开始订阅",
+      stop: "停止订阅",
+      search: "筛选消息",
+      empty: "没有匹配的消息",
+      export: "导出消息 JSON",
+      content: "保留这条频道消息",
+      event: "redix://pubsub/message",
+      payload: {
+        connection_id: "local",
+        session_id: "session-1",
+        channel: "events",
+        pattern: null,
+        message: "保留这条频道消息",
+        received_at_ms: 1,
+      },
+    },
+    {
+      module: "Profiler",
+      tab: /Profiler/,
+      start: "开始监控",
+      stop: "停止监控",
+      search: "筛选命令",
+      empty: "没有匹配的命令",
+      export: "导出 Profiler LOG",
+      content: '"GET" "retained-key"',
+      event: "redix://profiler/event",
+      payload: {
+        connection_id: "local",
+        session_id: "profiler-1",
+        time: "1710000000.123456",
+        database: 2,
+        source: "127.0.0.1:6379",
+        args: ["GET", "retained-key"],
+        received_at_ms: 1,
+      },
+    },
+  ])("$module 筛选无匹配时保留缓存，清空搜索后恢复内容", async (scenario) => {
+    render(<ObservabilityPage connectionId="local" />);
+    fireEvent.click(screen.getByRole("tab", { name: scenario.tab }));
+    fireEvent.click(screen.getByRole("button", { name: scenario.start }));
+    await screen.findByRole("button", { name: scenario.stop });
+    await act(async () => {
+      listeners.get(scenario.event)?.({ payload: scenario.payload });
+    });
+    expect(screen.getByText(scenario.content)).toBeInTheDocument();
+
+    const searchInput = screen.getByRole("textbox", { name: scenario.search });
+    fireEvent.change(searchInput, { target: { value: "no-match-for-this-query" } });
+    expect(screen.getByText(scenario.empty)).toBeInTheDocument();
+    expect(screen.queryByText(scenario.content)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: scenario.export })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "清空视图" })).toBeEnabled();
+
+    fireEvent.change(searchInput, { target: { value: "" } });
+    expect(screen.queryByText(scenario.empty)).not.toBeInTheDocument();
+    expect(screen.getByText(scenario.content)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: scenario.export })).toBeEnabled();
+  });
+
   it("消息发送反馈自动消失，订阅状态继续显示", async () => {
     render(<ObservabilityPage connectionId="local" />);
     fireEvent.click(screen.getByRole("tab", { name: /Pub\/Sub/ }));

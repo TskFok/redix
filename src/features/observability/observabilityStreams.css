@@ -1,0 +1,650 @@
+.observability-streams.observability-content {
+  container: observability-streams / inline-size;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 0 0;
+  grid-template-rows: auto minmax(280px, 1fr);
+  gap: 16px;
+  font-size: 12px;
+}
+
+.observability-streams .stream-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.observability-streams .stream-field-hint {
+  margin-left: 4px;
+  color: var(--color-muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.observability-streams .observability-panel {
+  min-width: 0;
+  padding: 16px;
+  box-shadow: none;
+}
+
+.observability-streams .button {
+  min-height: 34px;
+  flex-shrink: 0;
+  gap: 6px;
+  padding: 7px 11px;
+  white-space: nowrap;
+}
+
+.observability-streams .button-secondary {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+
+.observability-streams .button-secondary:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-raised);
+}
+
+.observability-streams .button:hover:not(:disabled) {
+  box-shadow: none;
+}
+
+.observability-streams .button svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.observability-streams .pubsub-setup-grid {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 16px;
+}
+
+.observability-streams .stream-setup-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.observability-streams .stream-panel-heading,
+.observability-streams .stream-monitor-heading,
+.observability-streams .stream-feed-heading {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.observability-streams .stream-heading-copy {
+  min-width: 0;
+}
+
+.observability-streams .stream-heading-copy h3,
+.observability-streams .stream-feed-title h3 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.observability-streams .stream-heading-copy p {
+  margin: 4px 0 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.observability-streams .stream-subscription-summary {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.observability-page .observability-streams .observability-status[role="status"] {
+  min-height: 26px;
+  flex-shrink: 0;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.observability-page .observability-streams .observability-status-running[role="status"] {
+  border-color: var(--color-success-border);
+  color: var(--color-success-text);
+  background: var(--color-success-surface);
+}
+
+.observability-page .observability-streams .observability-status-stopped[role="status"] {
+  border-color: var(--color-border);
+  background: var(--color-surface-raised);
+}
+
+.observability-streams .observability-status-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+}
+
+.observability-streams .stream-command-tag {
+  flex-shrink: 0;
+  padding: 4px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.observability-streams .stream-subscribe-form,
+.observability-streams .stream-publish-form {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.observability-streams .field > span {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.observability-streams .field input:not([type="checkbox"]),
+.observability-streams .field textarea {
+  min-width: 0;
+  min-height: 34px;
+  padding: 7px 10px;
+  background: var(--color-surface-interactive);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.observability-streams .stream-subscribe-form > .field {
+  flex: 1;
+}
+
+.observability-streams .stream-subscribe-form textarea {
+  height: 68px;
+  min-height: 68px;
+  flex: 1;
+  resize: vertical;
+}
+
+.observability-streams .field small {
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.observability-streams .stream-form-footer {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: auto;
+}
+
+.observability-streams .checkbox-field {
+  min-width: 0;
+  gap: 7px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.observability-streams .checkbox-field input {
+  flex-shrink: 0;
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+.observability-streams .stream-publish-message-row {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.observability-streams .stream-publish-message-row > .field {
+  flex: 1;
+}
+
+.observability-streams .stream-session-summary {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.observability-streams .stream-monitor-heading {
+  align-items: center;
+}
+
+.observability-streams .stream-heading-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  place-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  background: var(--color-surface-raised);
+}
+
+.observability-streams .stream-heading-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.observability-streams .stream-monitor-heading > .stream-heading-copy {
+  flex: 1;
+}
+
+.observability-streams .stream-monitor-actions,
+.observability-streams .stream-feed-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.observability-streams .stream-monitor-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 0;
+  border-left: 2px solid var(--color-border-strong);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--color-muted);
+  background: var(--color-surface-raised);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.observability-streams .stream-monitor-notice > svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.observability-streams .stream-monitor-notice p {
+  margin: 0;
+}
+
+.observability-streams .stream-monitor-panel > .stream-session-summary {
+  margin-top: 10px;
+}
+
+.observability-streams .stream-feed-panel {
+  display: flex;
+  min-height: min-content;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+
+.observability-streams .stream-feed-panel > * {
+  flex-shrink: 0;
+}
+
+.observability-streams .stream-feed-heading {
+  align-items: center;
+  padding: 16px 16px 12px;
+}
+
+.observability-streams .stream-feed-title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.observability-streams .stream-count {
+  min-width: 22px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  background: var(--color-surface-raised);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.observability-streams .stream-feed-order {
+  color: var(--color-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.observability-streams .stream-feed-toolbar {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 16px;
+  padding: 0 16px 14px;
+}
+
+.observability-streams .stream-search {
+  display: flex;
+  min-width: 160px;
+  max-width: 420px;
+  flex: 1 1 240px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.observability-streams .stream-search-label {
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.observability-streams .stream-search-input {
+  position: relative;
+  min-width: 0;
+}
+
+.observability-streams .stream-search-input > svg {
+  position: absolute;
+  top: 50%;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: var(--color-muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.observability-streams .stream-search-input > input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 7px 10px 7px 32px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface-interactive);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.observability-streams .stream-search-input > input::placeholder {
+  color: var(--color-placeholder);
+}
+
+.observability-streams .stream-search-input > input:hover {
+  border-color: var(--color-muted);
+}
+
+.observability-streams .stream-search-input > input:focus-visible {
+  border-color: var(--color-focus);
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.observability-page .observability-streams .stream-feed-notice[role="status"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 16px 12px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  background: var(--color-surface-raised);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.observability-streams .stream-table-wrap {
+  height: 0;
+  min-height: 160px;
+  max-height: 520px;
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  border-top: 1px solid var(--color-border);
+}
+
+.observability-streams .stream-table {
+  width: 100%;
+  min-width: 560px;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.observability-streams .stream-time-column {
+  width: 124px;
+}
+
+.observability-streams .profiler-event-table {
+  min-width: 640px;
+}
+
+.observability-streams .profiler-event-table .stream-time-column {
+  width: 176px;
+}
+
+.observability-streams .stream-channel-column {
+  width: 20%;
+}
+
+.observability-streams .stream-pattern-column {
+  width: 16%;
+}
+
+.observability-streams .stream-database-column {
+  width: 76px;
+}
+
+.observability-streams .stream-source-column {
+  width: 22%;
+}
+
+.observability-streams .stream-table th,
+.observability-streams .stream-table td {
+  max-width: none;
+  padding: 11px 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.observability-streams .stream-table th:first-child,
+.observability-streams .stream-table td:first-child {
+  padding-left: 16px;
+}
+
+.observability-streams .stream-table th:last-child,
+.observability-streams .stream-table td:last-child {
+  padding-right: 16px;
+}
+
+.observability-streams .stream-table thead th {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  padding-top: 9px;
+  padding-bottom: 9px;
+  background: var(--color-surface-raised);
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.observability-streams .stream-table tbody tr:hover {
+  background: var(--color-surface-interactive);
+}
+
+.observability-streams .stream-table .observability-mono {
+  font-size: 11px;
+  white-space: normal;
+}
+
+.observability-streams .stream-table td:first-child {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.observability-streams .observability-command,
+.observability-streams .observability-message {
+  max-width: none;
+  overflow: visible;
+  color: var(--color-text-code);
+  font-size: 11px;
+  line-height: 1.6;
+  text-overflow: clip;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.observability-streams .stream-database-tag,
+.observability-streams .stream-pattern-tag {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  color: var(--color-muted);
+  background: var(--color-surface-raised);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.observability-streams .stream-empty-state {
+  display: flex;
+  min-height: 150px;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 28px 20px;
+  border-top: 1px solid var(--color-border);
+  text-align: center;
+}
+
+.observability-streams .stream-empty-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 2px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  color: var(--color-muted);
+  background: var(--color-surface-raised);
+}
+
+.observability-streams .stream-empty-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.observability-streams .stream-empty-state h4 {
+  margin: 0;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.observability-streams .stream-empty-state p {
+  max-width: 44ch;
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.observability-streams .stream-feed-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--color-border);
+  color: var(--color-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+@container observability-streams (max-width: 719px) {
+  .observability-streams .pubsub-setup-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .observability-streams .stream-monitor-heading {
+    flex-wrap: wrap;
+  }
+
+  .observability-streams .stream-monitor-actions {
+    margin-left: auto;
+  }
+
+  .observability-streams .stream-search {
+    max-width: none;
+  }
+}
+
+@container observability-streams (max-width: 479px) {
+  .observability-streams .stream-monitor-heading > .stream-heading-copy {
+    flex-basis: calc(100% - 48px);
+  }
+
+  .observability-streams .stream-search {
+    min-width: 0;
+    flex-basis: 100%;
+  }
+
+  .observability-streams .stream-feed-actions {
+    width: 100%;
+  }
+
+  .observability-streams .stream-time-column {
+    width: 105px;
+  }
+
+  .observability-streams .stream-database-column {
+    width: 54px;
+  }
+
+  .observability-streams .stream-table th,
+  .observability-streams .stream-table td {
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+
+  .observability-streams .stream-form-footer {
+    flex-wrap: wrap;
+  }
+}

@@ -2,7 +2,7 @@ import Select from "../../components/Select";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 
 import {
@@ -40,6 +40,7 @@ import {
 import { buildProfilerExport, buildPubSubExport, buildSlowLogExport, downloadObservabilityExport, filterProfilerEvents, filterPubSubMessages, filterSlowLogs, type ObservabilityExport } from "./observabilityExport";
 import { usePausedFeed } from "./usePausedFeed";
 import "./observabilityExtras.css";
+import "./observabilityStreams.css";
 
 const PUBSUB_MESSAGE_EVENT = "redix://pubsub/message";
 const PUBSUB_STATUS_EVENT = "redix://pubsub/status";
@@ -727,125 +728,142 @@ function PubSubPanel({
   const feed = usePausedFeed(messages, onClearMessages);
   const filteredMessages = filterPubSubMessages(feed.displayed, query);
   return (
-    <div className="observability-content">
-      <section className="observability-panel" aria-labelledby="pubsub-title">
-        <div className="observability-panel-heading">
-          <div>
-            <p className="eyebrow">SUBSCRIBE / PSUBSCRIBE</p>
-            <h3 id="pubsub-title">消息订阅</h3>
+    <div className="observability-content observability-streams pubsub-workspace">
+      <div className="pubsub-setup-grid">
+        <section className="observability-panel stream-setup-panel" aria-labelledby="pubsub-title">
+          <div className="stream-panel-heading">
+            <div className="stream-heading-copy">
+              <h3 id="pubsub-title">消息订阅</h3>
+              <p className="stream-subscription-summary" title={activeSession ? `会话 ${activeSession.session_id} · ${activeSession.topics.map((topic) => topic.name).join("、")}` : undefined}>
+                {activeSession ? `已订阅 ${activeSession.topics.length} 个${pattern ? "模式" : "频道"} · ${activeSession.topics.map((topic) => topic.name).join("、")}` : "订阅频道，实时接收消息。"}
+              </p>
+            </div>
+            <span className={`observability-status observability-status-${status}`} role="status">
+              <span className="observability-status-dot" aria-hidden="true" />
+              {activeSession ? "订阅中" : status === "stopped" ? "已停止" : "未启动"}
+            </span>
           </div>
-          <span className={`observability-status observability-status-${status}`} role="status">
-            <span className="observability-status-dot" aria-hidden="true" />
-            {activeSession ? "订阅中" : status === "stopped" ? "已停止" : "未启动"}
-          </span>
-        </div>
-        <div className="pubsub-subscribe-grid">
-          <label className="field">
-            <span>频道或模式（每行一个）</span>
-            <textarea
-              autoCapitalize="off"
-              autoCorrect="off"
-              aria-label="频道或模式"
-              value={topicText}
-              onChange={(event) => onTopicTextChange(event.target.value)}
-              disabled={busy || activeSession !== null}
-              rows={4}
-            />
-            <small>模式订阅使用 PSUBSCRIBE，例如 user:*。</small>
-          </label>
-          <div className="pubsub-subscribe-actions">
-            <label className="checkbox-field">
+          <div className="stream-subscribe-form">
+            <label className="field">
+              <span>频道或模式 <span className="stream-field-hint">每行一个</span></span>
+              <textarea
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-label="频道或模式"
+                value={topicText}
+                onChange={(event) => onTopicTextChange(event.target.value)}
+                disabled={busy || activeSession !== null}
+                rows={2}
+                placeholder={pattern ? "user:*\norder:*" : "events\nnotifications"}
+              />
+            </label>
+            <div className="stream-form-footer">
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  aria-label="按模式订阅"
+                  checked={pattern}
+                  onChange={(event) => onPatternChange(event.target.checked)}
+                  disabled={busy || activeSession !== null}
+                />
+                <span>按模式订阅</span>
+                <code className="stream-field-hint">user:*</code>
+              </label>
+              {activeSession ? (
+                <button type="button" className="button button-danger" onClick={onStop} disabled={busy}>
+                  <StreamIcon name="stop" />{busy ? "停止中…" : "停止订阅"}
+                </button>
+              ) : (
+                <button type="button" className="button button-primary" onClick={onStart} disabled={busy}>
+                  <StreamIcon name="play" />{busy ? "启动中…" : "开始订阅"}
+                </button>
+              )}
+            </div>
+          </div>
+        </section>
+
+        <section className="observability-panel stream-setup-panel" aria-labelledby="pubsub-publish-title">
+          <div className="stream-panel-heading">
+            <div className="stream-heading-copy">
+              <h3 id="pubsub-publish-title">发送消息</h3>
+              <p>向指定频道发布一条消息。</p>
+            </div>
+            <span className="stream-command-tag">PUBLISH</span>
+          </div>
+          <div className="stream-publish-form">
+            <label className="field">
+              <span>频道</span>
               <input
                 autoCapitalize="off"
                 autoCorrect="off"
-                type="checkbox"
-                checked={pattern}
-                onChange={(event) => onPatternChange(event.target.checked)}
-                disabled={busy || activeSession !== null}
+                spellCheck={false}
+                value={publishChannel}
+                onChange={(event) => onPublishChannelChange(event.target.value)}
+                disabled={busy}
+                placeholder="例如 events"
               />
-              <span>按模式订阅</span>
             </label>
-            {activeSession ? (
-              <button type="button" className="button button-danger" onClick={onStop} disabled={busy}>
-                {busy ? "停止中…" : "停止订阅"}
+            <div className="stream-publish-message-row">
+              <label className="field">
+                <span>消息</span>
+                <input
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  value={publishMessage}
+                  onChange={(event) => onPublishMessageChange(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      onPublish();
+                    }
+                  }}
+                  disabled={busy}
+                  placeholder="输入消息，按 Enter 发送"
+                />
+              </label>
+              <button type="button" className="button button-secondary" onClick={onPublish} disabled={busy}>
+                <StreamIcon name="send" />发送
               </button>
-            ) : (
-              <button type="button" className="button button-primary" onClick={onStart} disabled={busy}>
-                {busy ? "启动中…" : "开始订阅"}
-              </button>
-            )}
+            </div>
           </div>
-        </div>
-        {activeSession ? (
-          <p className="observability-session-note">
-            会话 {activeSession.session_id} · {activeSession.topics.length} 个订阅项
-          </p>
-        ) : null}
-      </section>
+          {publishFeedback ? <Toast kind="success" message={publishFeedback} resetKey={publishFeedbackToken} /> : null}
+        </section>
+      </div>
 
-      <section className="observability-panel" aria-labelledby="pubsub-publish-title">
-        <div className="observability-panel-heading">
-          <div>
-            <p className="eyebrow">PUBLISH</p>
-            <h3 id="pubsub-publish-title">发送消息</h3>
-          </div>
-        </div>
-        <div className="pubsub-publish-grid">
-          <label className="field">
-            <span>频道</span>
-            <input
-              autoCapitalize="off"
-              autoCorrect="off"
-              value={publishChannel}
-              onChange={(event) => onPublishChannelChange(event.target.value)}
-              disabled={busy}
-            />
-          </label>
-          <label className="field pubsub-message-field">
-            <span>消息</span>
-            <input
-              autoCapitalize="off"
-              autoCorrect="off"
-              value={publishMessage}
-              onChange={(event) => onPublishMessageChange(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  onPublish();
-                }
-              }}
-              disabled={busy}
-            />
-          </label>
-          <button type="button" className="button button-secondary" onClick={onPublish} disabled={busy}>
-            发送
-          </button>
-        </div>
-        {publishFeedback ? <Toast kind="success" message={publishFeedback} resetKey={publishFeedbackToken} /> : null}
-      </section>
-
-      <section className="observability-panel" aria-labelledby="pubsub-message-list-title">
-        <div className="observability-panel-heading">
-          <div>
-            <p className="eyebrow">LIVE MESSAGES</p>
+      <section className="observability-panel stream-feed-panel" aria-labelledby="pubsub-message-list-title">
+        <div className="stream-feed-heading">
+          <div className="stream-feed-title">
             <h3 id="pubsub-message-list-title">消息流</h3>
+            <span className="stream-count">{filteredMessages.length}</span>
           </div>
-          <div className="observability-toolbar">
-            <span className="observability-config-summary">{messages.length} / 5000 条 · 显示 {filteredMessages.length} 条</span>
-            <button type="button" className="button button-quiet button-compact" onClick={feed.toggle}>{feed.paused ? "恢复显示" : "暂停显示"}</button>
-            <ExportButton label="导出消息 JSON" disabled={filteredMessages.length === 0} output={() => buildPubSubExport(feed.displayed, query)} />
-            <button type="button" className="button button-quiet button-compact" onClick={feed.clear} disabled={messages.length === 0 && feed.displayed.length === 0}>
-              清空视图
-            </button>
-          </div>
+          <span className="stream-feed-order">最新在前</span>
         </div>
-        <label className="field"><span>筛选消息</span><input autoCapitalize="off" autoCorrect="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="频道、模式或消息内容" /></label>
-        <p className="panel-hint">{feed.paused ? "已暂停显示；后台继续接收，恢复后显示最新缓存。" : "缓存最多保留最新 5000 条消息。"} 仅导出当前筛选的可见快照，消息可能含敏感数据；不会自动保存。</p>
+        <StreamToolbar
+          query={query}
+          onQueryChange={setQuery}
+          searchLabel="筛选消息"
+          placeholder="频道、模式或消息内容"
+          paused={feed.paused}
+          onToggle={feed.toggle}
+          onClear={feed.clear}
+          clearDisabled={messages.length === 0 && feed.displayed.length === 0}
+          exportLabel="导出消息 JSON"
+          exportDisabled={filteredMessages.length === 0}
+          output={() => buildPubSubExport(feed.displayed, query)}
+        />
+        {feed.paused && <p className="stream-feed-notice" role="status"><StreamIcon name="pause" />已暂停显示；后台继续接收，恢复后显示最新缓存。</p>}
         {filteredMessages.length === 0 ? (
-          <p className="empty-state-compact">启动订阅后，收到的频道消息会显示在这里。</p>
+          <StreamEmptyState
+            icon={query.trim() ? "search" : "messages"}
+            title={query.trim() ? "没有匹配的消息" : activeSession ? "等待频道消息" : "尚未接收消息"}
+            description={query.trim() ? "试试其他关键词，或清空筛选条件。" : activeSession ? "收到消息后将自动显示在这里，也可以在上方发送一条消息。" : "在上方填写频道并开始订阅，消息将实时显示在这里。"}
+          />
         ) : (
-          <div className="observability-table-wrap pubsub-message-table-wrap">
-            <table className="observability-table pubsub-message-table">
+          <div className="observability-table-wrap stream-table-wrap">
+            <table className="observability-table stream-table pubsub-message-table" aria-label="频道消息">
+              <colgroup><col className="stream-time-column" /><col className="stream-channel-column" /><col className="stream-pattern-column" /><col /></colgroup>
               <thead>
                 <tr>
                   <th scope="col">时间</th>
@@ -859,16 +877,18 @@ function PubSubPanel({
                   <tr key={`${message.received_at_ms}-${message.channel}-${index}`}>
                     <td className="observability-mono">{formatPubSubTime(message.received_at_ms)}</td>
                     <td className="observability-mono">{message.channel}</td>
-                    <td>{message.pattern || "直接订阅"}</td>
-                    <td>
-                      <code className="observability-message">{message.message}</code>
-                    </td>
+                    <td><span className="stream-pattern-tag">{message.pattern || "直接订阅"}</span></td>
+                    <td><code className="observability-message">{message.message}</code></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+        <div className="stream-feed-footer">
+          <span>缓存 {messages.length.toLocaleString()} / 5,000 条 · 显示 {filteredMessages.length.toLocaleString()} 条</span>
+          <span>仅导出筛选后的可见消息；可能含敏感数据，不会自动保存。</span>
+        </div>
       </section>
     </div>
   );
@@ -899,69 +919,69 @@ function ProfilerPanel({
   const filteredEvents = filterProfilerEvents(feed.displayed, query);
 
   return (
-    <div className="observability-content">
-      <section className="observability-panel" aria-labelledby="profiler-title">
-        <div className="observability-panel-heading">
-          <div>
-            <p className="eyebrow">MONITOR</p>
+    <div className="observability-content observability-streams profiler-workspace">
+      <section className="observability-panel stream-monitor-panel" aria-labelledby="profiler-title">
+        <div className="stream-monitor-heading">
+          <span className="stream-heading-icon"><StreamIcon name="activity" /></span>
+          <div className="stream-heading-copy">
             <h3 id="profiler-title">实时命令监控</h3>
+            <p>实时查看当前实例的命令、来源与数据库。</p>
           </div>
-          <span className={`observability-status observability-status-${status}`} role="status">
-            <span className="observability-status-dot" aria-hidden="true" />
-            {running ? "监控中" : status === "stopped" ? "已停止" : "未启动"}
-          </span>
-        </div>
-        <p className="observability-warning" role="note">
-          MONITOR 会接收当前实例的全部命令，可能影响 Redis 性能；生产环境请谨慎使用。
-        </p>
-        <div className="profiler-controls">
-          <div>
-            <p className="panel-hint observability-panel-hint">
-              Profiler 只在当前页面保留实时事件，不会自动写入日志文件或持久化历史。命令参数可能包含敏感数据；仅在点击导出后保存本地文件。
-            </p>
-            {activeSession ? (
-              <p className="observability-session-note">会话 {activeSession.session_id}</p>
-            ) : null}
+          <div className="stream-monitor-actions">
+            <span className={`observability-status observability-status-${status}`} role="status">
+              <span className="observability-status-dot" aria-hidden="true" />
+              {running ? "监控中" : status === "stopped" ? "已停止" : "未启动"}
+            </span>
+            {running ? (
+              <button type="button" className="button button-danger" onClick={onStop} disabled={busy}>
+                <StreamIcon name="stop" />{busy ? "停止中…" : "停止监控"}
+              </button>
+            ) : (
+              <button type="button" className="button button-primary" onClick={onStart} disabled={busy}>
+                <StreamIcon name="play" />{busy ? "启动中…" : "开始监控"}
+              </button>
+            )}
           </div>
-          {running ? (
-            <button type="button" className="button button-danger" onClick={onStop} disabled={busy}>
-              {busy ? "停止中…" : "停止监控"}
-            </button>
-          ) : (
-            <button type="button" className="button button-primary" onClick={onStart} disabled={busy}>
-              {busy ? "启动中…" : "开始监控"}
-            </button>
-          )}
         </div>
+        <div className="stream-monitor-notice" role="note">
+          <StreamIcon name="info" />
+          <p>MONITOR 会接收当前实例的全部命令，可能影响 Redis 性能；生产环境请谨慎使用。</p>
+        </div>
+        {activeSession ? <p className="stream-session-summary" title={activeSession.session_id}>当前会话 · {activeSession.session_id}</p> : null}
       </section>
 
-      <section className="observability-panel" aria-labelledby="profiler-event-list-title">
-        <div className="observability-panel-heading">
-          <div>
-            <p className="eyebrow">LIVE COMMANDS</p>
+      <section className="observability-panel stream-feed-panel" aria-labelledby="profiler-event-list-title">
+        <div className="stream-feed-heading">
+          <div className="stream-feed-title">
             <h3 id="profiler-event-list-title">命令流</h3>
+            <span className="stream-count">{filteredEvents.length}</span>
           </div>
-          <div className="observability-toolbar">
-            <span className="observability-config-summary">{events.length} / 10000 条 · 显示 {filteredEvents.length} 条</span>
-            <button type="button" className="button button-quiet button-compact" onClick={feed.toggle}>{feed.paused ? "恢复显示" : "暂停显示"}</button>
-            <ExportButton label="导出 Profiler LOG" disabled={filteredEvents.length === 0} output={() => buildProfilerExport(feed.displayed, query)} />
-            <button
-              type="button"
-              className="button button-quiet button-compact"
-              onClick={feed.clear}
-              disabled={events.length === 0 && feed.displayed.length === 0}
-            >
-              清空视图
-            </button>
-          </div>
+          <span className="stream-feed-order">最新在前</span>
         </div>
-        <label className="field"><span>筛选命令</span><input autoCapitalize="off" autoCorrect="off" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="命令、来源或 DB 编号" /></label>
-        <p className="panel-hint">{feed.paused ? "已暂停显示；后台继续接收，MONITOR 仍在运行。恢复后显示最新缓存。" : "缓存最多保留最新 10000 条命令。"} 导出仅包含当前筛选的可见快照。</p>
+        <StreamToolbar
+          query={query}
+          onQueryChange={setQuery}
+          searchLabel="筛选命令"
+          placeholder="命令、来源或 DB 编号"
+          paused={feed.paused}
+          onToggle={feed.toggle}
+          onClear={feed.clear}
+          clearDisabled={events.length === 0 && feed.displayed.length === 0}
+          exportLabel="导出 Profiler LOG"
+          exportDisabled={filteredEvents.length === 0}
+          output={() => buildProfilerExport(feed.displayed, query)}
+        />
+        {feed.paused && <p className="stream-feed-notice" role="status"><StreamIcon name="pause" />已暂停显示；后台继续接收，MONITOR 仍在运行。恢复后显示最新缓存。</p>}
         {filteredEvents.length === 0 ? (
-          <p className="empty-state-compact">开始监控后，当前实例收到的命令会显示在这里。</p>
+          <StreamEmptyState
+            icon={query.trim() ? "search" : "activity"}
+            title={query.trim() ? "没有匹配的命令" : running ? "等待命令执行" : "尚未采集命令"}
+            description={query.trim() ? "试试其他关键词，或清空筛选条件。" : running ? "当前实例收到命令后，执行记录将自动显示在这里。" : "点击「开始监控」，查看当前实例的实时命令。"}
+          />
         ) : (
-          <div className="observability-table-wrap profiler-event-table-wrap">
-            <table className="observability-table profiler-event-table">
+          <div className="observability-table-wrap stream-table-wrap">
+            <table className="observability-table stream-table profiler-event-table" aria-label="实时命令">
+              <colgroup><col className="stream-time-column" /><col className="stream-database-column" /><col className="stream-source-column" /><col /></colgroup>
               <thead>
                 <tr>
                   <th scope="col">时间</th>
@@ -974,20 +994,85 @@ function ProfilerPanel({
                 {[...filteredEvents].reverse().map((event, index) => (
                   <tr key={`${event.received_at_ms}-${event.session_id}-${index}`}>
                     <td className="observability-mono">{formatProfilerTime(event.time)}</td>
-                    <td className="observability-mono">DB{event.database}</td>
+                    <td><span className="stream-database-tag">DB{event.database}</span></td>
                     <td className="observability-mono">{event.source}</td>
-                    <td>
-                      <code className="observability-command">
-                        {formatProfilerCommand(event.args)}
-                      </code>
-                    </td>
+                    <td><code className="observability-command">{formatProfilerCommand(event.args)}</code></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
+        <div className="stream-feed-footer">
+          <span>缓存 {events.length.toLocaleString()} / 10,000 条 · 显示 {filteredEvents.length.toLocaleString()} 条</span>
+          <span>仅导出筛选后的可见命令；参数可能含敏感数据，不会自动保存。</span>
+        </div>
       </section>
+    </div>
+  );
+}
+
+type StreamIconName = "play" | "stop" | "pause" | "send" | "search" | "download" | "clear" | "messages" | "activity" | "info";
+
+function StreamIcon({ name }: { name: StreamIconName }) {
+  const paths: Record<StreamIconName, ReactNode> = {
+    play: <path d="m8 5 11 7-11 7Z" />,
+    stop: <rect x="6" y="6" width="12" height="12" rx="1" />,
+    pause: <><path d="M8 5v14M16 5v14" /></>,
+    send: <><path d="m21 3-7 18-4-7-7-4Z" /><path d="m10 14 5-5" /></>,
+    search: <><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></>,
+    download: <><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" /></>,
+    clear: <><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5M14 11v5" /></>,
+    messages: <><path d="M20 11a7 7 0 0 1-7 7H8l-5 3V8a5 5 0 0 1 5-5h7a5 5 0 0 1 5 5Z" /><path d="M7 8h9M7 12h6" /></>,
+    activity: <path d="M3 12h4l3-8 4 16 3-8h4" />,
+    info: <><circle cx="12" cy="12" r="9" /><path d="M12 11v6M12 7v.01" /></>,
+  };
+  return <svg className="stream-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">{paths[name]}</svg>;
+}
+
+interface StreamToolbarProps {
+  query: string;
+  onQueryChange: (value: string) => void;
+  searchLabel: string;
+  placeholder: string;
+  paused: boolean;
+  onToggle: () => void;
+  onClear: () => void;
+  clearDisabled: boolean;
+  exportLabel: string;
+  exportDisabled: boolean;
+  output: () => ObservabilityExport;
+}
+
+function StreamToolbar({ query, onQueryChange, searchLabel, placeholder, paused, onToggle, onClear, clearDisabled, exportLabel, exportDisabled, output }: StreamToolbarProps) {
+  return (
+    <div className="stream-feed-toolbar">
+      <label className="stream-search">
+        <span className="stream-search-label">{searchLabel}</span>
+        <span className="stream-search-input">
+          <StreamIcon name="search" />
+          <input autoCapitalize="off" autoCorrect="off" spellCheck={false} value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder={placeholder} />
+        </span>
+      </label>
+      <div className="stream-feed-actions">
+        <button type="button" className="button button-secondary button-compact" onClick={onToggle} aria-pressed={paused}>
+          <StreamIcon name={paused ? "play" : "pause"} />{paused ? "恢复显示" : "暂停显示"}
+        </button>
+        <ExportButton label={exportLabel} disabled={exportDisabled} output={output} icon />
+        <button type="button" className="button button-quiet button-compact" onClick={onClear} disabled={clearDisabled}>
+          <StreamIcon name="clear" />清空视图
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StreamEmptyState({ icon, title, description }: { icon: StreamIconName; title: string; description: string }) {
+  return (
+    <div className="stream-empty-state">
+      <span className="stream-empty-icon"><StreamIcon name={icon} /></span>
+      <h4>{title}</h4>
+      <p>{description}</p>
     </div>
   );
 }
@@ -999,13 +1084,13 @@ function createSessionId(prefix = "pubsub"): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function ExportButton({ label, disabled, output }: { label: string; disabled: boolean; output: () => ObservabilityExport }) {
+function ExportButton({ label, disabled, output, icon = false }: { label: string; disabled: boolean; output: () => ObservabilityExport; icon?: boolean }) {
   const [error, setError, errorToken] = useFeedbackState(false);
   return <>
     <button type="button" className="button button-quiet button-compact" disabled={disabled} onClick={() => {
       setError(false);
       try { downloadObservabilityExport(output()); } catch { setError(true); }
-    }}>{label}</button>
+    }}>{icon && <StreamIcon name="download" />}{label}</button>
     {error ? <Toast kind="error" message="无法下载文件，请重试。" resetKey={errorToken} onClose={() => setError(false)} /> : null}
   </>;
 }
