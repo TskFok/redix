@@ -4105,14 +4105,33 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
                             .unwrap_or_default()
                             .to_owned(),
                     );
-                    let Ok(mut stream) = start.into_stream(config).await else {
+                    let Ok(stream) = start.into_stream(config).await else {
                         return;
                     };
-                    let mut buffer = [0_u8; 4096];
+                    let mut stream = BufReader::new(stream);
                     loop {
-                        match stream.read(&mut buffer).await {
-                            Ok(0) | Err(_) => return,
-                            Ok(_) => stream.write_all(response.as_bytes()).await.unwrap(),
+                        let mut line = String::new();
+                        if !matches!(stream.read_line(&mut line).await, Ok(size) if size > 0) {
+                            return;
+                        }
+                        let count: usize = line.trim().strip_prefix('*').unwrap().parse().unwrap();
+                        let mut args = Vec::with_capacity(count);
+                        for _ in 0..count {
+                            line.clear();
+                            stream.read_line(&mut line).await.unwrap();
+                            let length: usize =
+                                line.trim().strip_prefix('$').unwrap().parse().unwrap();
+                            let mut data = vec![0; length + 2];
+                            stream.read_exact(&mut data).await.unwrap();
+                            args.push(data[..length].to_vec());
+                        }
+                        let reply = if args.first().map(Vec::as_slice) == Some(b"PING") {
+                            "+PONG\r\n"
+                        } else {
+                            &response
+                        };
+                        if stream.get_mut().write_all(reply.as_bytes()).await.is_err() {
+                            return;
                         }
                     }
                 });

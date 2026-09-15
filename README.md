@@ -87,7 +87,7 @@ Redis Cloud、Azure Managed Redis、RDI、AI/Copilot、Telemetry/Analytics、远
 - Workbench 支持离线模块命令帮助、当前光标行补全、`#`/`//` 注释行、嵌套结果树/表格，以及按连接删除单条或清空历史。敏感命令继续不写历史，包括被引号包围或转义的命令名。
 - Search 可显式开启文档字段结果；默认键名模式兼容旧行为。支持 RESP2/RESP3 回复和过期文档空内容；字段、文档、深度、单页和总响应均有限额，超限返回固定错误。
 - Sentinel 配置种子节点、master name 和独立认证，支持失败种子回退及主节点 ROLE 校验；重新连接或切库时重新发现。正在运行的会话不会无缝迁移到新的主节点。Sentinel 密码只存系统钥匙串，普通导出不含密码。
-- SSH 使用跨平台 `ssh2` transport，支持 Agent、Password、内存 PrivateKey 和本机 identity file；必须用 known_hosts 严格验证主机指纹，未知或变化的主机密钥失败。支持 Standalone/Sentinel 与 TLS 组合，并保留原目标 host 作为 TLS SNI；Cluster+SSH 禁用。本轮只在 macOS 跑过自动化测试，不能据 CI 配置宣称 Windows/Linux 或真实 sshd 已通过。
+- SSH 使用跨平台 `ssh2` transport，支持 Agent、Password、内存 PrivateKey 和本机 identity file；必须用 known_hosts 严格验证主机指纹，未知或变化的主机密钥失败。支持 Standalone/Sentinel 与 TLS 组合，并保留原目标 host 作为 TLS SNI；Cluster+SSH 禁用。SSH 每 15 秒发送保活；隧道失效时，新的 Redis 连接可自动重建隧道，并合并同一客户端的并发恢复请求。恢复仅重试连接初始化，不重放业务命令或恢复已有 CLI 事务、订阅及 MONITOR 会话。已在 macOS 验证自动化测试，以及真实 sshd 下的保活、闲置访问和中断后首次访问恢复；Windows/Linux 尚未验证。
 - 大集合和 Stream 详情直接进入分页端点；Hash/List/Set/Sorted Set 原位编辑保留未加载数据与 TTL，键消失或类型变化时拒绝写入；Stream 读写保留 Consumer Group 和 TTL。
 - Search 增加受限聚合查询面板，不接受任意聚合管道；Database Analysis 增加显式本机历史和相同扫描参数比较，报告可能包含键名且不自动保存。
 - Standalone/Sentinel CLI 通过专用持久 socket 保留多轮 MULTI/EXEC、WATCH 和 SELECT 状态，不影响 Browser 的数据库。Cluster CLI 使用共享路由池，只支持普通无会话状态命令；事务、数据库选择、认证/协议切换、订阅、复制、连接模式和 `SCRIPT DEBUG` 等 socket 状态命令会在发送前稳定拒绝，Workbench 的 single/batch 采用相同门控。关闭、离开页面或主连接切库会清理 CLI；每条命令超时 5 秒后断开且不重试。

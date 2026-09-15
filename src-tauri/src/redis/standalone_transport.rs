@@ -18,6 +18,68 @@ pub(crate) trait RedisStream: AsyncRead + AsyncWrite {}
 impl<T> RedisStream for T where T: AsyncRead + AsyncWrite {}
 pub(crate) type BoxedRedisStream = Pin<Box<dyn RedisStream + Send + Sync>>;
 
+struct TunnelRoute {
+    endpoint: ConnectionEndpoint,
+    forward: Option<Arc<SshForward>>,
+}
+
+impl TunnelRoute {
+    fn ssh(forward: Arc<SshForward>) -> Self {
+        Self {
+            endpoint: forward.local_endpoint(),
+            forward: Some(forward),
+        }
+    }
+
+    fn retain_forward(self, stream: BoxedRedisStream) -> BoxedRedisStream {
+        Box::pin(ForwardedStream {
+            stream,
+            _forward: self.forward,
+        })
+    }
+}
+
+// Retain the exact forward used by a socket, so recovery does not tear down
+// unrelated connections still using the previous tunnel (including TLS streams).
+struct ForwardedStream {
+    stream: BoxedRedisStream,
+    _forward: Option<Arc<SshForward>>,
+}
+
+impl AsyncRead for ForwardedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.stream.as_mut().poll_read(cx, buffer)
+    }
+}
+
+impl AsyncWrite for ForwardedStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buffer: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        self.stream.as_mut().poll_write(cx, buffer)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.stream.as_mut().poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        self.stream.as_mut().poll_shutdown(cx)
+    }
+}
+
 #[derive(Clone)]
 pub struct ManagedMultiplexedConnection {
     connection: redis::aio::MultiplexedConnection,
@@ -132,7 +194,87 @@ pub struct TunneledClient {
 #[derive(Clone)]
 enum TunnelLifetime {
     Ssh(Arc<SshForward>),
+    Recoverable(Arc<RecoverableSshTunnel>),
     Guard(Arc<dyn Send + Sync>),
+}
+
+type ReconnectSsh = dyn Fn() -> futures_util::future::BoxFuture<'static, Result<Arc<SshForward>, AppError>>
+    + Send
+    + Sync;
+
+struct RecoverableSshTunnel {
+    state: tokio::sync::Mutex<SshTunnelState>,
+    reconnect: Box<ReconnectSsh>,
+}
+
+struct SshTunnelState {
+    forward: Arc<SshForward>,
+    retry_after: Option<std::time::Instant>,
+}
+
+impl RecoverableSshTunnel {
+    async fn recover(&self, failed: &Arc<SshForward>) -> Result<Arc<SshForward>, AppError> {
+        // All client clones share this gate. A request that failed on an older
+        // forward reuses the replacement published by the first recovery.
+        let mut state = self.state.lock().await;
+        if !Arc::ptr_eq(&state.forward, failed) {
+            return Ok(state.forward.clone());
+        }
+        if state
+            .retry_after
+            .is_some_and(|retry| std::time::Instant::now() < retry)
+        {
+            return Err(AppError::SshTunnelFailed);
+        }
+        state.retry_after = Some(std::time::Instant::now() + Duration::from_secs(1));
+        match (self.reconnect)().await {
+            Ok(forward) => {
+                state.forward = forward.clone();
+                state.retry_after = None;
+                Ok(forward)
+            }
+            Err(error) => {
+                state.retry_after = Some(std::time::Instant::now() + Duration::from_secs(1));
+                Err(error)
+            }
+        }
+    }
+}
+
+fn can_recover_ssh(error: AppError) -> bool {
+    matches!(
+        error,
+        AppError::ConnectionFailed
+            | AppError::SshTunnelFailed
+            | AppError::ConnectionDiagnostic(
+                ConnectionFailureReason::Refused
+                    | ConnectionFailureReason::Timeout
+                    | ConnectionFailureReason::DnsResolution
+                    | ConnectionFailureReason::NetworkUnreachable
+                    | ConnectionFailureReason::Closed
+                    | ConnectionFailureReason::TlsTimeout
+            )
+    )
+}
+
+fn check_connection_probe(result: redis::RedisResult<redis::Value>) -> Result<(), AppError> {
+    // PubSub returns server errors as Value::ServerError; query_async extracts
+    // them automatically. Normalize both paths before interpreting the probe.
+    let result = result
+        .and_then(redis::Value::extract_error)
+        .and_then(|value| redis::from_redis_value::<String>(value).map_err(Into::into));
+    match result {
+        Ok(pong) if pong == "PONG" => Ok(()),
+        // A valid NOPERM reply also proves the tunnel reached Redis. In particular,
+        // Sentinel credentials may allow discovery commands without allowing PING.
+        Err(error) if error.kind() == redis::ErrorKind::Server(redis::ServerErrorKind::NoPerm) => {
+            Ok(())
+        }
+        Err(error) => Err(map_connection_error(error)),
+        Ok(_) => Err(AppError::ConnectionDiagnostic(
+            ConnectionFailureReason::Protocol,
+        )),
+    }
 }
 
 impl TunneledClient {
@@ -163,12 +305,21 @@ impl TunneledClient {
         transport: &SshTransport,
     ) -> Result<Self, AppError> {
         let forward = transport.forward(&original_endpoint).await?;
-        Ok(Self::from_ssh_forward(
-            redis_info,
-            original_endpoint,
-            tls,
-            forward,
-        ))
+        let mut client =
+            Self::from_ssh_forward(redis_info, original_endpoint.clone(), tls, forward.clone());
+        let transport = transport.clone();
+        client._forward = TunnelLifetime::Recoverable(Arc::new(RecoverableSshTunnel {
+            state: tokio::sync::Mutex::new(SshTunnelState {
+                forward,
+                retry_after: None,
+            }),
+            reconnect: Box::new(move || {
+                let transport = transport.clone();
+                let target = original_endpoint.clone();
+                Box::pin(async move { transport.reconnect().await?.forward(&target).await })
+            }),
+        }));
+        Ok(client)
     }
 
     #[allow(dead_code)]
@@ -187,19 +338,47 @@ impl TunneledClient {
         }
     }
 
-    async fn open_stream(&self) -> Result<BoxedRedisStream, AppError> {
+    async fn establish<T, F, Fut>(&self, connect: F) -> Result<T, AppError>
+    where
+        F: Fn(TunnelRoute) -> Fut,
+        Fut: std::future::Future<Output = Result<T, AppError>>,
+    {
+        let TunnelLifetime::Recoverable(tunnel) = &self._forward else {
+            let route = match &self._forward {
+                TunnelLifetime::Ssh(forward) => TunnelRoute::ssh(forward.clone()),
+                _ => TunnelRoute {
+                    endpoint: self.local_endpoint.clone(),
+                    forward: None,
+                },
+            };
+            return connect(route).await;
+        };
+        let forward = tunnel.state.lock().await.forward.clone();
+        let already_recovered = !forward.is_healthy();
+        let forward = if already_recovered {
+            tunnel.recover(&forward).await?
+        } else {
+            forward
+        };
+        match connect(TunnelRoute::ssh(forward.clone())).await {
+            Err(error) if !already_recovered && can_recover_ssh(error) => {
+                let replacement = tunnel.recover(&forward).await?;
+                connect(TunnelRoute::ssh(replacement)).await
+            }
+            result => result,
+        }
+    }
+
+    async fn open_stream(&self, route: TunnelRoute) -> Result<BoxedRedisStream, AppError> {
         let stream = tokio::time::timeout(
             Duration::from_secs(3),
-            tokio::net::TcpStream::connect((
-                self.local_endpoint.host.as_str(),
-                self.local_endpoint.port,
-            )),
+            tokio::net::TcpStream::connect((route.endpoint.host.as_str(), route.endpoint.port)),
         )
         .await
         .map_err(|_| AppError::ConnectionDiagnostic(ConnectionFailureReason::Timeout))?
         .map_err(|error| map_connection_error(error.into()))?;
         let Some(tls) = &self.tls else {
-            return Ok(Box::pin(stream));
+            return Ok(route.retain_forward(Box::pin(stream)));
         };
         let server_name =
             rustls::pki_types::ServerName::try_from(self.original_endpoint.host.clone())
@@ -219,11 +398,21 @@ impl TunneledClient {
                 AppError::ConnectionDiagnostic(ConnectionFailureReason::TlsHandshake)
             }
         })?;
-        Ok(Box::pin(stream))
+        Ok(route.retain_forward(Box::pin(stream)))
     }
 
     pub async fn connection(&self) -> Result<ManagedMultiplexedConnection, AppError> {
-        let stream = self.open_stream().await?;
+        // Only connection setup (TLS, AUTH, SELECT) may be retried. Returned
+        // sockets keep their normal failure semantics; user commands are never replayed.
+        self.establish(|endpoint| self.connection_at(endpoint))
+            .await
+    }
+
+    async fn connection_at(
+        &self,
+        endpoint: TunnelRoute,
+    ) -> Result<ManagedMultiplexedConnection, AppError> {
+        let stream = self.open_stream(endpoint).await?;
         let (connection, driver) = tokio::time::timeout(
             Duration::from_secs(3),
             redis::aio::MultiplexedConnection::new_with_config(
@@ -238,26 +427,46 @@ impl TunneledClient {
         .map_err(|_| AppError::ConnectionDiagnostic(ConnectionFailureReason::Timeout))?
         .map_err(map_connection_error)?;
         let driver = tokio::spawn(driver);
-        Ok(ManagedMultiplexedConnection::custom(connection, driver))
+        let mut connection = ManagedMultiplexedConnection::custom(connection, driver);
+        if matches!(self._forward, TunnelLifetime::Recoverable(_)) {
+            // Passwordless DB0 can have an empty redis-rs setup pipeline. Probe
+            // before handing the socket to a caller, while retrying is still safe.
+            check_connection_probe(redis::cmd("PING").query_async(&mut connection).await)?;
+        }
+        Ok(connection)
     }
 
     pub async fn pubsub(&self) -> Result<redis::aio::PubSub, AppError> {
-        tokio::time::timeout(
-            Duration::from_secs(3),
-            redis::aio::PubSub::new(&self.redis_info, self.open_stream().await?),
-        )
+        self.establish(|endpoint| async move {
+            let stream = self.open_stream(endpoint).await?;
+            tokio::time::timeout(Duration::from_secs(3), async {
+                let mut connection = redis::aio::PubSub::new(&self.redis_info, stream)
+                    .await
+                    .map_err(map_connection_error)?;
+                if matches!(self._forward, TunnelLifetime::Recoverable(_)) {
+                    check_connection_probe(connection.ping().await)?;
+                }
+                Ok(connection)
+            })
+            .await
+            .map_err(|_| AppError::ConnectionFailed)?
+        })
         .await
-        .map_err(|_| AppError::ConnectionFailed)?
-        .map_err(map_connection_error)
     }
 
     pub async fn monitor_stream(&self) -> Result<MonitorLineStream, AppError> {
-        tokio::time::timeout(
-            Duration::from_secs(3),
-            monitor_transport::monitor_stream(self.open_stream().await?, &self.redis_info),
-        )
+        self.establish(|endpoint| async move {
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                monitor_transport::monitor_stream(
+                    self.open_stream(endpoint).await?,
+                    &self.redis_info,
+                ),
+            )
+            .await
+            .map_err(|_| AppError::ConnectionFailed)?
+        })
         .await
-        .map_err(|_| AppError::ConnectionFailed)?
     }
 }
 
@@ -544,6 +753,10 @@ pub(crate) fn map_connection_error(error: redis::RedisError) -> AppError {
     };
     AppError::ConnectionDiagnostic(reason)
 }
+
+#[cfg(test)]
+#[path = "ssh_recovery_tests.rs"]
+mod ssh_recovery_tests;
 
 #[cfg(test)]
 mod tests {

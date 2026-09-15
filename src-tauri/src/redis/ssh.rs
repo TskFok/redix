@@ -18,6 +18,8 @@ use crate::{
 };
 
 const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
+const SSH_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+const SSH_KEEPALIVE_RETRY_WAIT: Duration = Duration::from_millis(50);
 const PROXY_IDLE_WAIT: Duration = Duration::from_millis(2);
 const MAX_PROXY_WORKERS: usize = 32;
 const MAX_BLOCKING_SSH_WORKERS: usize = 64;
@@ -223,6 +225,7 @@ trait SessionBackend: Send + Sync {
         target: &ConnectionEndpoint,
         cancelled: &AtomicBool,
     ) -> Result<Box<dyn ProxyChannel>, AppError>;
+    fn keepalive(&self) -> io::Result<()>;
     fn disconnect(&self);
 }
 
@@ -272,22 +275,61 @@ impl SessionBackend for Libssh2Backend {
         let _ = self.session.disconnect(None, "application shutdown", None);
         let _ = self.socket.shutdown(Shutdown::Both);
     }
+
+    fn keepalive(&self) -> io::Result<()> {
+        self.session
+            .keepalive_send()
+            .map(|_| ())
+            .map_err(io::Error::from)
+    }
 }
 
 struct SessionOwner {
     backend: Arc<dyn SessionBackend>,
+    healthy: AtomicBool,
+    keepalive_task: Mutex<Option<tokio::task::AbortHandle>>,
+}
+
+impl SessionOwner {
+    fn new(backend: Arc<dyn SessionBackend>, keepalive_interval: Duration) -> Arc<Self> {
+        let owner = Arc::new(Self {
+            backend,
+            healthy: AtomicBool::new(true),
+            keepalive_task: Mutex::new(None),
+        });
+        let task = spawn_keepalive_task(Arc::downgrade(&owner), keepalive_interval);
+        if let Ok(mut keepalive_task) = owner.keepalive_task.lock() {
+            *keepalive_task = Some(task.abort_handle());
+        }
+        owner
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.healthy.load(Ordering::SeqCst)
+    }
 }
 
 impl Drop for SessionOwner {
     fn drop(&mut self) {
+        if let Ok(mut keepalive_task) = self.keepalive_task.lock() {
+            if let Some(task) = keepalive_task.take() {
+                task.abort();
+            }
+        }
         self.backend.disconnect();
     }
+}
+
+struct SshReconnectMaterial {
+    config: SshConfig,
+    secrets: ConnectionSecrets,
 }
 
 #[derive(Clone)]
 pub(super) struct SshTransport {
     session: Arc<SessionOwner>,
     proxy_limit: Arc<tokio::sync::Semaphore>,
+    reconnect: Option<Arc<SshReconnectMaterial>>,
 }
 
 impl SshTransport {
@@ -310,15 +352,41 @@ impl SshTransport {
         .await
     }
 
+    #[cfg(test)]
     fn from_backend(backend: Arc<dyn SessionBackend>) -> Self {
         Self::from_backend_with_proxy_limit(backend, MAX_PROXY_WORKERS)
     }
 
+    #[cfg(test)]
     fn from_backend_with_proxy_limit(backend: Arc<dyn SessionBackend>, proxy_limit: usize) -> Self {
+        Self::from_backend_with_options(backend, proxy_limit, SSH_KEEPALIVE_INTERVAL, None)
+    }
+
+    fn from_backend_with_options(
+        backend: Arc<dyn SessionBackend>,
+        proxy_limit: usize,
+        keepalive_interval: Duration,
+        reconnect: Option<Arc<SshReconnectMaterial>>,
+    ) -> Self {
         Self {
-            session: Arc::new(SessionOwner { backend }),
+            session: SessionOwner::new(backend, keepalive_interval),
             proxy_limit: Arc::new(tokio::sync::Semaphore::new(proxy_limit)),
+            reconnect,
         }
+    }
+
+    #[cfg(test)]
+    fn from_backend_with_keepalive(
+        backend: Arc<dyn SessionBackend>,
+        proxy_limit: usize,
+        keepalive_interval: Duration,
+    ) -> Self {
+        Self::from_backend_with_options(backend, proxy_limit, keepalive_interval, None)
+    }
+
+    pub(super) async fn reconnect(&self) -> Result<Self, AppError> {
+        let material = self.reconnect.as_ref().ok_or(AppError::SshTunnelFailed)?;
+        Self::connect(&material.config, &material.secrets).await
     }
 
     pub async fn forward(&self, target: &ConnectionEndpoint) -> Result<Arc<SshForward>, AppError> {
@@ -374,6 +442,10 @@ where
     R: FnOnce(String, u16) -> F,
     F: Future<Output = io::Result<Vec<SocketAddr>>>,
 {
+    let reconnect = Arc::new(SshReconnectMaterial {
+        config: config.clone(),
+        secrets: ssh_connection_secrets(&secrets),
+    });
     let addresses = tokio::time::timeout(timeout, resolver(config.host.clone(), config.port))
         .await
         .map_err(|_| AppError::SshTunnelFailed)?
@@ -408,7 +480,12 @@ where
         }
     };
     drop(cancel_on_drop);
-    Ok(SshTransport::from_backend(backend))
+    Ok(SshTransport::from_backend_with_options(
+        backend,
+        MAX_PROXY_WORKERS,
+        SSH_KEEPALIVE_INTERVAL,
+        Some(reconnect),
+    ))
 }
 
 fn connect_blocking(
@@ -446,6 +523,13 @@ fn connect_blocking(
         .set_nonblocking(true)
         .map_err(|_| AppError::SshTunnelFailed)?;
     backend.session.set_blocking(false);
+    backend.session.set_keepalive(
+        true,
+        SSH_KEEPALIVE_INTERVAL
+            .as_secs()
+            .try_into()
+            .unwrap_or(u32::MAX),
+    );
     pending.disarm();
     Ok(backend)
 }
@@ -653,6 +737,21 @@ impl SshForward {
     pub fn local_endpoint(&self) -> ConnectionEndpoint {
         self.endpoint.clone()
     }
+
+    pub(super) fn is_healthy(&self) -> bool {
+        self._session.is_healthy()
+    }
+}
+
+fn ssh_connection_secrets(secrets: &ConnectionSecrets) -> ConnectionSecrets {
+    ConnectionSecrets {
+        ssh_password: secrets.ssh_password.clone(),
+        ssh_private_key: secrets.ssh_private_key.clone(),
+        ssh_passphrase: secrets.ssh_passphrase.clone(),
+        ssh_identity_file: secrets.ssh_identity_file.clone(),
+        ssh_known_hosts_file: secrets.ssh_known_hosts_file.clone(),
+        ..ConnectionSecrets::default()
+    }
 }
 
 impl Drop for SshForward {
@@ -747,6 +846,10 @@ impl SessionBackend for TestForwardingBackend {
     }
 
     fn disconnect(&self) {}
+
+    fn keepalive(&self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -758,6 +861,53 @@ pub(super) fn test_forwarding_transport(
         forwarded: Mutex::new(Vec::new()),
     });
     (SshTransport::from_backend(backend.clone()), backend)
+}
+
+fn spawn_keepalive_task(
+    session: std::sync::Weak<SessionOwner>,
+    keepalive_interval: Duration,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut wait = keepalive_interval;
+        loop {
+            tokio::time::sleep(wait).await;
+            let permit = match blocking_ssh_limit().try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    wait = SSH_KEEPALIVE_RETRY_WAIT;
+                    continue;
+                }
+            };
+            let worker_session = session.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                let owner = worker_session.upgrade()?;
+                let backend = owner.backend.clone();
+                drop(owner);
+                Some(backend.keepalive())
+            })
+            .await;
+
+            match result {
+                Ok(Some(Ok(()))) => wait = keepalive_interval,
+                Ok(Some(Err(error))) if error.kind() == io::ErrorKind::WouldBlock => {
+                    wait = SSH_KEEPALIVE_RETRY_WAIT;
+                }
+                Ok(Some(Err(_))) | Err(_) => {
+                    if let Some(owner) = session.upgrade() {
+                        owner.healthy.store(false, Ordering::SeqCst);
+                        let backend = owner.backend.clone();
+                        drop(owner);
+                        // Shutdown can contend on libssh2's session lock too. Do
+                        // not retain a public owner or block the async runtime.
+                        let _ = tokio::task::spawn_blocking(move || backend.disconnect()).await;
+                    }
+                    break;
+                }
+                Ok(None) => break,
+            }
+        }
+    })
 }
 
 fn spawn_accept_task(
@@ -1480,6 +1630,129 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn idle_session_sends_keepalive_without_any_forward() {
+        let backend = Arc::new(TestBackend::new());
+        authenticate_test_backend(&backend);
+        let _transport = SshTransport::from_backend_with_keepalive(
+            backend.clone(),
+            MAX_PROXY_WORKERS,
+            Duration::from_millis(5),
+        );
+
+        backend.wait_for_keepalive_count(1).await;
+    }
+
+    #[tokio::test]
+    async fn would_block_keepalive_is_retried_without_marking_the_forward_unhealthy() {
+        let backend = Arc::new(TestBackend::new());
+        backend.keepalive_would_block.store(2, Ordering::SeqCst);
+        authenticate_test_backend(&backend);
+        let transport = SshTransport::from_backend_with_keepalive(
+            backend.clone(),
+            MAX_PROXY_WORKERS,
+            Duration::from_millis(5),
+        );
+        let forward = transport
+            .forward(&endpoint("redis.internal", 6379))
+            .await
+            .unwrap();
+
+        backend.wait_for_keepalive_count(3).await;
+
+        assert!(forward.is_healthy());
+    }
+
+    #[tokio::test]
+    async fn failed_keepalive_marks_transport_and_forward_unhealthy() {
+        let backend = Arc::new(TestBackend::new());
+        backend.keepalive_fails.store(true, Ordering::SeqCst);
+        authenticate_test_backend(&backend);
+        let transport = SshTransport::from_backend_with_keepalive(
+            backend.clone(),
+            MAX_PROXY_WORKERS,
+            Duration::from_millis(5),
+        );
+        let forward = transport
+            .forward(&endpoint("redis.internal", 6379))
+            .await
+            .unwrap();
+
+        backend.wait_for_keepalive_count(1).await;
+        backend.wait_for_unhealthy(&forward).await;
+
+        assert!(!forward.is_healthy());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !backend.disconnected.load(Ordering::SeqCst) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("failed keepalive must close the old SSH socket");
+    }
+
+    #[tokio::test]
+    async fn dropping_the_final_session_owner_stops_keepalive() {
+        let backend = Arc::new(TestBackend::new());
+        authenticate_test_backend(&backend);
+        let transport = SshTransport::from_backend_with_keepalive(
+            backend.clone(),
+            MAX_PROXY_WORKERS,
+            Duration::from_millis(5),
+        );
+        backend.wait_for_keepalive_count(1).await;
+
+        drop(transport);
+        assert!(backend.disconnected.load(Ordering::SeqCst));
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let calls_after_drop = backend.keepalive_calls.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        assert_eq!(
+            backend.keepalive_calls.load(Ordering::SeqCst),
+            calls_after_drop
+        );
+    }
+
+    #[tokio::test]
+    async fn final_public_owner_disconnects_while_keepalive_worker_is_blocked() {
+        let backend = Arc::new(TestBackend::new());
+        backend.block_keepalive.store(true, Ordering::SeqCst);
+        authenticate_test_backend(&backend);
+        let transport = SshTransport::from_backend_with_keepalive(
+            backend.clone(),
+            MAX_PROXY_WORKERS,
+            Duration::from_millis(5),
+        );
+        backend.wait_for_keepalive_count(1).await;
+
+        drop(transport);
+
+        assert!(backend.disconnected.load(Ordering::SeqCst));
+        backend.block_keepalive.store(false, Ordering::SeqCst);
+    }
+
+    #[tokio::test]
+    async fn periodic_keepalive_does_not_consume_proxy_capacity() {
+        let backend = Arc::new(TestBackend::new());
+        authenticate_test_backend(&backend);
+        let transport =
+            SshTransport::from_backend_with_keepalive(backend.clone(), 1, Duration::from_millis(5));
+        backend.wait_for_keepalive_count(1).await;
+        let forward = transport
+            .forward(&endpoint("redis.internal", 6379))
+            .await
+            .unwrap();
+        let endpoint = forward.local_endpoint();
+
+        let socket = tokio::net::TcpStream::connect((endpoint.host.as_str(), endpoint.port))
+            .await
+            .unwrap();
+
+        backend.wait_for_active_proxy_count(1).await;
+        drop(socket);
+    }
+
+    #[tokio::test]
     async fn saturated_proxy_capacity_closes_newly_accepted_socket() {
         let backend = Arc::new(TestBackend::new());
         authenticate_test_backend(&backend);
@@ -1608,6 +1881,44 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn backend_transport_without_connection_material_cannot_reconnect() {
+        let (transport, _) = test_backend_transport();
+
+        assert!(matches!(
+            transport.reconnect().await,
+            Err(AppError::SshTunnelFailed)
+        ));
+    }
+
+    #[test]
+    fn reconnect_material_retains_only_ssh_credentials() {
+        let secrets = ConnectionSecrets {
+            sentinel_password: Some("sentinel".into()),
+            password: Some("redis".into()),
+            ca_certificate: Some("ca".into()),
+            client_certificate: Some("certificate".into()),
+            client_key: Some("key".into()),
+            ssh_password: Some("ssh-password".into()),
+            ssh_private_key: Some("ssh-private-key".into()),
+            ssh_passphrase: Some("ssh-passphrase".into()),
+            ssh_identity_file: Some("/ssh/identity".into()),
+            ssh_known_hosts_file: Some("/ssh/known-hosts".into()),
+        };
+
+        assert_eq!(
+            ssh_connection_secrets(&secrets),
+            ConnectionSecrets {
+                ssh_password: Some("ssh-password".into()),
+                ssh_private_key: Some("ssh-private-key".into()),
+                ssh_passphrase: Some("ssh-passphrase".into()),
+                ssh_identity_file: Some("/ssh/identity".into()),
+                ssh_known_hosts_file: Some("/ssh/known-hosts".into()),
+                ..ConnectionSecrets::default()
+            }
+        );
+    }
+
     struct TestBackend {
         authenticated: AtomicUsize,
         active_proxies: AtomicUsize,
@@ -1617,6 +1928,10 @@ mod tests {
         open_started: AtomicBool,
         open_cancelled: AtomicBool,
         channel_drops: Arc<AtomicUsize>,
+        keepalive_calls: AtomicUsize,
+        keepalive_would_block: AtomicUsize,
+        keepalive_fails: AtomicBool,
+        block_keepalive: AtomicBool,
     }
 
     impl TestBackend {
@@ -1638,6 +1953,10 @@ mod tests {
                 open_started: AtomicBool::new(false),
                 open_cancelled: AtomicBool::new(false),
                 channel_drops: Arc::new(AtomicUsize::new(0)),
+                keepalive_calls: AtomicUsize::new(0),
+                keepalive_would_block: AtomicUsize::new(0),
+                keepalive_fails: AtomicBool::new(false),
+                block_keepalive: AtomicBool::new(false),
             }
         }
 
@@ -1690,6 +2009,26 @@ mod tests {
             .await
             .expect("active proxy channel was not dropped after cancellation");
         }
+
+        async fn wait_for_keepalive_count(&self, count: usize) {
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while self.keepalive_calls.load(Ordering::SeqCst) < count {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("SSH keepalive was not sent");
+        }
+
+        async fn wait_for_unhealthy(&self, forward: &SshForward) {
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while forward.is_healthy() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("failed SSH keepalive did not mark the transport unhealthy");
+        }
     }
 
     impl SessionBackend for TestBackend {
@@ -1725,6 +2064,22 @@ mod tests {
 
         fn disconnect(&self) {
             self.disconnected.store(true, Ordering::SeqCst);
+        }
+
+        fn keepalive(&self) -> io::Result<()> {
+            self.keepalive_calls.fetch_add(1, Ordering::SeqCst);
+            while self.block_keepalive.load(Ordering::SeqCst) {
+                std::thread::sleep(PROXY_IDLE_WAIT);
+            }
+            let remaining = self.keepalive_would_block.load(Ordering::SeqCst);
+            if remaining > 0 {
+                self.keepalive_would_block.fetch_sub(1, Ordering::SeqCst);
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
+            if self.keepalive_fails.load(Ordering::SeqCst) {
+                return Err(io::ErrorKind::ConnectionReset.into());
+            }
+            Ok(())
         }
     }
 
