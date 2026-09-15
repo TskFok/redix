@@ -1299,7 +1299,7 @@ npm test -- --run scripts/check-non-cloud-scope.test.mjs
 
 - [ ] **Step 3: 实现检查脚本、主题和图标**
 
-脚本只接受文本数组并返回命中的排除词，生产扫描入口使用 `rg --files` 得到 `src/`、`src-tauri/src/` 和 `package.json` 文件。更新 `styles.css` 提供深色默认主题、浅色主题类、焦点态和 `role="alert"` 对应样式。在 `tauri.conf.json` 设置产品名 `Redix`、identifier `com.redix.desktop`、窗口大小，并将 bundle icon 配置指向 Task 1 已生成的图标资源。
+脚本只接受文本数组并返回命中的排除词，生产扫描入口使用 `rg --files` 得到 `src/`、`src-tauri/src/` 和 `package.json` 文件。更新 `styles.css` 提供深色默认主题、浅色主题类、焦点态和 `role="alert"` 对应样式。在 `tauri.conf.json` 设置产品名 `Redix`、identifier `com.tskfok.redix`、窗口大小，并将 bundle icon 配置指向 Task 1 已生成的图标资源。
 
 - [ ] **Step 4: 更新 README 和 npm scripts**
 

@@ -62,7 +62,7 @@
 - 工作区位于 `main` 分支且初始干净；本任务不创建分支。
 - `README.md` 当前不存在，`package-lock.json` 存在且需要随 `package.json` scripts 变更保持一致。
 - `src-tauri/icons/icon.png`、`icon.ico`、`icon.icns`、`icon.svg` 及平台资源均已存在，因此只需引用既有资源，不下载外部图标。
-- `src-tauri/tauri.conf.json` 当前 identifier 为 `com.redix.app`，bundle `active` 为 `false`；Task 10 需改为正式配置。
+- `src-tauri/tauri.conf.json` 当前 identifier 为 `com.tskfok.redix`，bundle `active` 为 `false`；Task 10 需改为正式配置。
 - `src/styles.css` 已有深色基础、44px 部分控件和 reduced-motion，但尚无浅色主题类/系统偏好、统一 `role="alert"`/`role="status"` 样式与明确的 375/768/1024 响应式分层。
 - RED 阶段测试已按要求先写；运行 `npm test -- --run scripts/check-non-cloud-scope.test.mjs` 因实现文件缺失而退出 1，失败原因符合预期。
 - GREEN 阶段同一命令通过 2/2；扫描器按文本位置排序、大小写不敏感并去重，生产入口不读取文档和脚本目录。
