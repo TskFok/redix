@@ -22,6 +22,12 @@ npm run dev
 npm run tauri dev
 ```
 
+### WebView 内容安全策略
+
+`src-tauri/tauri.conf.json` 中的 `app.security.csp` 用于打包后的应用：只允许应用自身资源、同源解码 Worker 和 Tauri IPC，禁止内联脚本、动态代码执行（`eval` / `Function`）、iframe、插件对象、表单提交和页面基地址覆盖。React 通过 DOM 样式属性设置的动态布局仍可使用；Redis / SSH / TLS 连接由 Rust 后端建立，无需将服务器地址加入 CSP。
+
+`app.security.devCsp` 仅为开发模式增加 React Refresh 内联脚本、Vite 动态样式及本机 `1421` 端口的 HMR WebSocket 权限。Vite 读取这份配置并发送 CSP 响应头；修改策略后需重启开发服务器，修改 HMR 端口时需同步更新允许的地址。生产策略保留 Tauri 自动添加脚本哈希和样式 nonce 的机制，不启用 `unsafe-eval`。增加资源来源时请按用途收窄对应指令，并验证打包后的应用。
+
 ## 测试、检查与构建
 
 ```bash

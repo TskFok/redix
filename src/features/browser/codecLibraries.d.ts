@@ -4,3 +4,6 @@ declare module "lz4js" {
 declare module "json-bigint" {
   export default function JSONBigInt(options?: { useNativeBigInt?: boolean }): { stringify(value: unknown, replacer?: unknown, space?: number): string };
 }
+declare module "msgpackr/unpack-no-eval" {
+  export { addExtension, C1, Unpackr } from "msgpackr";
+}

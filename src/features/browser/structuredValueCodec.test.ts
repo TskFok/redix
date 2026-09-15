@@ -1,10 +1,27 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { decodeStructuredValue, MAX_STRUCTURED_BYTES, MAX_STRUCTURED_DEPTH, MAX_STRUCTURED_NODES } from "./structuredValueCodec";
 
 describe("有界本地协议解码", () => {
   it("MessagePack保留64位整数、嵌套结构及二进制内容", () => {
     expect(JSON.parse(decodeStructuredValue(Uint8Array.from([0x82, 0xa1, 0x61, 0x92, 1, 2, 0xa1, 0x62, 0xc4, 2, 0, 255]), "msgpack"))).toEqual({ a: [1, 2], b: { $binary: "AP8=" } });
     expect(decodeStructuredValue(Uint8Array.from([0xcf, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]), "msgpack")).toBe("18446744073709551615");
+  });
+  it("MessagePack Record解码不调用被CSP禁止的Function构造器", () => {
+    const recordArray = Uint8Array.from([
+      0x95, 0xd4, 0x72, 0x40, 0x92, 0xa1, 0x61, 0xa1, 0x62,
+      1, 2, 0x40, 3, 4, 0x40, 5, 6, 0x40, 7, 8, 0x40, 9, 10,
+    ]);
+    const nativeFunction = globalThis.Function;
+    const blockedFunction = vi.fn(() => { throw new EvalError("CSP禁止动态代码编译"); });
+    globalThis.Function = blockedFunction as unknown as FunctionConstructor;
+    try {
+      expect(JSON.parse(decodeStructuredValue(recordArray, "msgpack"))).toEqual([
+        { a: 1, b: 2 }, { a: 3, b: 4 }, { a: 5, b: 6 }, { a: 7, b: 8 }, { a: 9, b: 10 },
+      ]);
+      expect(blockedFunction).not.toHaveBeenCalled();
+    } finally {
+      globalThis.Function = nativeFunction;
+    }
   });
   it("MessagePack-CSharp LZ4支持内联块和块数组", () => {
     const inline = Uint8Array.from([0xc7, 8, 99, 0, 0, 0, 3, 0x30, 0x92, 1, 2]);

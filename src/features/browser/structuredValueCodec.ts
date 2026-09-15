@@ -1,7 +1,7 @@
 import { Buffer } from "buffer";
 import JSONBigInt from "json-bigint";
 import { decompressBlock } from "lz4js";
-import { addExtension, C1, Unpackr } from "msgpackr";
+import { addExtension, C1, Unpackr } from "msgpackr/unpack-no-eval";
 import { Reader } from "protobufjs/minimal";
 import { decodePhpSerialized } from "./phpSerialized";
 
