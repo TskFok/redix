@@ -19,7 +19,7 @@ npm run dev
 `npm run dev` 启动前端开发服务器。需要运行桌面壳时使用：
 
 ```bash
-npm run tauri:dev
+npm run tauri dev
 ```
 
 ## 测试、检查与构建

@@ -80,7 +80,7 @@
 - Create: `.gitignore`
 
 **Interfaces:**
-- Produces npm scripts `dev`, `build`, `test`, `test:watch`, `tauri:dev`, `tauri:build`.
+- Produces npm scripts `dev`, `build`, `test`, `test:watch`, `tauri`, `tauri:build`.
 - Produces a Tauri window named `main` at `http://localhost:1420` with default size `1480x960` and minimum size `1240x760`.
 - Produces a React root that renders the text `Redix` and a default workspace heading.
 
@@ -125,7 +125,7 @@ npm test -- --run src/app.smoke.test.tsx
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "tauri:dev": "tauri dev",
+    "tauri": "tauri",
     "tauri:build": "tauri build"
   },
   "dependencies": {
@@ -1267,7 +1267,7 @@ git commit -m "实现 Redis Workbench 工作区"
 - `npm run check:non-cloud` 扫描 `src/`、`src-tauri/src/`、`package.json` 和菜单文案，命中 `redis cloud`、`redis-cloud`、`cloud-capi`、`azure managed redis`、`cloud login` 等排除词时返回非零状态；脚本自身不扫描设计文档中的范围说明。
 - `scanFiles(contents: string[]): string[]` 返回按出现顺序去重的排除词命中列表；`main()` 读取固定产品目录并在命中时打印文件和词后退出码为 1。
 - `docs/non-cloud-scope.md` 列出明确排除项、允许的本地 Redis Standalone 能力和人工审查结果。
-- `README.md` 提供 `npm install`、`npm run dev`、`npm run tauri:dev`、测试命令、本地 Redis 前置条件和当前 MVP 边界。
+- `README.md` 提供 `npm install`、`npm run dev`、`npm run tauri dev`、测试命令、本地 Redis 前置条件和当前 MVP 边界。
 
 - [ ] **Step 1: 写非 Cloud 审查失败测试**
 
