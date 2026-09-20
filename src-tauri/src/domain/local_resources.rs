@@ -111,7 +111,7 @@ impl Default for AppSettings {
             version: 1,
             theme: "system".into(),
             result_format: "raw".into(),
-            scan_count: 100,
+            scan_count: 10_000,
             continue_on_error: false,
         }
     }

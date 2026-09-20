@@ -713,6 +713,11 @@ fn query_library_rejects_sensitive_commands_and_accepts_normal_commands() {
 }
 
 #[test]
+fn app_settings_default_scan_count_is_ten_thousand() {
+    assert_eq!(AppSettings::default().scan_count, 10_000);
+}
+
+#[test]
 fn settings_validate_fixed_enum_and_range() {
     assert!(AppSettings {
         version: 1,

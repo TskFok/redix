@@ -215,6 +215,12 @@ fn local_resource_documents_migrate_legacy_version_zero_values() {
     assert_eq!(settings.result_format, "raw");
     assert_eq!(settings.scan_count, 200);
     assert!(!settings.continue_on_error);
+
+    let settings_without_scan_count = AppSettings::migrate(serde_json::json!({
+        "theme": "dark"
+    }))
+    .unwrap();
+    assert_eq!(settings_without_scan_count.scan_count, 10_000);
 }
 
 #[test]

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import SettingsPage from "./SettingsPage";
 import type { AppSettings } from "../../lib/types";
+import { DEFAULT_APP_SETTINGS } from "./settingsState";
 
 const { saveAppSettingsMock } = vi.hoisted(() => ({
   saveAppSettingsMock: vi.fn(),
@@ -28,6 +29,10 @@ describe("SettingsPage", () => {
 
   afterEach(() => {
     cleanup();
+  });
+
+  it("工作区偏好默认每次扫描数量为 10000", () => {
+    expect(DEFAULT_APP_SETTINGS.scan_count).toBe(10000);
   });
 
   it("渲染主题、结果格式、扫描数量和批量错误策略", () => {

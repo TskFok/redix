@@ -4,7 +4,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   version: 1,
   theme: "system",
   result_format: "raw",
-  scan_count: 100,
+  scan_count: 10000,
   continue_on_error: false,
 };
 
