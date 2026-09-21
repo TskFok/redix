@@ -143,6 +143,47 @@ fn versioned_document_round_trips_and_replaces_atomically() {
     remove_temporary_directory(&directory);
 }
 
+#[test]
+fn sensitive_json_replaces_a_document_while_its_previous_file_is_open() {
+    use std::io::Read;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workbench-history.json");
+    let store = JsonDocumentStore::new(path.clone());
+    let previous = TestDocument {
+        version: 1,
+        value: "previous".into(),
+    };
+    store.save(&previous).unwrap();
+    // A cleanup reader can retain this handle after a writer renames its temporary file.
+    let mut reader = fs::File::open(&path).unwrap();
+    let replacement = TestDocument {
+        version: 1,
+        value: "replacement".into(),
+    };
+
+    store.save(&replacement).unwrap();
+
+    assert_eq!(store.load::<TestDocument>().unwrap(), replacement);
+    let mut old_contents = String::new();
+    reader.read_to_string(&mut old_contents).unwrap();
+    assert_eq!(
+        serde_json::from_str::<TestDocument>(&old_contents).unwrap(),
+        previous
+    );
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_ATTRIBUTE_TEMPORARY;
+
+        assert_eq!(
+            fs::metadata(&path).unwrap().file_attributes() & FILE_ATTRIBUTE_TEMPORARY,
+            0
+        );
+    }
+}
+
 #[cfg(unix)]
 #[test]
 fn sensitive_json_files_are_private_on_save_and_legacy_read() {

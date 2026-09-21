@@ -5,7 +5,7 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 
 use crate::error::AppError;
 
@@ -88,8 +88,9 @@ pub(super) fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     temporary.write_all(bytes)?;
     temporary.as_file().sync_all()?;
     // Keep the lock and RAII cleanup alive until replacement succeeds, including on unwind.
-    // tempfile also clears the temporary attribute and safely replaces open files on Windows.
-    temporary.persist(path).map_err(|error| error.error)?;
+    // std::fs::rename supports replacing an open destination on Windows via POSIX semantics;
+    // tempfile::persist only uses MoveFileExW, which fails while a cleanup reader holds it open.
+    fs::rename(temporary.path(), path)?;
     Ok(())
 }
 
@@ -101,9 +102,13 @@ fn create_private_temporary(path: &Path, parent: &Path) -> io::Result<tempfile::
     let mut builder = tempfile::Builder::new();
     let prefix = format!(".{name}.");
     builder.prefix(&prefix).suffix(".tmp").rand_bytes(16);
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
     #[cfg(unix)]
-    builder.permissions(fs::Permissions::from_mode(0o600));
-    let temporary = builder.tempfile_in(parent)?;
+    options.mode(0o600);
+    // These files become permanent through rename, so do not set FILE_ATTRIBUTE_TEMPORARY.
+    // make_in still supplies random names and removes the file on failure or unwind.
+    let temporary = builder.make_in(parent, |path| options.open(path))?;
     // Apply Windows DACLs while the file is still empty. Unix mode is set at creation.
     restrict_permissions(temporary.path(), false)?;
     // Cleanup skips empty files; lock before the first byte to avoid racing another instance.
@@ -198,12 +203,13 @@ mod tests {
     fn a_failed_replacement_removes_its_private_temporary_file() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("workbench-history.json");
-        let mut temporary = create_private_temporary(&path, directory.path()).unwrap();
-        temporary.write_all(b"private command").unwrap();
-        fs::create_dir(&path).unwrap();
-        fs::write(path.join("marker"), b"keep").unwrap();
-        let error = temporary.persist(&path).unwrap_err();
-        drop(error);
+        {
+            let mut temporary = create_private_temporary(&path, directory.path()).unwrap();
+            temporary.write_all(b"private command").unwrap();
+            fs::create_dir(&path).unwrap();
+            fs::write(path.join("marker"), b"keep").unwrap();
+            assert!(fs::rename(temporary.path(), &path).is_err());
+        }
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
         assert_eq!(fs::read(path.join("marker")).unwrap(), b"keep");
     }
