@@ -6,6 +6,9 @@ use redix_lib::{
     },
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 fn report(database: u8) -> DatabaseAnalysisReport {
     AnalysisAccumulator::new(database, "*".into(), ":".into(), 1000).finish(0, 0, false)
 }
@@ -87,4 +90,72 @@ fn concurrent_saves_preserve_every_report() {
         handle.join().unwrap();
     }
     assert_eq!(store.list("one", 0).unwrap().len(), 8);
+}
+
+#[cfg(unix)]
+#[test]
+fn saved_analysis_history_is_readable_only_by_its_owner() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("analysis-history.json");
+    let store = AnalysisHistoryStore::new(path.clone());
+
+    store.save(input("one", 0)).unwrap();
+
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn reading_existing_history_restricts_permissions_without_rewriting_contents() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("analysis-history.json");
+    let store = AnalysisHistoryStore::new(path.clone());
+    let item = store.save(input("one", 0)).unwrap();
+    let original = std::fs::read(&path).unwrap();
+
+    for read_details in [false, true] {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        if read_details {
+            assert_eq!(store.get("one", 0, &item.id).unwrap().id, item.id);
+        } else {
+            assert_eq!(store.list("one", 0).unwrap().len(), 1);
+        }
+
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "reading history must restrict permissions, read_details={read_details}"
+        );
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn reading_history_removes_legacy_temporary_files_but_preserves_unrelated_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("analysis-history.json");
+    let store = AnalysisHistoryStore::new(path.clone());
+    store.save(input("one", 0)).unwrap();
+    let orphan = dir.path().join(".analysis-history.json.123.0.tmp");
+    std::fs::write(&orphan, "private analysis report").unwrap();
+    let unrelated = dir.path().join(".workbench-history.json.123.0.tmp");
+    std::fs::write(&unrelated, "keep unrelated history").unwrap();
+    let unrecognized = dir.path().join(".analysis-history.json.backup.tmp");
+    std::fs::write(&unrecognized, "keep unrecognized backup").unwrap();
+
+    assert_eq!(store.list("one", 0).unwrap().len(), 1);
+
+    assert_eq!(
+        std::fs::read_to_string(&unrelated).unwrap(),
+        "keep unrelated history"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&unrecognized).unwrap(),
+        "keep unrecognized backup"
+    );
+    assert!(!orphan.exists(), "legacy temporary history must be removed");
 }

@@ -1,5 +1,4 @@
 use std::{
-    fs::File,
     io::Read,
     path::PathBuf,
     sync::Mutex,
@@ -117,7 +116,7 @@ impl AnalysisHistoryStore {
     }
 
     fn load(&self) -> Result<HistoryDocument, AppError> {
-        let file = match File::open(&self.path) {
+        let file = match super::private_file::open_private_file(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Ok(HistoryDocument::default())

@@ -56,6 +56,7 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .expect("无法确定 Redix 应用数据目录");
+            persistence::prepare_sensitive_storage(&data_dir)?;
             let profiles: Arc<dyn ProfileRepository> = Arc::new(JsonProfileRepository::new(
                 data_dir.join("connections.json"),
             ));

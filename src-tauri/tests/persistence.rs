@@ -143,6 +143,231 @@ fn versioned_document_round_trips_and_replaces_atomically() {
     remove_temporary_directory(&directory);
 }
 
+#[cfg(unix)]
+#[test]
+fn sensitive_json_files_are_private_on_save_and_legacy_read() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workbench-history.json");
+    let store = JsonDocumentStore::new(path.clone());
+    let document = TestDocument {
+        version: 1,
+        value: "GET private:key".into(),
+    };
+    store.save(&document).unwrap();
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    for tolerant in [false, true] {
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let loaded = if tolerant {
+            store.load_or_default::<TestDocument>()
+        } else {
+            store.load::<TestDocument>()
+        };
+        assert_eq!(loaded.unwrap(), document);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o666)).unwrap();
+    store.save(&document).unwrap();
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
+#[test]
+fn sensitive_json_load_removes_only_its_abandoned_temporary_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workbench-history.json");
+    let abandoned = directory
+        .path()
+        .join(".workbench-history.json.123456.0.tmp");
+    fs::write(&abandoned, "private command and old result").unwrap();
+    let unrelated = directory.path().join(".analysis-history.json.123456.0.tmp");
+    let not_a_temporary_file = directory.path().join(".workbench-history.json.backup.tmp");
+    fs::write(&unrelated, "keep").unwrap();
+    fs::write(&not_a_temporary_file, "keep").unwrap();
+    let store = JsonDocumentStore::new(path);
+    assert_eq!(
+        store.load_or_default::<TestDocument>().unwrap(),
+        TestDocument::default()
+    );
+    assert!(!abandoned.exists());
+    assert!(unrelated.exists());
+    assert!(not_a_temporary_file.exists());
+}
+
+#[test]
+fn sensitive_json_cleanup_preserves_an_active_writer() {
+    let directory = tempfile::tempdir().unwrap();
+    let active = directory
+        .path()
+        .join(".workbench-history.json.123456.0.tmp");
+    let mut file = fs::File::create(&active).unwrap();
+    file.lock().unwrap();
+    std::io::Write::write_all(&mut file, b"private command").unwrap();
+    let store = JsonDocumentStore::new(directory.path().join("workbench-history.json"));
+    store.load::<TestDocument>().unwrap();
+    assert!(active.exists(), "an active writer must not be removed");
+    drop(file);
+    store.load::<TestDocument>().unwrap();
+    assert!(!active.exists(), "an abandoned writer must be cleaned up");
+}
+
+#[test]
+fn sensitive_json_failed_replace_cleans_up_temporary_plaintext() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workbench-history.json");
+    fs::create_dir(&path).unwrap();
+    fs::write(path.join("marker"), "keep").unwrap();
+    let store = JsonDocumentStore::new(path.clone());
+    assert_eq!(
+        store.save(&TestDocument::default()),
+        Err(AppError::PersistenceFailed)
+    );
+    assert_eq!(fs::read_to_string(path.join("marker")).unwrap(), "keep");
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn sensitive_json_cleanup_tolerates_concurrent_saves() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("workbench-history.json");
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let path = path.clone();
+            std::thread::spawn(move || {
+                for _ in 0..40 {
+                    JsonDocumentStore::new(path.clone())
+                        .save(&TestDocument::default())
+                        .unwrap();
+                }
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().unwrap();
+    }
+    assert_eq!(
+        JsonDocumentStore::new(path).load::<TestDocument>().unwrap(),
+        TestDocument::default()
+    );
+    assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn sensitive_storage_startup_secures_legacy_files_without_loading_them() {
+    use redix_lib::persistence::prepare_sensitive_storage;
+    use std::os::unix::fs::PermissionsExt;
+
+    let directory = tempfile::tempdir().unwrap();
+    let data_dir = directory.path().join("redix");
+    fs::create_dir(&data_dir).unwrap();
+    fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o755)).unwrap();
+    for name in [
+        "workbench-history.json",
+        "analysis-history.json",
+        "connections.json",
+    ] {
+        let path = data_dir.join(name);
+        // Even corrupt legacy data must become private, without a lossy rewrite.
+        fs::write(&path, "corrupt private data").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        fs::write(
+            data_dir.join(format!(".{name}.123.0.tmp")),
+            "private temporary data",
+        )
+        .unwrap();
+    }
+    prepare_sensitive_storage(&data_dir).unwrap();
+    assert_eq!(
+        fs::metadata(&data_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(fs::read_dir(&data_dir).unwrap().count(), 3);
+    for name in [
+        "workbench-history.json",
+        "analysis-history.json",
+        "connections.json",
+    ] {
+        let path = data_dir.join(name);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), "corrupt private data");
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn sensitive_json_rejects_symlinks_and_preserves_unrelated_parents() {
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let directory = tempfile::tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let outside = directory.path().join("outside");
+    fs::write(&outside, "keep").unwrap();
+    fs::set_permissions(&outside, fs::Permissions::from_mode(0o644)).unwrap();
+    let path = directory.path().join("workbench-history.json");
+    symlink(&outside, &path).unwrap();
+    symlink(
+        &outside,
+        directory.path().join(".workbench-history.json.123.0.tmp"),
+    )
+    .unwrap();
+    let store = JsonDocumentStore::new(path.clone());
+    assert_eq!(
+        store.load_or_default::<TestDocument>(),
+        Err(AppError::PersistenceFailed)
+    );
+    assert_eq!(
+        store.save(&TestDocument::default()),
+        Err(AppError::PersistenceFailed)
+    );
+    assert_eq!(
+        fs::metadata(&outside).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "keep");
+    fs::remove_file(&path).unwrap();
+    store.save(&TestDocument::default()).unwrap();
+    assert_eq!(
+        fs::metadata(directory.path()).unwrap().permissions().mode() & 0o777,
+        0o755
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn profile_repository_secures_new_and_legacy_files() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("connections.json");
+    let repository = JsonProfileRepository::new(path.clone());
+    repository.save(&[valid_profile()]).unwrap();
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    let abandoned = directory.path().join(".connections.json.123.0.tmp");
+    fs::write(&abandoned, "private connection metadata").unwrap();
+    assert_eq!(repository.load().unwrap(), vec![valid_profile()]);
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!abandoned.exists());
+}
+
 #[test]
 fn malformed_versioned_document_returns_safe_persistence_error() {
     let directory = temporary_directory("document-malformed");
