@@ -99,14 +99,14 @@ mod tests {
     use std::fs;
     use std::os::windows::ffi::OsStringExt;
 
-    use windows_sys::Win32::Security::Authorization::{
-        GetExplicitEntriesFromAclW, GetNamedSecurityInfoW, GRANT_ACCESS, TRUSTEE_IS_SID,
-    };
+    use windows_sys::Win32::Security::Authorization::GetNamedSecurityInfoW;
     use windows_sys::Win32::Security::{
-        GetSecurityDescriptorControl, IsWellKnownSid, WinCreatorOwnerRightsSid, WinWorldSid,
-        CONTAINER_INHERIT_ACE, INHERITED_ACE, OBJECT_INHERIT_ACE, SE_DACL_PROTECTED,
+        GetAce, GetSecurityDescriptorControl, IsWellKnownSid, WinCreatorOwnerRightsSid,
+        WinWorldSid, ACCESS_ALLOWED_ACE, ACE_HEADER, CONTAINER_INHERIT_ACE, INHERITED_ACE,
+        OBJECT_INHERIT_ACE, SE_DACL_PROTECTED,
     };
     use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::System::SystemServices::ACCESS_ALLOWED_ACE_TYPE;
 
     fn assert_owner_only(path: &Path, protected: bool, inherited: bool, directory: bool) {
         let wide_path = path
@@ -142,34 +142,35 @@ mod tests {
         );
         assert_eq!(control & SE_DACL_PROTECTED != 0, protected);
 
-        let mut entry_count = 0;
-        let mut raw_entries = std::ptr::null_mut();
-        // SAFETY: dacl belongs to the live descriptor and both outputs are valid.
-        let status =
-            unsafe { GetExplicitEntriesFromAclW(dacl, &mut entry_count, &mut raw_entries) };
-        assert_eq!(status, 0);
-        let _entries = LocalAllocation(raw_entries.cast());
-        assert_eq!(entry_count, 1, "DACL 必须只允许所有者访问");
-        assert!(!raw_entries.is_null());
-        // SAFETY: The API returned exactly one entry, retained by the allocation guard.
-        let entry = unsafe { &*raw_entries };
-        assert_eq!(entry.grfAccessMode, GRANT_ACCESS);
-        assert_eq!(entry.grfAccessPermissions, FILE_ALL_ACCESS);
-        assert_eq!(entry.Trustee.TrusteeForm, TRUSTEE_IS_SID);
-        // SAFETY: TRUSTEE_IS_SID identifies ptstrName as a SID held by the live allocation.
-        assert_ne!(
-            unsafe { IsWellKnownSid(entry.Trustee.ptstrName.cast(), WinCreatorOwnerRightsSid) },
-            0
-        );
-        assert_eq!(
-            unsafe { IsWellKnownSid(entry.Trustee.ptstrName.cast(), WinWorldSid) },
-            0
-        );
-        assert_eq!(entry.grfInheritance & INHERITED_ACE != 0, inherited);
+        // Inspect the raw ACL so inherited ACEs on newly created children are
+        // included, rather than querying only explicit access entries.
+        // SAFETY: dacl is non-null and belongs to the live descriptor.
+        assert_eq!(unsafe { (*dacl).AceCount }, 1, "DACL 必须只允许所有者访问");
+        let mut raw_ace = std::ptr::null_mut();
+        // SAFETY: The ACL contains one ACE and the output pointer is live.
+        assert_ne!(unsafe { GetAce(dacl, 0, &mut raw_ace) }, 0);
+        assert!(!raw_ace.is_null());
+        // SAFETY: Every ACE starts with ACE_HEADER and is retained by descriptor.
+        let header = unsafe { &*raw_ace.cast::<ACE_HEADER>() };
+        assert_eq!(u32::from(header.AceType), ACCESS_ALLOWED_ACE_TYPE);
+        assert!(usize::from(header.AceSize) >= std::mem::size_of::<ACCESS_ALLOWED_ACE>());
+        let ace = raw_ace.cast::<ACCESS_ALLOWED_ACE>();
+        // SAFETY: The type and minimum size were checked above.
+        assert_eq!(unsafe { (*ace).Mask }, FILE_ALL_ACCESS);
+        // SAFETY: SidStart is the start of the variable-length SID in this ACE.
+        // Keep its pointer tied to the whole allocation, not a copied DWORD.
+        let sid = unsafe { std::ptr::addr_of!((*ace).SidStart) }
+            .cast_mut()
+            .cast();
+        // SAFETY: The SID belongs to the valid ACE in the live descriptor.
+        assert_ne!(unsafe { IsWellKnownSid(sid, WinCreatorOwnerRightsSid) }, 0);
+        assert_eq!(unsafe { IsWellKnownSid(sid, WinWorldSid) }, 0);
+        let inheritance = u32::from(header.AceFlags);
+        assert_eq!(inheritance & INHERITED_ACE != 0, inherited);
         if directory {
             assert_eq!(
-                entry.grfInheritance & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE),
-                3
+                inheritance & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE),
+                OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE
             );
         }
     }
