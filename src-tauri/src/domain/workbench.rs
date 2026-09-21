@@ -86,6 +86,7 @@ impl SaveCommandHistoryInput {
 pub struct CommandHistoryEntry {
     pub connection_id: String,
     pub command: String,
+    #[serde(skip_serializing, default)]
     pub result: Option<CommandResult>,
     pub error_code: Option<String>,
     pub created_at: String,
@@ -98,6 +99,14 @@ pub struct CommandHistoryDocument {
 }
 
 impl CommandHistoryDocument {
+    pub fn sanitize(&mut self) {
+        self.entries = self
+            .entries
+            .iter()
+            .filter_map(filter_history_entry)
+            .collect();
+    }
+
     pub fn delete_entry(&mut self, input: &DeleteCommandHistoryInput) -> Result<(), AppError> {
         if input.connection_id.trim().is_empty()
             || input.command.trim().is_empty()
@@ -105,11 +114,11 @@ impl CommandHistoryDocument {
         {
             return Err(AppError::InvalidConnection);
         }
+        self.sanitize();
         self.entries.retain(|entry| {
-            !is_sensitive_command(&entry.command)
-                && !(entry.connection_id == input.connection_id
-                    && entry.command == input.command
-                    && entry.created_at == input.created_at)
+            !(entry.connection_id == input.connection_id
+                && entry.command == input.command
+                && entry.created_at == input.created_at)
         });
         Ok(())
     }
@@ -118,9 +127,9 @@ impl CommandHistoryDocument {
         if input.connection_id.trim().is_empty() {
             return Err(AppError::InvalidConnection);
         }
-        self.entries.retain(|entry| {
-            entry.connection_id != input.connection_id && !is_sensitive_command(&entry.command)
-        });
+        self.sanitize();
+        self.entries
+            .retain(|entry| entry.connection_id != input.connection_id);
         Ok(())
     }
 }
@@ -208,6 +217,126 @@ pub fn is_sensitive_command(command: &str) -> bool {
             .as_str(),
         "AUTH" | "HELLO" | "ACL" | "CONFIG"
     )
+}
+
+const HISTORY_SAFE_COMMANDS: &[&str] = &[
+    "PING",
+    "GET",
+    "MGET",
+    "GETRANGE",
+    "GETBIT",
+    "STRLEN",
+    "EXISTS",
+    "TYPE",
+    "TTL",
+    "PTTL",
+    "DBSIZE",
+    "INFO",
+    "SCAN",
+    "HSCAN",
+    "SSCAN",
+    "ZSCAN",
+    "RANDOMKEY",
+    "OBJECT",
+    "MEMORY",
+    "TIME",
+    "COMMAND",
+    "ROLE",
+    "LASTSAVE",
+    "HEXISTS",
+    "HGET",
+    "HMGET",
+    "HGETALL",
+    "HKEYS",
+    "HLEN",
+    "HVALS",
+    "HSTRLEN",
+    "LINDEX",
+    "LLEN",
+    "LPOS",
+    "LRANGE",
+    "SCARD",
+    "SISMEMBER",
+    "SMISMEMBER",
+    "SMEMBERS",
+    "SRANDMEMBER",
+    "ZCARD",
+    "ZCOUNT",
+    "ZRANGE",
+    "ZRANGEBYLEX",
+    "ZRANGEBYSCORE",
+    "ZRANK",
+    "ZREVRANGE",
+    "ZREVRANGEBYLEX",
+    "ZREVRANGEBYSCORE",
+    "ZREVRANK",
+    "ZMSCORE",
+    "ZSCORE",
+    "ZLEXCOUNT",
+    "XINFO",
+    "XLEN",
+    "XRANGE",
+    "XREVRANGE",
+    "XREAD",
+    "XREADGROUP",
+    "XPENDING",
+    "JSON.GET",
+    "JSON.TYPE",
+    "JSON.MGET",
+    "JSON.ARRLEN",
+    "JSON.OBJKEYS",
+    "FT.SEARCH",
+    "FT.AGGREGATE",
+    "FT.INFO",
+    "FT.EXPLAIN",
+    "FT.PROFILE",
+    "FT._LIST",
+    "TS.GET",
+    "TS.RANGE",
+    "TS.REVRANGE",
+    "TS.MRANGE",
+    "TS.INFO",
+    "TS.QUERYINDEX",
+    "BF.EXISTS",
+    "BF.MEXISTS",
+    "BF.INFO",
+    "CF.EXISTS",
+    "CF.COUNT",
+    "CF.INFO",
+    "CMS.QUERY",
+    "CMS.INFO",
+    "TOPK.QUERY",
+    "TOPK.LIST",
+    "TOPK.INFO",
+    "TDIGEST.QUANTILE",
+    "TDIGEST.CDF",
+    "TDIGEST.MIN",
+    "TDIGEST.MAX",
+    "TDIGEST.INFO",
+    "VSIM",
+    "VRANGE",
+    "VEMB",
+    "VGETATTR",
+    "VCARD",
+    "VDIM",
+    "VINFO",
+    "ARGET",
+    "ARMGET",
+    "ARGETRANGE",
+    "ARLEN",
+];
+
+pub fn is_history_safe_command(command: &str) -> bool {
+    let Ok(arguments) = crate::redis::tokenize_command(command) else {
+        return false;
+    };
+    let Some(command_name) = arguments
+        .first()
+        .map(|argument| argument.to_ascii_uppercase())
+    else {
+        return false;
+    };
+    HISTORY_SAFE_COMMANDS.contains(&command_name.as_str())
 }
 
 // Curated offline syntax, following the local RedisInsight command groups.
@@ -319,7 +448,10 @@ fn module_command_catalog() -> Vec<CommandDefinition> {
 }
 
 pub fn filter_history_entry(entry: &CommandHistoryEntry) -> Option<CommandHistoryEntry> {
-    (!is_sensitive_command(&entry.command)).then(|| entry.clone())
+    is_history_safe_command(&entry.command).then(|| CommandHistoryEntry {
+        result: None,
+        ..entry.clone()
+    })
 }
 
 #[cfg(test)]
@@ -357,6 +489,43 @@ mod tests {
         assert!(is_sensitive_command("A\\UTH password"));
         assert!(is_sensitive_command("'ACL' SETUSER user >password"));
         assert!(!is_sensitive_command("GET public"));
+    }
+
+    #[test]
+    fn workbench_history_keeps_only_read_commands_without_results() {
+        let entry = |command: &str, result| CommandHistoryEntry {
+            connection_id: "local".into(),
+            command: command.into(),
+            result,
+            error_code: None,
+            created_at: "2026-08-19T00:00:00Z".into(),
+        };
+
+        let safe = filter_history_entry(&entry(
+            "GET secret:key",
+            Some(CommandResult {
+                kind: "string".into(),
+                value: serde_json::json!("secret-value"),
+            }),
+        ))
+        .expect("read-only command should remain in history");
+        assert_eq!(safe.command, "GET secret:key");
+        assert!(safe.result.is_none());
+
+        assert!(filter_history_entry(&entry(
+            "SET secret:key secret-value",
+            Some(CommandResult {
+                kind: "simple-string".into(),
+                value: serde_json::json!("OK"),
+            }),
+        ))
+        .is_none());
+        assert!(filter_history_entry(&entry(
+            "JSON.SET profile $ '{\"token\":\"secret-value\"}'",
+            None,
+        ))
+        .is_none());
+        assert!(filter_history_entry(&entry("CUSTOM.SECRET secret-value", None)).is_none());
     }
 
     #[test]

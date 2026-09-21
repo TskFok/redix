@@ -1,4 +1,7 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    fs,
+    sync::{Arc, Mutex},
+};
 
 use tauri::Manager;
 
@@ -333,6 +336,16 @@ fn command_history_commands_isolate_connections_and_filter_sensitive_entries() {
                     error_code: Some("COMMAND_FAILED".into()),
                     created_at: "2026-08-19T00:00:01Z".into(),
                 },
+                CommandHistoryEntry {
+                    connection_id: "local".into(),
+                    command: "SET secret:key secret-value".into(),
+                    result: Some(CommandResult {
+                        kind: "simple-string".into(),
+                        value: serde_json::json!("OK"),
+                    }),
+                    error_code: None,
+                    created_at: "2026-08-19T00:00:02Z".into(),
+                },
             ],
         },
     )
@@ -359,6 +372,11 @@ fn command_history_commands_isolate_connections_and_filter_sensitive_entries() {
     let local = workbench::list_command_history(app.state(), "local".into()).unwrap();
     assert_eq!(local.len(), 1);
     assert_eq!(local[0].command, "PING");
+    assert!(local[0].result.is_none());
+    let persisted = fs::read_to_string(directory.path().join("workbench-history.json"))
+        .expect("history file must exist");
+    assert!(!persisted.contains("PONG"));
+    assert!(!persisted.contains("secret-value"));
     assert_eq!(
         workbench::list_command_history(app.state(), "remote".into())
             .unwrap()
@@ -367,6 +385,89 @@ fn command_history_commands_isolate_connections_and_filter_sensitive_entries() {
             .collect::<Vec<_>>(),
         vec!["DBSIZE"]
     );
+}
+
+#[test]
+fn listing_command_history_scrubs_legacy_sensitive_entries_from_disk() {
+    let directory = tempfile::tempdir().expect("history directory must be created");
+    fs::write(
+        directory.path().join("workbench-history.json"),
+        serde_json::json!({
+            "version": 1,
+            "entries": [
+                {
+                    "connection_id": "local",
+                    "command": "GET secret:key",
+                    "result": {"kind": "string", "value": "legacy-secret"},
+                    "error_code": null,
+                    "created_at": "2026-08-19T00:00:00Z"
+                },
+                {
+                    "connection_id": "local",
+                    "command": "SET secret:key legacy-secret",
+                    "result": {"kind": "simple-string", "value": "OK"},
+                    "error_code": null,
+                    "created_at": "2026-08-19T00:00:01Z"
+                }
+            ]
+        })
+        .to_string(),
+    )
+    .expect("legacy history must be seeded");
+    let app = tauri::test::mock_builder()
+        .manage(AppState::with_data_dir(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+            directory.path().to_path_buf(),
+        ))
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("test app must build");
+
+    let history = workbench::list_command_history(app.state(), "local".into())
+        .expect("legacy history must be readable");
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].command, "GET secret:key");
+    assert!(history[0].result.is_none());
+    let persisted = fs::read_to_string(directory.path().join("workbench-history.json"))
+        .expect("history file must remain readable");
+    assert!(!persisted.contains("legacy-secret"));
+    assert!(!persisted.contains("SET secret:key"));
+}
+
+#[test]
+fn listing_command_history_scrubs_legacy_results_from_safe_entries() {
+    let directory = tempfile::tempdir().expect("history directory must be created");
+    fs::write(
+        directory.path().join("workbench-history.json"),
+        serde_json::json!({
+            "version": 1,
+            "entries": [{
+                "connection_id": "local",
+                "command": "GET secret:key",
+                "result": {"kind": "string", "value": "legacy-secret"},
+                "error_code": null,
+                "created_at": "2026-08-19T00:00:00Z"
+            }]
+        })
+        .to_string(),
+    )
+    .expect("legacy history must be seeded");
+    let app = tauri::test::mock_builder()
+        .manage(AppState::with_data_dir(
+            Arc::new(EmptyProfiles),
+            Arc::new(EmptySecrets),
+            directory.path().to_path_buf(),
+        ))
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .expect("test app must build");
+
+    let history = workbench::list_command_history(app.state(), "local".into())
+        .expect("legacy history must be readable");
+    assert_eq!(history.len(), 1);
+    assert!(history[0].result.is_none());
+    let persisted = fs::read_to_string(directory.path().join("workbench-history.json"))
+        .expect("history file must remain readable");
+    assert!(!persisted.contains("legacy-secret"));
 }
 
 #[test]

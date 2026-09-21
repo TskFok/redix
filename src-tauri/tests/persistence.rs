@@ -181,10 +181,7 @@ fn command_history_document_round_trips_through_versioned_store() {
         entries: vec![CommandHistoryEntry {
             connection_id: "local".into(),
             command: "PING".into(),
-            result: Some(CommandResult {
-                kind: "string".into(),
-                value: serde_json::json!("PONG"),
-            }),
+            result: None,
             error_code: None,
             created_at: "2026-08-19T00:00:00Z".into(),
         }],
@@ -192,6 +189,34 @@ fn command_history_document_round_trips_through_versioned_store() {
 
     store.save(&document).unwrap();
     assert_eq!(store.load::<CommandHistoryDocument>().unwrap(), document);
+    remove_temporary_directory(&directory);
+}
+
+#[test]
+fn command_history_persistence_omits_execution_results() {
+    let directory = temporary_directory("workbench-history-no-results");
+    let path = directory.join("workbench-history.json");
+    let store = JsonDocumentStore::new(path.clone());
+    let document = CommandHistoryDocument {
+        version: 1,
+        entries: vec![CommandHistoryEntry {
+            connection_id: "local".into(),
+            command: "GET secret:key".into(),
+            result: Some(CommandResult {
+                kind: "string".into(),
+                value: serde_json::json!("secret-value"),
+            }),
+            error_code: None,
+            created_at: "2026-08-19T00:00:00Z".into(),
+        }],
+    };
+
+    store.save(&document).unwrap();
+    let persisted = fs::read_to_string(path).unwrap();
+    assert!(!persisted.contains("secret-value"));
+    assert!(store.load::<CommandHistoryDocument>().unwrap().entries[0]
+        .result
+        .is_none());
     remove_temporary_directory(&directory);
 }
 

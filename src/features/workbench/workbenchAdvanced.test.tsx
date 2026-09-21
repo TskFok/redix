@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import WorkbenchPage from "./WorkbenchPage";
 import { currentCommandLine, filterCommandCatalog } from "./CommandSuggestions";
 import { normalizeCommandList, isCommandReady } from "./workbenchState";
-import { filterHistoryEntry } from "./workbenchHistory";
+import { filterHistoryEntry, historyEntriesFromExecution } from "./workbenchHistory";
 
 const ipc = vi.hoisted(() => ({
   executeCommand: vi.fn(), executeCommands: vi.fn(), getCommandCatalog: vi.fn(),
@@ -46,6 +46,24 @@ describe("Workbench 高级交互", () => {
     expect(filterHistoryEntry("A\\UTH secret")).toBe(false);
     expect(filterHistoryEntry("GET secret")).toBe(true);
     expect(filterHistoryEntry("'AUTH secret")).toBe(false);
+  });
+
+  it("历史只保留只读命令且不保存执行结果", () => {
+    expect(filterHistoryEntry("SET secret:key secret-value")).toBe(false);
+    expect(filterHistoryEntry("JSON.SET profile $ '{\"token\":\"secret-value\"}'")).toBe(false);
+    expect(filterHistoryEntry("CUSTOM.SECRET secret-value")).toBe(false);
+    expect(historyEntriesFromExecution("local", [
+      { command: "GET secret:key", result: { kind: "string", value: "secret-value" }, error_code: null },
+      { command: "SET secret:key secret-value", result: { kind: "simple-string", value: "OK" }, error_code: null },
+    ], "2026-08-31T00:00:00.000Z")).toEqual([
+      {
+        connection_id: "local",
+        command: "GET secret:key",
+        result: null,
+        error_code: null,
+        created_at: "2026-08-31T00:00:00.000Z",
+      },
+    ]);
   });
 
   it("光标位于首行时仅补全该行并保留缩进和后续命令", async () => {

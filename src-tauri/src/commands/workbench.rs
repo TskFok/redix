@@ -51,7 +51,7 @@ pub fn list_command_history(
     let _guard = HISTORY_LOCK
         .lock()
         .map_err(|_| AppError::PersistenceFailed)?;
-    let document = store.load_or_default::<CommandHistoryDocument>()?;
+    let document = load_sanitized_history(&store)?;
     let mut entries = document
         .entries
         .iter()
@@ -73,10 +73,10 @@ pub fn save_command_history(
         .lock()
         .map_err(|_| AppError::PersistenceFailed)?;
     let store = history_store(state.inner());
-    let mut document = store.load_or_default::<CommandHistoryDocument>()?;
-    document.entries.retain(|entry| {
-        entry.connection_id != input.connection_id && filter_history_entry(entry).is_some()
-    });
+    let mut document = load_sanitized_history(&store)?;
+    document
+        .entries
+        .retain(|entry| entry.connection_id != input.connection_id);
     document
         .entries
         .extend(input.entries.iter().filter_map(filter_history_entry));
@@ -98,7 +98,7 @@ pub fn delete_command_history(
         .lock()
         .map_err(|_| AppError::PersistenceFailed)?;
     let store = history_store(state.inner());
-    let mut document = store.load_or_default::<CommandHistoryDocument>()?;
+    let mut document = load_sanitized_history(&store)?;
     document.delete_entry(&input)?;
     store.save(&document)
 }
@@ -112,9 +112,19 @@ pub fn clear_command_history(
         .lock()
         .map_err(|_| AppError::PersistenceFailed)?;
     let store = history_store(state.inner());
-    let mut document = store.load_or_default::<CommandHistoryDocument>()?;
+    let mut document = load_sanitized_history(&store)?;
     document.clear_connection(&input)?;
     store.save(&document)
+}
+
+fn load_sanitized_history(store: &JsonDocumentStore) -> Result<CommandHistoryDocument, AppError> {
+    let mut document = store.load_or_default::<CommandHistoryDocument>()?;
+    let original = document.clone();
+    document.sanitize();
+    if document != original {
+        store.save(&document)?;
+    }
+    Ok(document)
 }
 
 fn history_store(state: &AppState) -> JsonDocumentStore {

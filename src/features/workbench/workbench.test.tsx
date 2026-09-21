@@ -306,7 +306,7 @@ describe("Redis Workbench 工作区", () => {
     );
   });
 
-  it("执行前只去除命令首尾空白并保留引号和内部空白", async () => {
+  it("执行前只去除命令首尾空白并保留引号和内部空白，写命令不进入历史", async () => {
     executeCommandMock.mockResolvedValue({ kind: "string", value: "OK" });
     render(<WorkbenchPage connectionId=" local " />);
 
@@ -318,9 +318,7 @@ describe("Redis Workbench 工作区", () => {
       command: 'SET "key with space"  value',
     });
     await screen.findByText("OK");
-    expect(
-      screen.getByRole("button", { name: /回填命令 SET/ }).querySelector("code")?.textContent,
-    ).toBe('SET "key with space"  value');
+    expect(screen.queryByRole("button", { name: /回填命令 SET/ })).not.toBeInTheDocument();
   });
 
   it("使用 Cmd 或 Ctrl 加 Enter 执行当前命令", async () => {

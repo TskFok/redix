@@ -19,7 +19,7 @@
 - 连接级 `MODULE LIST` 与命令集能力探测、session 级缓存；探测失败或未检测到 RedisJSON、Array 或 Vector Set 时，不阻断普通 Browser 流程，只让对应模块操作稳定降级为不可用提示。
 - RedisSearch / Query 第一批本地能力：在检测到 Search 2.0+ 时支持 `FT._LIST`、`FT.CREATE`、`FT.INFO`、`FT.DROPINDEX`、Hash/JSON 索引管理、受限的 `FT.SEARCH ... LIMIT` 分页查询（默认 NOCONTENT，可选择返回文档字段）和 typed `FT.AGGREGATE` LOAD/GROUPBY/REDUCE/SORTBY/LIMIT 分页，以及 Browser Hash/JSON 键详情中的索引关联摘要；输入、索引数量、结果数量和响应大小均有固定上限，查询文本不持久化。模块缺失或版本不满足时仅 Search / Query 工作区局部降级。
 - Workbench 在已打开的本地连接上执行单条或多条 Redis 命令，并展示结构化结果、Raw/Text/JSON 格式、复制入口和遇错继续策略。
-- Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，不使用 `localStorage`，AUTH、HELLO、ACL、CONFIG 命令族不落盘。
+- Workbench 命令目录是 Rust 内置静态 DTO；历史按连接写入版本化 `workbench-history.json`，仅保存明确的只读命令文本，不保存执行结果、认证命令或写入命令，也不使用 `localStorage`。
 - Standalone/Sentinel CLI 使用专用持久 socket，保留 MULTI/EXEC、WATCH 和 SELECT 状态；Cluster CLI 只允许普通路由命令，事务、认证/协议切换、数据库选择、订阅、复制、连接模式和 `SCRIPT DEBUG` 等会话状态命令在网络发送前返回 `UNSUPPORTED_FEATURE`。Workbench single/batch 使用相同的 Cluster 门控。
 - Database 工作区读取本地实例与数据库键空间概览，并支持安全的数据库切换；指标不可用时按字段降级，不暴露 Redis 原始错误。
 - Instance 详情按 INFO 分组展示客户端、内存、统计、持久化、复制指标及 commandstats；全部为当前连接的只读请求。

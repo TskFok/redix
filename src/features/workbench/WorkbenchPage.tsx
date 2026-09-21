@@ -410,7 +410,7 @@ export function WorkbenchPage({
                 <p className="eyebrow">HISTORY</p>
                 <h2 id="command-history-title">命令历史</h2>
               </div>
-              <span className="panel-hint">按连接保存，不保存敏感命令</span>
+              <span className="panel-hint">仅保存只读命令，不保存结果</span>
               <button type="button" className="button button-quiet" disabled={historyBusy || state.loading || state.history.length === 0} onClick={() => void handleDeleteHistory()}>清空历史</button>
             </div>
             {state.history.length > 0 ? (
