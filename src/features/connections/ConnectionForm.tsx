@@ -4,6 +4,7 @@ import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 
+import { pickLocalFile } from "../../lib/pickLocalFile";
 import {
   openConnection,
   saveConnection,
@@ -221,6 +222,7 @@ export function ConnectionForm({
   const [testStatus, setTestStatus, testStatusToken] = useTransientFeedback();
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [pickingFile, setPickingFile] = useState(false);
 
   const updateValue = (field: keyof ConnectionFormValues, value: string) => {
     setValues((current) => ({ ...current, [field]: value,
@@ -237,6 +239,23 @@ export function ConnectionForm({
     setError(null);
     setFailure(null);
     setTestStatus(null);
+  };
+
+  const handlePickIdentityFile = async () => {
+    if (testing || saving || pickingFile) {
+      return;
+    }
+    setPickingFile(true);
+    try {
+      const path = await pickLocalFile("选择 SSH 私钥文件");
+      if (path) {
+        updateValue("ssh_identity_file", path);
+      }
+    } catch {
+      setError("选择 SSH 私钥文件失败，请重试。");
+    } finally {
+      setPickingFile(false);
+    }
   };
 
   const handleTest = async () => {
@@ -314,7 +333,7 @@ export function ConnectionForm({
     onSavingChange?.(false);
   };
 
-  const busy = testing || saving;
+  const busy = testing || saving || pickingFile;
 
   return (
     <section className="connection-form-panel" aria-labelledby="connection-form-title">
@@ -442,7 +461,29 @@ export function ConnectionForm({
               <label className="field"><span>SSH 认证方式</span><Select value={values.ssh_auth_method} onChange={(event) => updateValue("ssh_auth_method", event.target.value)} disabled={busy}><option value="agent">Agent</option><option value="password">Password</option><option value="private_key">Private Key</option></Select></label>
               {values.ssh_auth_method === "password" && <label className="field"><span>SSH 密码</span><input autoCapitalize="off" autoCorrect="off" type="password" autoComplete="new-password" value={values.ssh_password} onChange={(event) => updateValue("ssh_password", event.target.value)} disabled={busy} placeholder="已保存时留空保留" /></label>}
               {values.ssh_auth_method === "private_key" && <>
-                <label className="field"><span>SSH 私钥文件路径</span><input autoCapitalize="off" autoCorrect="off" value={values.ssh_identity_file} onChange={(event) => updateValue("ssh_identity_file", event.target.value)} placeholder="绝对路径，与私钥内容二选一" disabled={busy} /></label>
+                <div className="field field-wide">
+                  <span id="ssh-identity-file-label">SSH 私钥文件路径</span>
+                  <div className="field-path-row">
+                    <input
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      aria-labelledby="ssh-identity-file-label"
+                      value={values.ssh_identity_file}
+                      onChange={(event) => updateValue("ssh_identity_file", event.target.value)}
+                      placeholder="绝对路径，与私钥内容二选一"
+                      disabled={busy}
+                    />
+                    <button
+                      type="button"
+                      className="button button-secondary"
+                      onClick={() => void handlePickIdentityFile()}
+                      disabled={busy}
+                      aria-label="选择 SSH 私钥文件"
+                    >
+                      {pickingFile ? "选择中…" : "选择文件"}
+                    </button>
+                  </div>
+                </div>
                 <label className="field"><span>SSH 私钥内容</span><textarea autoCapitalize="off" autoCorrect="off" value={values.ssh_private_key} onChange={(event) => updateValue("ssh_private_key", event.target.value)} disabled={busy} rows={3} autoComplete="off" /></label>
                 <label className="field"><span>SSH 私钥口令</span><input autoCapitalize="off" autoCorrect="off" type="password" autoComplete="new-password" value={values.ssh_passphrase} onChange={(event) => updateValue("ssh_passphrase", event.target.value)} disabled={busy} /></label>
               </>}

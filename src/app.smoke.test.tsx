@@ -60,6 +60,10 @@ const {
   selectDatabaseMock: vi.fn(),
 }));
 
+vi.mock("./lib/pickLocalFile", () => ({
+  pickLocalFile: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("./lib/tauri", () => ({
   listConnections: listConnectionsMock,
   openConnection: openConnectionMock,

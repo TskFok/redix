@@ -336,7 +336,11 @@ fn scan_accepts_counts_allowed_by_settings() {
             scan_count,
             ..AppSettings::default()
         };
-        assert_eq!(settings.validate(), Ok(()), "settings scan count {scan_count}");
+        assert_eq!(
+            settings.validate(),
+            Ok(()),
+            "settings scan count {scan_count}"
+        );
 
         let input = ScanKeysInput {
             connection_id: "local".into(),

@@ -1070,7 +1070,9 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
             .get(&redix_lib::domain::RedisBytes::from(*key))
             .ok_or_else(|| format!("SCAN did not return {key_type} test key"))?;
         if serde_json::to_value(summary).unwrap() != serde_json::json!({"key": key}) {
-            return Err(format!("default SCAN must return only the name of {key_type} test key"));
+            return Err(format!(
+                "default SCAN must return only the name of {key_type} test key"
+            ));
         }
     }
 
@@ -1099,7 +1101,10 @@ async fn run_redis_flow(service: &RedisService, keys: &TestKeys) -> Result<(), S
         })
         .await
         .map_err(|error| error.code().to_owned())?;
-    if all_hashes.len() != 1 || all_hashes[0].key != keys.hash || all_hashes[0].key_type.as_deref() != Some("hash") {
+    if all_hashes.len() != 1
+        || all_hashes[0].key != keys.hash
+        || all_hashes[0].key_type.as_deref() != Some("hash")
+    {
         return Err("full Browser scan must preserve type filtering across pages".into());
     }
 

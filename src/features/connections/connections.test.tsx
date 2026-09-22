@@ -17,6 +17,7 @@ const {
   onOpenConnectionMock,
   listConnectionTagsMock,
   saveConnectionTagsMock,
+  pickLocalFileMock,
 } = vi.hoisted(() => ({
   listConnectionsMock: vi.fn(),
   saveConnectionMock: vi.fn(),
@@ -29,6 +30,7 @@ const {
   onOpenConnectionMock: vi.fn(),
   listConnectionTagsMock: vi.fn(),
   saveConnectionTagsMock: vi.fn(),
+  pickLocalFileMock: vi.fn(),
 }));
 
 vi.mock("../../lib/localProductsApi", () => ({
@@ -45,6 +47,10 @@ vi.mock("../../lib/tauri", () => ({
   testConnection: testConnectionMock,
   exportConnections: exportConnectionsMock,
   importConnections: importConnectionsMock,
+}));
+
+vi.mock("../../lib/pickLocalFile", () => ({
+  pickLocalFile: pickLocalFileMock,
 }));
 
 const localProfile: ConnectionProfile = {
@@ -87,6 +93,7 @@ async function openNewConnectionForm() {
 describe("Redis 连接管理页面", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    pickLocalFileMock.mockReset();
     vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "local") });
     listConnectionsMock.mockResolvedValue([]);
     listConnectionTagsMock.mockResolvedValue({});
@@ -204,6 +211,49 @@ describe("Redis 连接管理页面", () => {
     expect(saveConnectionMock.mock.calls[0][0].profile.ssh).not.toHaveProperty("identity_file");
     expect(saveConnectionMock.mock.calls[0][0].profile.ssh).not.toHaveProperty("known_hosts_file");
     expect(await screen.findByText("SSH · bastion.example:22")).toBeInTheDocument();
+  });
+
+  it("可通过文件选择填充 SSH 私钥路径并保存", async () => {
+    pickLocalFileMock.mockResolvedValue("/Users/operator/.ssh/id_ed25519");
+    saveConnectionMock.mockImplementation(async (input: SaveConnectionInput) => input.profile);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm();
+    fillStandaloneForm();
+    fireEvent.click(screen.getByLabelText("启用 SSH 隧道"));
+    fireEvent.change(screen.getByLabelText("SSH 主机"), { target: { value: "bastion.example" } });
+    fireEvent.change(screen.getByLabelText("SSH 用户名"), { target: { value: "operator" } });
+    fireEvent.change(screen.getByLabelText("SSH 认证方式"), { target: { value: "private_key" } });
+    fireEvent.click(screen.getByRole("button", { name: "选择 SSH 私钥文件" }));
+    await waitFor(() => expect(screen.getByLabelText("SSH 私钥文件路径")).toHaveValue("/Users/operator/.ssh/id_ed25519"));
+    expect(pickLocalFileMock).toHaveBeenCalledWith("选择 SSH 私钥文件");
+    fireEvent.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(saveConnectionMock).toHaveBeenCalled());
+    expect(saveConnectionMock.mock.calls[0][0].ssh_identity_file).toBe("/Users/operator/.ssh/id_ed25519");
+  });
+
+  it("取消文件选择时保留已填写的 SSH 私钥路径", async () => {
+    pickLocalFileMock.mockResolvedValue(null);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm();
+    fillStandaloneForm();
+    fireEvent.click(screen.getByLabelText("启用 SSH 隧道"));
+    fireEvent.change(screen.getByLabelText("SSH 认证方式"), { target: { value: "private_key" } });
+    fireEvent.change(screen.getByLabelText("SSH 私钥文件路径"), { target: { value: "/tmp/existing-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "选择 SSH 私钥文件" }));
+    await waitFor(() => expect(pickLocalFileMock).toHaveBeenCalled());
+    expect(screen.getByLabelText("SSH 私钥文件路径")).toHaveValue("/tmp/existing-key");
+  });
+
+  it("选择 SSH 私钥文件失败时显示提示", async () => {
+    pickLocalFileMock.mockRejectedValue(new Error("dialog-denied"));
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await openNewConnectionForm();
+    fillStandaloneForm();
+    fireEvent.click(screen.getByLabelText("启用 SSH 隧道"));
+    fireEvent.change(screen.getByLabelText("SSH 认证方式"), { target: { value: "private_key" } });
+    fireEvent.click(screen.getByRole("button", { name: "选择 SSH 私钥文件" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("选择 SSH 私钥文件失败，请重试。");
+    expect(screen.getByLabelText("SSH 私钥文件路径")).toHaveValue("");
   });
 
   it("Cluster 校验唯一种子并固定 DB0，测试和保存使用相同材料", async () => {
