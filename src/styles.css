@@ -568,6 +568,10 @@ input[type="number"] {
   overflow-y: auto;
 }
 
+.workspace.workspace-connections {
+  padding-top: 20px;
+}
+
 .app-shell.app-shell-browser,
 .app-shell.app-shell-workbench,
 .app-shell.app-shell-database,
@@ -606,7 +610,7 @@ input[type="number"] {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
 }
 
 .page-heading,
@@ -870,7 +874,7 @@ input[type="number"] {
   margin-bottom: 0;
 }
 
-.connections-heading .page-heading-actions {
+.connections-actions {
   gap: 8px;
 }
 
@@ -4759,7 +4763,7 @@ input[type="checkbox"]:hover:not(:disabled) {
 @media (max-width: 760px) {
   .app-navigation { flex: 1 1 0; min-width: 0; }
   .app-brand { flex-shrink: 0; }
-  .connections-page { gap: 20px; }
+  .workspace.workspace-connections { padding-top: 16px; }
   .connections-heading { align-items: stretch; gap: 16px; }
   .connections-toolbar { padding: 16px; gap: 12px; }
   .connections-filters { flex-basis: 100%; gap: 12px; }

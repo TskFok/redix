@@ -8,7 +8,6 @@ interface ConnectionListProps {
   activeId: string | null;
   openingId: string | null;
   deletingId: string | null;
-  onAdd: () => void;
   onEdit: (profile: ConnectionProfile) => void;
   onOpen: (profile: ConnectionProfile) => void;
   onDelete: (profile: ConnectionProfile) => void;
@@ -21,7 +20,6 @@ export function ConnectionList({
   activeId,
   openingId,
   deletingId,
-  onAdd,
   onEdit,
   onOpen,
   onDelete,
@@ -36,9 +34,6 @@ export function ConnectionList({
         </div>
         <h2>还没有 Redis 连接</h2>
         <p>添加一个本地 Redis 连接，开始浏览键和值。</p>
-        <button type="button" className="button button-primary" onClick={onAdd}>
-          新增连接
-        </button>
       </div>
     );
   }

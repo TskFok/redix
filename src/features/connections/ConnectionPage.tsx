@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { createPortal } from "react-dom";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 import Toast from "../../components/Toast";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
@@ -36,6 +37,7 @@ import {
 interface ConnectionPageProps {
   activeConnectionId?: string | null;
   onOpenConnection: (profile: ConnectionProfile | null) => void;
+  actionsTarget?: HTMLElement | null;
 }
 
 interface TransferFeedback {
@@ -83,7 +85,7 @@ function transferFeedbackFromResult(result: ImportConnectionsResult): TransferFe
   };
 }
 
-export function ConnectionPage({ activeConnectionId, onOpenConnection }: ConnectionPageProps) {
+export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTarget }: ConnectionPageProps) {
   const [state, setState] = useState<ConnectionPageState>(() => ({
     ...initialConnectionPageState,
   }));
@@ -355,6 +357,36 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
     setOnlyUntagged(false);
   };
 
+  const actions = (
+    <div className="page-heading-actions connections-actions" role="group" aria-label="连接操作">
+      <label className="button button-secondary transfer-file-button">
+        导入连接
+        <input
+          autoCapitalize="off"
+          autoCorrect="off"
+          type="file"
+          aria-label="导入连接文件"
+          accept="application/json,.json"
+          onChange={(event) => void handleImportFile(event)}
+          disabled={state.loading || transferBusy}
+        />
+      </label>
+      <button
+        type="button"
+        className="button button-secondary"
+        onClick={() => void handleExport()}
+        disabled={state.loading || transferBusy}
+      >
+        {transferBusy ? "处理中…" : "导出连接"}
+      </button>
+      {!state.loading ? (
+        <button type="button" className="button button-primary" onClick={handleAdd}>
+          新增连接
+        </button>
+      ) : null}
+    </div>
+  );
+
   return (
     <section
       className="connections-page"
@@ -367,38 +399,8 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
       {!formOpen ? (
         <>
           <div className="page-heading connections-heading">
-            <div>
-              <p className="eyebrow">数据连接</p>
-              <h2 id="connections-page-title">连接管理</h2>
-              <p className="page-description">管理本地 Redis 实例，安全地保存连接配置。</p>
-            </div>
-            <div className="page-heading-actions">
-              <label className="button button-secondary transfer-file-button">
-                导入连接
-                <input
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  type="file"
-                  aria-label="导入连接文件"
-                  accept="application/json,.json"
-                  onChange={(event) => void handleImportFile(event)}
-                  disabled={state.loading || transferBusy}
-                />
-              </label>
-              <button
-                type="button"
-                className="button button-secondary"
-                onClick={() => void handleExport()}
-                disabled={state.loading || transferBusy}
-              >
-                {transferBusy ? "处理中…" : "导出连接"}
-              </button>
-              {!state.loading && state.profiles.length > 0 ? (
-                <button type="button" className="button button-primary" onClick={handleAdd}>
-                  新增连接
-                </button>
-              ) : null}
-            </div>
+            <h2 id="connections-page-title" data-app-section="connections" tabIndex={-1}>连接管理</h2>
+            {actionsTarget ? createPortal(actions, actionsTarget) : actions}
           </div>
 
           {state.error ? <Toast kind="error" message={state.error} resetKey={state} onClose={() => setState((current) => ({ ...current, error: null }))} /> : null}
@@ -478,7 +480,6 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection }: Connect
                   activeId={activeId}
                   openingId={state.openingId}
                   deletingId={state.deletingId}
-                  onAdd={handleAdd}
                   onEdit={handleEdit}
                   onOpen={(profile) => void handleOpen(profile)}
                   onDelete={(profile) => void handleDelete(profile)}

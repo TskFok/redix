@@ -265,8 +265,8 @@ describe("Redix 应用壳", () => {
   it("操作面板展示连接限制，未连接可通过键盘打开设置", () => {
     render(<App />);
     fireEvent.keyDown(window, { key: "2", ctrlKey: true });
-    expect(screen.getByRole("button", { name: "连接管理" })).toHaveAttribute("aria-current", "page");
-    fireEvent.click(screen.getByRole("button", { name: "快捷键与操作" }));
+    expect(screen.getByRole("heading", { name: "连接管理" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     expect(screen.getByRole("option", { name: /Browser/ })).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByRole("option", { name: /Cluster 拓扑/ })).toHaveAttribute("aria-disabled", "true");
     const search = screen.getByRole("combobox", { name: "搜索操作" });
@@ -313,21 +313,28 @@ describe("Redix 应用壳", () => {
     expect(openConnectionMock).not.toHaveBeenCalled();
   });
 
-  it("连接管理页只提供本地功能入口", () => {
+  it("连接管理页顶部只提供导入、导出和新增连接入口", async () => {
     render(<App />);
 
-    const navigation = screen.getByRole("navigation", { name: "主导航" });
-    expect(navigation).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "连接管理" })).toHaveAttribute(
-      "aria-current",
-      "page",
-    );
+    await screen.findByText("还没有 Redis 连接");
+    const header = screen.getByRole("heading", { name: "Redix" }).closest("header")!;
+    expect(within(header).getByLabelText("导入连接文件")).toBeEnabled();
+    expect(within(header).getByRole("button", { name: "导出连接" })).toBeEnabled();
+    const addConnection = within(header).getByRole("button", { name: "新增连接" });
+    expect(addConnection).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: "新增连接" })).toHaveLength(1);
+    expect(screen.queryByRole("navigation", { name: "主导航" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "连接管理" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Browser" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Workbench" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Database" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "数据库分析" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Query Library" })).toBeEnabled();
-    expect(screen.getByRole("button", { name: "设置" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Query Library" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "设置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "快捷键与操作" })).not.toBeInTheDocument();
+
+    fireEvent.click(addConnection);
+    expect(screen.getByLabelText("连接名称")).toBeInTheDocument();
   });
 
   it("连接成功后进入对应工作区，返回连接管理后可重新进入", async () => {
@@ -663,7 +670,7 @@ describe("Redix 应用壳", () => {
     fireEvent.keyDown(window, { key: "1", metaKey: true });
     await screen.findByText("远程 Redis");
     expect(screen.queryByRole("complementary", { name: "产品侧边栏" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "连接管理" })).toHaveFocus();
+    expect(screen.getByRole("heading", { name: "连接管理" })).toHaveFocus();
 
     fireEvent.click(screen.getByRole("button", { name: "连接" }));
     await screen.findByRole("heading", { name: "数据浏览" });
@@ -748,7 +755,7 @@ describe("Redix 应用壳", () => {
       { id: "query-1", name: "读取用户", command: "GET user:1", tags: [], updated_at: 1 },
     ]);
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "Query Library" }));
+    fireEvent.keyDown(window, { key: "4", ctrlKey: true });
     fireEvent.click(await screen.findByRole("button", { name: "回填 Workbench 读取用户" }));
     fireEvent.click(await screen.findByRole("button", { name: "连接" }));
     await screen.findByRole("heading", { name: "数据浏览" });
@@ -848,7 +855,7 @@ describe("Redix 应用壳", () => {
 
   it("保存设置后更新应用主题属性", async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
     fireEvent.change(screen.getByLabelText("主题"), { target: { value: "dark" } });
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
 

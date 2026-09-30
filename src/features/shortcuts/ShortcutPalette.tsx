@@ -17,7 +17,7 @@ function editing(target: EventTarget | null) {
   ));
 }
 
-export default function ShortcutPalette({ actions }: { actions: ShortcutAction[] }) {
+export default function ShortcutPalette({ actions, showTrigger = true }: { actions: ShortcutAction[]; showTrigger?: boolean }) {
   const [opened, setOpened] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -109,7 +109,7 @@ export default function ShortcutPalette({ actions }: { actions: ShortcutAction[]
   }, [opened, selected?.id]);
 
   return <>
-    <button ref={trigger} type="button" className="button button-quiet shortcuts-trigger"
+    {showTrigger && <button ref={trigger} type="button" className="button button-quiet shortcuts-trigger"
       aria-label="快捷键与操作" aria-haspopup="dialog" aria-expanded={opened}
       aria-keyshortcuts="Control+k Meta+k" title="快捷键与操作 (Ctrl/Cmd+K)" onClick={open}>
       <svg className="shortcuts-trigger-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -117,7 +117,7 @@ export default function ShortcutPalette({ actions }: { actions: ShortcutAction[]
         <path d="M7 10h1m3 0h1m3 0h2M7 14h1m3 0h6" />
       </svg>
       <span className="shortcuts-trigger-label">快捷键与操作</span> <kbd>Ctrl/Cmd+K</kbd>
-    </button>
+    </button>}
     {opened && <div className="shortcuts-backdrop" onMouseDown={(event) => {
       if (event.target === event.currentTarget) { event.preventDefault(); close(); }
     }}>

@@ -200,14 +200,15 @@ export default function App() {
     ...DEFAULT_APP_SETTINGS,
   }));
   const [pendingWorkbenchCommand, setPendingWorkbenchCommand] = useState<string | null>(null);
+  const [connectionActionsTarget, setConnectionActionsTarget] = useState<HTMLDivElement | null>(null);
   const workspace = useRef<HTMLElement>(null);
-  const focusConnectionsOnReturn = useRef(false);
+  const pendingNavigationFocus = useRef<AppSection | null>(null);
 
   useEffect(() => {
-    if (focusConnectionsOnReturn.current && activeSection === "connections") {
-      document.querySelector<HTMLButtonElement>('[data-app-section="connections"]')?.focus();
+    if (pendingNavigationFocus.current === activeSection) {
+      document.querySelector<HTMLElement>(`[data-app-section="${activeSection}"]`)?.focus();
     }
-    focusConnectionsOnReturn.current = false;
+    pendingNavigationFocus.current = null;
   }, [activeSection, connectionWorkspaceOpen]);
 
   useEffect(() => {
@@ -244,7 +245,7 @@ export default function App() {
   };
 
   const handleBackToConnections = () => {
-    focusConnectionsOnReturn.current = true;
+    pendingNavigationFocus.current = "connections";
     setConnectionWorkspaceOpen(false);
     setPendingWorkbenchCommand(null);
     setActiveSection("connections");
@@ -303,8 +304,9 @@ export default function App() {
       unavailable: () => navigationUnavailable(item.id),
       run: () => {
         if (navigationUnavailable(item.id)) return;
+        pendingNavigationFocus.current = item.id;
         navigateTo(item.id);
-        document.querySelector<HTMLButtonElement>(`[data-app-section="${item.id}"]`)?.focus();
+        document.querySelector<HTMLElement>(`[data-app-section="${item.id}"]`)?.focus();
       },
     })),
     {
@@ -385,31 +387,36 @@ export default function App() {
         <header className="app-home-header">
           <AppBrand />
           <div className="app-home-actions">
-            <nav className="app-home-navigation" aria-label="主导航">
-              {navigationItems.filter((item) => canAccessLocalResources(item.id)).map((item) => (
-                <button
-                  type="button"
-                  key={item.id}
-                  className={`button button-quiet${currentSection.id === item.id ? " app-home-navigation-active" : ""}`}
-                  data-app-section={item.id}
-                  aria-current={currentSection.id === item.id ? "page" : undefined}
-                  onClick={() => navigateTo(item.id)}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </nav>
-            <ShortcutPalette actions={shortcutActions} />
+            {showConnectionPage ? (
+              <div ref={setConnectionActionsTarget} />
+            ) : (
+              <nav className="app-home-navigation" aria-label="主导航">
+                {navigationItems.filter((item) => canAccessLocalResources(item.id)).map((item) => (
+                  <button
+                    type="button"
+                    key={item.id}
+                    className={`button button-quiet${currentSection.id === item.id ? " app-home-navigation-active" : ""}`}
+                    data-app-section={item.id}
+                    aria-current={currentSection.id === item.id ? "page" : undefined}
+                    onClick={() => navigateTo(item.id)}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
+            )}
+            <ShortcutPalette actions={shortcutActions} showTrigger={!showConnectionPage} />
           </div>
         </header>
       )}
 
       <section className="app-main">
-        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}${isBrowserWorkspace ? " workspace-browser" : ""}${isWorkbenchWorkspace ? " workspace-workbench" : ""}${isDatabaseWorkspace ? " workspace-database" : ""}${isObservabilityWorkspace ? " workspace-observability" : ""}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
+        <section ref={workspace} className={`workspace${canAccessWorkspace ? "" : " workspace-home"}${showConnectionPage ? " workspace-connections" : ""}${isBrowserWorkspace ? " workspace-browser" : ""}${isWorkbenchWorkspace ? " workspace-workbench" : ""}${isDatabaseWorkspace ? " workspace-database" : ""}${isObservabilityWorkspace ? " workspace-observability" : ""}`} aria-label={canAccessWorkspace ? "当前工作区" : "本地页面"}>
           {showConnectionPage ? (
             <ConnectionPage
               activeConnectionId={activeProfile?.id ?? null}
               onOpenConnection={handleOpenConnection}
+              actionsTarget={connectionActionsTarget}
             />
           ) : null}
           {canAccessWorkspace && activeProfile ? (
