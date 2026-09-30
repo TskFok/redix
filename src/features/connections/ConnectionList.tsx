@@ -1,7 +1,4 @@
 import type { ConnectionProfile } from "../../lib/types";
-import { connectionAddress } from "./connectionState";
-import { connectionTagsFor, ConnectionTagsPanel } from "./ConnectionTags";
-import type { ConnectionTag, ConnectionTags } from "../../lib/localProductsApi";
 
 interface ConnectionListProps {
   profiles: ConnectionProfile[];
@@ -11,8 +8,6 @@ interface ConnectionListProps {
   onEdit: (profile: ConnectionProfile) => void;
   onOpen: (profile: ConnectionProfile) => void;
   onDelete: (profile: ConnectionProfile) => void;
-  tags?: ConnectionTags;
-  onTagsSaved?: (id: string, tags: ConnectionTag[]) => void;
 }
 
 export function ConnectionList({
@@ -23,8 +18,6 @@ export function ConnectionList({
   onEdit,
   onOpen,
   onDelete,
-  tags,
-  onTagsSaved,
 }: ConnectionListProps) {
   if (profiles.length === 0) {
     return (
@@ -40,59 +33,30 @@ export function ConnectionList({
 
   return (
     <div className="connection-list" aria-label="Redis 连接列表">
+      <div className="connection-list-header" aria-hidden="true">
+        <span>连接名称</span>
+        <span>连接状态</span>
+        <span>操作</span>
+      </div>
       {profiles.map((profile) => {
         const isActive = activeId === profile.id;
         const isOpening = openingId === profile.id;
         const isDeleting = deletingId === profile.id;
         return (
           <article
-            className={`connection-card${isActive ? " connection-card-active" : ""}`}
+            className={`connection-row${isActive ? " connection-row-active" : ""}`}
             key={profile.id}
           >
-            <div className="connection-card-heading">
-              <div>
-                <h3>{profile.name}</h3>
-                <p className="connection-address">
-                  <code>
-                    {connectionAddress(profile)}
-                  </code>
-                </p>
-                {profile.ssh && <p className="connection-address">SSH · {profile.ssh.host}:{profile.ssh.port}</p>}
-              </div>
-              <span className={`connection-status${isActive ? " status-active" : ""}`}>
-                <span className="status-dot" aria-hidden="true" />
-                {isActive ? "已连接" : "未连接"}
-              </span>
-            </div>
-
-            <dl className="connection-metadata">
-              <div>
-                <dt>数据库</dt>
-                <dd>{profile.database}</dd>
-              </div>
-              <div>
-                <dt>认证</dt>
-                <dd>{profile.has_password ? "已配置" : "未配置"}</dd>
-              </div>
-              <div>
-                <dt>TLS</dt>
-                <dd>{profile.tls ? "已启用" : "未启用"}</dd>
-              </div>
-              <div>
-                <dt>证书</dt>
-                <dd>
-                  {profile.has_ca_certificate || profile.has_client_certificate
-                    ? "已配置"
-                    : profile.ca_certificate_name || profile.client_certificate_name
-                      ? "需重新录入"
-                      : "未配置"}
-                </dd>
-              </div>
-            </dl>
-
-            {tags && onTagsSaved && <ConnectionTagsPanel connectionId={profile.id} connectionName={profile.name} tags={connectionTagsFor(tags, profile.id)} onSaved={onTagsSaved} />}
-
-            <div className="card-actions">
+            <h3 className="connection-name" title={profile.name}>{profile.name}</h3>
+            <span
+              className={`connection-status${isOpening ? " status-opening" : isActive ? " status-active" : ""}`}
+              role="status"
+              aria-label={`${profile.name} 连接状态`}
+            >
+              <span className="status-dot" aria-hidden="true" />
+              {isOpening ? "连接中…" : isActive ? "已连接" : "未连接"}
+            </span>
+            <div className="connection-row-actions">
               <button
                 type="button"
                 className="button button-primary button-compact"

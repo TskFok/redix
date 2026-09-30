@@ -1,0 +1,194 @@
+.connection-form-panel.connection-form-compact {
+  max-width: 920px;
+  padding: 16px;
+  box-shadow: none;
+}
+
+.connection-form-panel.connection-form-compact > .panel-heading {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.connection-form-panel.connection-form-compact .panel-heading h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.4;
+}
+
+.connection-form-panel.connection-form-compact .connection-form {
+  margin-top: 14px;
+}
+
+.connection-form-panel.connection-form-compact .form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 10px 12px;
+}
+
+.connection-form-panel.connection-form-compact .connection-basic-fields {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-areas:
+    "name name topology database"
+    "username username password password";
+}
+
+.connection-form-panel.connection-form-compact .connection-basic-standalone {
+  grid-template-areas:
+    "name name topology topology"
+    "host host port database"
+    "username username password password";
+}
+
+.connection-form-panel.connection-form-compact .connection-name-field {
+  grid-area: name;
+}
+
+.connection-form-panel.connection-form-compact .connection-topology-field {
+  grid-area: topology;
+}
+
+.connection-form-panel.connection-form-compact .connection-host-field {
+  grid-area: host;
+}
+
+.connection-form-panel.connection-form-compact .connection-port-field {
+  grid-area: port;
+}
+
+.connection-form-panel.connection-form-compact .connection-database-field {
+  grid-area: database;
+}
+
+.connection-form-panel.connection-form-compact .connection-username-field {
+  grid-area: username;
+}
+
+.connection-form-panel.connection-form-compact .connection-password-field {
+  grid-area: password;
+}
+
+.connection-form-panel.connection-form-compact .field {
+  gap: 5px;
+}
+
+.connection-form-panel.connection-form-compact .field input:not([type="checkbox"]),
+.connection-form-panel.connection-form-compact .app-select {
+  min-height: 34px;
+  height: 34px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.connection-form-panel.connection-form-compact .field textarea {
+  min-height: 76px;
+  padding: 7px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.connection-form-panel.connection-form-compact .connection-tls-panel {
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.connection-form-panel.connection-form-compact .connection-tls-panel > h3 {
+  color: var(--color-text-strong);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.connection-form-panel.connection-form-compact .connection-tls-panel > p,
+.connection-form-panel.connection-form-compact .field-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.connection-form-panel.connection-form-compact .checkbox-field {
+  min-height: 24px;
+  width: fit-content;
+  max-width: 100%;
+  color: var(--color-text);
+}
+
+.connection-form-panel.connection-form-compact .connection-tls-fields {
+  gap: 10px;
+}
+
+.connection-form-panel.connection-form-compact .connection-certificate-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 12px;
+}
+
+.connection-form-panel.connection-form-compact .connection-certificate-block {
+  display: grid;
+  min-width: 0;
+  gap: 10px;
+}
+
+.connection-form-panel.connection-form-compact .connection-certificate-block .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.connection-form-panel.connection-form-compact .form-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  gap: 8px;
+  margin: 14px -16px -16px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--color-surface);
+}
+
+.connection-form-panel.connection-form-compact .form-actions > .button:first-child {
+  margin-right: auto;
+}
+
+.connection-form-panel.connection-form-compact .button {
+  min-height: 34px;
+  padding: 6px 12px;
+}
+
+@media (max-width: 760px) {
+  .connection-form-panel.connection-form-compact .form-grid,
+  .connection-form-panel.connection-form-compact .connection-certificate-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .connection-form-panel.connection-form-compact .connection-basic-fields {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas: none;
+  }
+
+  .connection-form-panel.connection-form-compact .connection-basic-fields > .field {
+    grid-area: auto;
+    grid-column: 1 / -1;
+  }
+
+  .connection-form-panel.connection-form-compact .connection-basic-standalone > .connection-port-field,
+  .connection-form-panel.connection-form-compact .connection-basic-standalone > .connection-database-field {
+    grid-column: auto;
+  }
+
+  .connection-form-panel.connection-form-compact .form-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .connection-form-panel.connection-form-compact .form-actions > .button {
+    width: 100%;
+    padding-right: 10px;
+    padding-left: 10px;
+  }
+
+  .connection-form-panel.connection-form-compact .form-actions > .button:first-child {
+    margin-right: 0;
+  }
+}

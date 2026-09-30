@@ -110,49 +110,73 @@ describe("Redis 连接管理页面", () => {
     vi.unstubAllGlobals();
   });
 
-  it("连接标签可在列表中管理、筛选，清空筛选恢复连接", async () => {
-    listConnectionsMock.mockResolvedValue([localProfile, { ...localProfile, id: "two", name: "另一个 Redis" }]);
-    listConnectionTagsMock.mockResolvedValue({ local: [{ key: "env", value: "prod" }] });
-    saveConnectionTagsMock.mockResolvedValue([{ key: "env", value: "dev" }]);
+  it("按连接名称搜索时忽略大小写和首尾空格，不匹配地址或标签", async () => {
+    listConnectionsMock.mockResolvedValue([
+      { ...localProfile, name: "Production Redis" },
+      { ...localProfile, id: "two", name: "测试缓存", host: "production.example" },
+    ]);
+    listConnectionTagsMock.mockResolvedValue({ two: [{ key: "env", value: "Production Redis" }] });
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
-    await screen.findByText("env=prod");
-    fireEvent.change(screen.getByLabelText("筛选连接标签"), {target:{value:"prod"}});
-    expect(screen.queryByText("另一个 Redis")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", {name:"管理标签 本地 Redis"}));
-    fireEvent.change(screen.getByLabelText("标签值 1"), {target:{value:"dev"}});
-    fireEvent.click(screen.getByRole("button", {name:"保存标签"}));
-    expect(await screen.findByText("没有匹配标签的连接。")).toBeInTheDocument();
-    expect(saveConnectionTagsMock).toHaveBeenCalledWith("local", [{key:"env",value:"dev"}]);
-    fireEvent.change(screen.getByLabelText("筛选连接标签"), {target:{value:""}});
-    expect(screen.getByText("env=dev")).toBeInTheDocument();
-    expect(screen.getByText("另一个 Redis")).toBeInTheDocument();
+    await screen.findByText("Production Redis");
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索连接名称" }), {
+      target: { value: "  PrOdUcTiOn  " },
+    });
+
+    expect(screen.getByText("Production Redis")).toBeInTheDocument();
+    expect(screen.queryByText("测试缓存")).not.toBeInTheDocument();
+    expect(screen.getByText("显示 1 / 2 个连接")).toBeInTheDocument();
+    expect(screen.queryByLabelText("筛选连接标签")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("仅显示无标签连接")).not.toBeInTheDocument();
+    expect(listConnectionTagsMock).not.toHaveBeenCalled();
   });
 
-  it("特殊连接ID缺少标签时仍可打开标签编辑器", async () => {
-    listConnectionsMock.mockResolvedValue([{ ...localProfile, id: "__proto__" }]);
-    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
-    fireEvent.click(await screen.findByRole("button", { name: "管理标签 本地 Redis" }));
-    expect(screen.getByRole("button", { name: "添加标签" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("标签键 1")).not.toBeInTheDocument();
-  });
-
-  it("无匹配连接时清除全部筛选并恢复列表和数量", async () => {
+  it("无匹配名称时清除搜索并恢复列表和数量", async () => {
     listConnectionsMock.mockResolvedValue([localProfile, { ...localProfile, id: "two", name: "另一个 Redis" }]);
-    listConnectionTagsMock.mockResolvedValue({ local: [{ key: "env", value: "prod" }] });
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("本地 Redis");
 
-    await screen.findByText("env=prod");
-    fireEvent.change(screen.getByLabelText("筛选连接标签"), { target: { value: "prod" } });
-    fireEvent.click(screen.getByLabelText("仅显示无标签连接"));
-    expect(screen.getByText("没有匹配标签的连接。")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索连接名称" }), {
+      target: { value: "不存在的连接" },
+    });
+    expect(screen.getByText("没有匹配的连接")).toBeInTheDocument();
     expect(screen.getByText("显示 0 / 2 个连接")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "清除筛选" }));
-    expect(screen.getByLabelText("筛选连接标签")).toHaveValue("");
-    expect(screen.getByLabelText("仅显示无标签连接")).not.toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "清除搜索" }));
+    expect(screen.getByRole("searchbox", { name: "搜索连接名称" })).toHaveValue("");
     expect(screen.getByText("本地 Redis")).toBeInTheDocument();
     expect(screen.getByText("另一个 Redis")).toBeInTheDocument();
     expect(screen.getByText("共 2 个连接")).toBeInTheDocument();
+  });
+
+  it("空白名称搜索显示全部连接", async () => {
+    listConnectionsMock.mockResolvedValue([localProfile, { ...localProfile, id: "two", name: "另一个 Redis" }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    await screen.findByText("本地 Redis");
+
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索连接名称" }), {
+      target: { value: "   " },
+    });
+
+    expect(screen.getAllByRole("article")).toHaveLength(2);
+    expect(screen.getByText("共 2 个连接")).toBeInTheDocument();
+  });
+
+  it("连接期间显示连接中状态，成功后显示已连接并恢复操作", async () => {
+    let finish!: () => void;
+    openConnectionMock.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    listConnectionsMock.mockResolvedValue([localProfile]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+    fireEvent.click(await screen.findByRole("button", { name: "连接" }));
+
+    const row = screen.getByRole("article");
+    expect(within(row).getByRole("status")).toHaveTextContent("连接中…");
+    expect(within(row).getByRole("button", { name: "编辑 本地 Redis" })).toBeDisabled();
+    expect(within(row).getByRole("button", { name: "删除 本地 Redis" })).toBeDisabled();
+
+    await act(async () => finish());
+    expect(within(row).getByRole("status")).toHaveTextContent("已连接");
+    expect(within(row).getByRole("button", { name: "重新连接" })).toBeEnabled();
   });
 
   it("无连接时显示新增提示并能打开连接表单", async () => {
@@ -189,7 +213,7 @@ describe("Redis 连接管理页面", () => {
       profile: { sentinel: { master_name: "primary", nodes: [{ host: "sentinel-a", port: 26379 }, { host: "::1", port: 26380 }], username: "watcher", has_password: true } },
       password: "redis-secret", sentinel_password: "sentinel-secret",
     });
-    expect(await screen.findByText("Sentinel · primary")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "本地 Redis" })).toBeInTheDocument();
   });
 
   it("SSH 私钥路径仅进入 secret input 并允许 TLS", async () => {
@@ -210,7 +234,7 @@ describe("Redis 连接管理页面", () => {
     expect(saveConnectionMock.mock.calls[0][0].ssh_identity_file).toBe("/Users/operator/.ssh/id_ed25519");
     expect(saveConnectionMock.mock.calls[0][0].profile.ssh).not.toHaveProperty("identity_file");
     expect(saveConnectionMock.mock.calls[0][0].profile.ssh).not.toHaveProperty("known_hosts_file");
-    expect(await screen.findByText("SSH · bastion.example:22")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "本地 Redis" })).toBeInTheDocument();
   });
 
   it("可通过文件选择填充 SSH 私钥路径并保存", async () => {
@@ -277,7 +301,7 @@ describe("Redis 连接管理页面", () => {
     await waitFor(() => expect(saveConnectionMock).toHaveBeenCalledTimes(1));
     expect(saveConnectionMock.mock.calls[0][0]).toEqual(testConnectionMock.mock.calls[0][0]);
     expect(saveConnectionMock.mock.calls[0][0].profile).toMatchObject({ host: "::1", port: 7000, database: 0, cluster: { nodes: [{ host: "::1", port: 7000 }, { host: "redis-b", port: 7001 }], read_from_replicas: true } });
-    expect(screen.getByText(/Cluster · 2 个种子/)).toHaveTextContent("redis-b:7001");
+    expect(await screen.findByRole("heading", { name: "本地 Redis" })).toBeInTheDocument();
   });
 
   it("Sentinel SSH 密码与 Redis/Sentinel 凭据独立，支持双 TLS", async () => {
@@ -481,7 +505,7 @@ describe("Redis 连接管理页面", () => {
     expect(importConnectionsMock).not.toHaveBeenCalled();
   });
 
-  it("连接卡片显示 TLS 与证书重新录入状态", async () => {
+  it("连接列表仅展示名称、状态和操作，详细配置留在编辑表单", async () => {
     const tlsProfile: ConnectionProfile = {
       ...localProfile,
       id: "tls-profile",
@@ -491,11 +515,23 @@ describe("Redis 连接管理页面", () => {
       has_ca_certificate: false,
     };
     listConnectionsMock.mockResolvedValue([tlsProfile]);
+    listConnectionTagsMock.mockResolvedValue({ "tls-profile": [{ key: "env", value: "prod" }] });
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
-
     await screen.findByText("TLS Redis");
-    expect(screen.getByText("已启用")).toBeInTheDocument();
-    expect(screen.getByText("需重新录入")).toBeInTheDocument();
+
+    const row = screen.getByRole("article");
+    expect(within(row).getByRole("heading", { name: "TLS Redis" })).toBeInTheDocument();
+    expect(within(row).getByRole("status")).toHaveTextContent("未连接");
+    expect(within(row).getAllByRole("button")).toHaveLength(3);
+    expect(row).not.toHaveTextContent("127.0.0.1");
+    expect(row).not.toHaveTextContent("数据库");
+    expect(row).not.toHaveTextContent("证书");
+    expect(row).not.toHaveTextContent("env=prod");
+    expect(within(row).queryByRole("button", { name: /管理标签/ })).not.toBeInTheDocument();
+
+    fireEvent.click(within(row).getByRole("button", { name: "编辑 TLS Redis" }));
+    expect(screen.getByLabelText("启用 TLS")).toBeChecked();
+    expect(screen.getByLabelText("CA 名称")).toHaveValue("Root CA");
   });
 
   it("保存成功后刷新连接列表并按顺序打开对应连接", async () => {
@@ -715,7 +751,7 @@ describe("Redis 连接管理页面", () => {
     const accept = within(screen.getByRole("alertdialog")).getByRole("button", { name: "确认删除" });
     if (context === "活动连接") view.rerender(<ConnectionPage activeConnectionId="other" onOpenConnection={onOpenConnectionMock} />);
     else if (context === "编辑连接") fireEvent.click(screen.getByRole("button", { name: "编辑 本地 Redis" }));
-    else fireEvent.change(screen.getByLabelText("筛选连接标签"), { target: { value: "missing" } });
+    else fireEvent.change(screen.getByRole("searchbox", { name: "搜索连接名称" }), { target: { value: "missing" } });
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     await act(async () => fireEvent.click(accept));
     expect(deleteConnectionMock).not.toHaveBeenCalled();

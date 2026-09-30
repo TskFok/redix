@@ -569,7 +569,7 @@ input[type="number"] {
 }
 
 .workspace.workspace-connections {
-  padding-top: 20px;
+  padding: 16px 24px 24px;
 }
 
 .app-shell.app-shell-browser,
@@ -610,7 +610,7 @@ input[type="number"] {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
 }
 
 .page-heading,
@@ -878,59 +878,73 @@ input[type="number"] {
   gap: 8px;
 }
 
+.connections-actions .button,
+.connections-toolbar .button {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
 .connections-page > .feedback,
 .connections-page > .transfer-feedback,
-.connections-page > .loading-state,
-.connections-page > .connections-tags-error {
+.connections-page > .loading-state {
   margin: 0;
 }
 
 .connections-toolbar {
   display: flex;
   min-width: 0;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 16px 24px;
-  padding: 20px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
+  gap: 8px 12px;
 }
 
-.connections-filters {
+.connections-search {
+  position: relative;
   display: flex;
   min-width: 0;
-  flex: 1 1 520px;
-  align-items: flex-end;
-  flex-wrap: wrap;
-  gap: 12px 20px;
+  flex: 0 1 360px;
+  align-items: center;
+  gap: 8px;
 }
 
-.connections-filter-search {
-  flex: 1 1 280px;
-  max-width: 440px;
+.connections-search input {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 8px 11px 8px 34px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  background: var(--color-surface);
+  font-size: 12px;
 }
 
-.connections-filter-toggle {
-  min-height: 40px;
+.connections-search input::placeholder {
+  color: var(--color-placeholder);
+}
+
+.connections-search input:hover {
+  border-color: var(--color-primary);
+}
+
+.connections-search-icon {
+  position: absolute;
+  left: 11px;
+  width: 15px;
+  height: 15px;
+  color: var(--color-muted);
+  pointer-events: none;
 }
 
 .connections-count {
   display: flex;
-  min-height: 40px;
+  min-height: 34px;
   align-items: center;
-  margin: 0;
+  margin: 0 0 0 auto;
   color: var(--color-muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
-}
-
-.connections-tags-error {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
 }
 
 .connections-empty-filter {
@@ -946,13 +960,13 @@ input[type="number"] {
 }
 
 .connection-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr));
-  align-items: stretch;
-  gap: 20px;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  overflow: hidden;
 }
 
-.connection-card,
 .connection-form-panel {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -960,53 +974,52 @@ input[type="number"] {
   box-shadow: var(--shadow-panel);
 }
 
-.connection-card {
-  display: flex;
+.connection-list-header,
+.connection-row {
+  display: grid;
   min-width: 0;
-  flex-direction: column;
-  gap: 20px;
-  padding: 20px;
-  box-shadow: none;
-  transition: border-color var(--transition-fast), background-color var(--transition-fast);
+  grid-template-columns: minmax(0, 1fr) 104px 220px;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 16px;
 }
 
-.connection-card:hover,
-.connection-card-active {
-  border-color: var(--color-border-strong);
+.connection-list-header {
+  min-height: 36px;
+  color: var(--color-muted);
+  background: var(--color-surface-raised);
+  font-size: 11px;
+}
+
+.connection-list-header > :last-child {
+  text-align: right;
+}
+
+.connection-row {
+  min-height: 56px;
+  border-top: 1px solid var(--color-border);
+  transition: background-color var(--transition-fast);
+}
+
+.connection-row:hover {
   background: var(--color-surface-raised);
 }
 
-.connection-card-active {
-  border-color: var(--color-primary);
+.connection-row-active {
+  background: var(--color-surface-selected);
   box-shadow: inset 3px 0 0 var(--color-primary);
 }
 
-.connection-card-heading {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-
-.connection-card h3 {
+.connection-name {
+  min-width: 0;
   margin: 0;
   color: var(--color-text-strong);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
   line-height: 1.5;
-  overflow-wrap: anywhere;
-}
-
-.connection-card-heading > div {
-  flex: 1 1 200px;
-}
-
-.connection-address {
-  margin: 6px 0 0;
-  color: var(--color-muted);
-  font-size: 11px;
-  line-height: 1.6;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 code {
@@ -1025,10 +1038,6 @@ code {
   font-size: 11px;
 }
 
-.connection-status.status-active {
-  color: var(--color-success-text);
-}
-
 .status-dot {
   width: 7px;
   height: 7px;
@@ -1041,31 +1050,22 @@ code {
   background: var(--color-success-border);
 }
 
-.connection-metadata {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 16px 12px;
+.connection-row .connection-status[role="status"] {
+  order: 0;
   margin: 0;
-  padding: 16px 0;
-  border-top: 1px solid var(--color-border);
-  border-bottom: 1px solid var(--color-border);
-}
-
-.connection-metadata div {
-  min-width: 0;
-}
-
-.connection-metadata dt {
-  color: var(--color-muted);
+  padding: 0;
+  border: 0;
+  background: transparent;
   font-size: 11px;
+  white-space: nowrap;
 }
 
-.connection-metadata dd {
-  margin: 6px 0 0;
-  color: var(--color-text);
-  font-family: "JetBrains Mono", monospace;
-  font-size: 12px;
-  overflow-wrap: anywhere;
+.connection-row .connection-status.status-active {
+  color: var(--color-success-text);
+}
+
+.connection-row .connection-status.status-opening {
+  color: var(--color-primary);
 }
 
 .connection-tags-panel,
@@ -1154,21 +1154,22 @@ code {
   border-top: 1px solid var(--color-border);
 }
 
-.connection-card > .card-actions {
-  flex-direction: row;
+.connection-row-actions {
+  display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: auto;
-  padding-top: 20px;
+  justify-content: flex-end;
+  gap: 6px;
 }
 
-.connection-card > .card-actions .button {
+.connection-row-actions .button {
   width: auto;
-  min-width: 72px;
+  min-width: 56px;
+  min-height: 32px;
+  padding: 6px 10px;
 }
 
-.connection-delete-button {
-  margin-left: auto;
+.connection-row-actions .button:first-child {
+  min-width: 80px;
 }
 
 .connection-form-panel {
@@ -4691,7 +4692,6 @@ input[type="checkbox"]:hover:not(:disabled) {
     flex-direction: column;
   }
 
-  .connection-card-heading,
   .editor-row-hash,
   .editor-row-zset,
   .detail-rename-row,
@@ -4703,7 +4703,6 @@ input[type="checkbox"]:hover:not(:disabled) {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .connection-card-heading,
   .card-actions {
     align-items: flex-start;
     flex-direction: column;
@@ -4756,25 +4755,30 @@ input[type="checkbox"]:hover:not(:disabled) {
 .topology-table { min-width: 1700px; }
 .topology-table th, .topology-table td { max-width: 260px; overflow-wrap: anywhere; }
 .topology-dial-address { display: block; }
-.connection-address, .workspace-context,
+.workspace-context,
 .connection-tls-panel p, .database-panel summary { overflow-wrap: anywhere; }
-.connection-card-heading > div { min-width: 0; }
 .connection-form textarea, .connection-form select { max-width: 100%; }
 @media (max-width: 760px) {
   .app-navigation { flex: 1 1 0; min-width: 0; }
   .app-brand { flex-shrink: 0; }
-  .workspace.workspace-connections { padding-top: 16px; }
-  .connections-heading { align-items: stretch; gap: 16px; }
-  .connections-toolbar { padding: 16px; gap: 12px; }
-  .connections-filters { flex-basis: 100%; gap: 12px; }
-  .connections-filter-search { flex-basis: 100%; max-width: none; }
+  .workspace.workspace-connections { padding: 12px 16px 20px; }
+  .connections-heading { align-items: center; gap: 12px; }
+  .connections-search { flex: 1 1 220px; }
   .connections-count { min-height: 24px; }
-  .connection-card { padding: 16px; }
-  .connection-card .connection-card-heading { flex-direction: row; gap: 12px; }
-  .connection-card .connection-status { order: 0; }
+  .connection-list-header,
+  .connection-row { grid-template-columns: minmax(0, 1fr) 82px 204px; gap: 10px; padding-inline: 12px; }
   .connection-tag-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .connection-tag-row > .button { grid-column: 1 / -1; justify-self: end; }
   .connection-tag-actions .button { flex: 1 1 auto; }
+}
+
+@media (max-width: 560px) {
+  .connection-list-header { display: none; }
+  .connection-row { grid-template-columns: minmax(0, 1fr) auto; gap: 8px 12px; padding-block: 10px; }
+  .connection-row:first-of-type { border-top: 0; }
+  .connection-row-actions { grid-column: 1 / -1; }
+  .connection-row .connection-status { justify-self: end; }
+  .connections-toolbar { column-gap: 8px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

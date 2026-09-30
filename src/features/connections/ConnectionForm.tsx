@@ -3,6 +3,7 @@ import { useState } from "react";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
+import "./connectionForm.css";
 
 import { pickLocalFile } from "../../lib/pickLocalFile";
 import {
@@ -336,13 +337,9 @@ export function ConnectionForm({
   const busy = testing || saving || pickingFile;
 
   return (
-    <section className="connection-form-panel" aria-labelledby="connection-form-title">
+    <section className="connection-form-panel connection-form-compact" aria-labelledby="connection-form-title">
       <div className="panel-heading">
-        <div>
-          <p className="eyebrow">连接配置</p>
-          <h2 id="connection-form-title">{initial ? "编辑连接" : "新增连接"}</h2>
-        </div>
-        <span className="panel-hint">本地保存连接配置</span>
+        <h2 id="connection-form-title">{initial ? "编辑连接" : "新增连接"}</h2>
       </div>
 
       <form
@@ -352,16 +349,8 @@ export function ConnectionForm({
           void handleSave(false);
         }}
       >
-        <div className="form-grid">
-          <label className="field">
-            <span>连接拓扑</span>
-            <Select value={values.topology} onChange={(event) => updateValue("topology", event.target.value)} disabled={busy}>
-              <option value="standalone">Standalone</option>
-              <option value="sentinel">Sentinel</option>
-              <option value="cluster">Cluster</option>
-            </Select>
-          </label>
-          <label className="field">
+        <div className={`form-grid connection-basic-fields connection-basic-${values.topology}`}>
+          <label className="field connection-name-field">
             <span>连接名称</span>
             <input
               autoCapitalize="off"
@@ -375,7 +364,16 @@ export function ConnectionForm({
             />
           </label>
 
-          {values.topology === "standalone" && <label className="field">
+          <label className="field connection-topology-field">
+            <span>连接拓扑</span>
+            <Select value={values.topology} onChange={(event) => updateValue("topology", event.target.value)} disabled={busy}>
+              <option value="standalone">Standalone</option>
+              <option value="sentinel">Sentinel</option>
+              <option value="cluster">Cluster</option>
+            </Select>
+          </label>
+
+          {values.topology === "standalone" && <label className="field connection-host-field">
             <span>主机</span>
             <input
               autoCapitalize="off"
@@ -389,7 +387,7 @@ export function ConnectionForm({
             />
           </label>}
 
-          {values.topology === "standalone" && <label className="field">
+          {values.topology === "standalone" && <label className="field connection-port-field">
             <span>端口</span>
             <input
               autoCapitalize="off"
@@ -405,20 +403,7 @@ export function ConnectionForm({
             />
           </label>}
 
-          <label className="field">
-            <span>用户名</span>
-            <input
-              autoCapitalize="off"
-              autoCorrect="off"
-              autoComplete="username"
-              value={values.username}
-              onChange={(event) => updateValue("username", event.target.value)}
-              placeholder="可选"
-              disabled={busy}
-            />
-          </label>
-
-          <label className="field">
+          <label className="field connection-database-field">
             <span>数据库</span>
             <input
               autoCapitalize="off"
@@ -434,7 +419,20 @@ export function ConnectionForm({
             />
           </label>
 
-          <label className="field">
+          <label className="field connection-username-field">
+            <span>用户名</span>
+            <input
+              autoCapitalize="off"
+              autoCorrect="off"
+              autoComplete="username"
+              value={values.username}
+              onChange={(event) => updateValue("username", event.target.value)}
+              placeholder="可选"
+              disabled={busy}
+            />
+          </label>
+
+          <label className="field connection-password-field">
             <span>密码</span>
             <input
               autoCapitalize="off"
@@ -449,6 +447,24 @@ export function ConnectionForm({
           </label>
         </div>
 
+        {values.topology === "cluster" && <section className="connection-tls-panel" aria-label="Cluster 配置">
+          <h3>Cluster</h3><p>数据库固定为 DB 0。种子用于发现完整拓扑，每行一个节点。</p>
+          <label className="field"><span>Cluster 种子节点</span><textarea autoCapitalize="off" autoCorrect="off" value={values.cluster_nodes} onChange={(event) => updateValue("cluster_nodes", event.target.value)} disabled={busy} rows={4} /></label>
+          <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.cluster_read_from_replicas} onChange={(event) => updateBoolean("cluster_read_from_replicas", event.target.checked)} disabled={busy} /><span>允许从副本读取</span></label>
+        </section>}
+        {values.topology === "sentinel" && <section className="connection-tls-panel" aria-label="Sentinel 配置">
+          <h3>Sentinel</h3>
+          <p>重新连接时发现当前主节点；主从切换后请重新连接，正在运行的会话不会自动迁移。</p>
+          <div className="form-grid">
+            <label className="field"><span>Sentinel 主节点名称</span><input autoCapitalize="off" autoCorrect="off" value={values.sentinel_master_name} onChange={(event) => updateValue("sentinel_master_name", event.target.value)} disabled={busy} placeholder="mymaster" /></label>
+            <label className="field"><span>Sentinel 种子节点</span><textarea autoCapitalize="off" autoCorrect="off" value={values.sentinel_nodes} onChange={(event) => updateValue("sentinel_nodes", event.target.value)} disabled={busy} rows={3} /></label>
+            <label className="field"><span>Sentinel 用户名</span><input autoCapitalize="off" autoCorrect="off" autoComplete="username" value={values.sentinel_username} onChange={(event) => updateValue("sentinel_username", event.target.value)} disabled={busy} placeholder="可选，与 Redis 用户名独立" /></label>
+            <label className="field"><span>Sentinel 密码</span><input autoCapitalize="off" autoCorrect="off" type="password" autoComplete="new-password" value={values.sentinel_password} onChange={(event) => updateValue("sentinel_password", event.target.value)} disabled={busy} placeholder={initial?.sentinel?.has_password ? "留空保留已保存密码" : "可选"} /></label>
+          </div>
+          {initial?.sentinel?.has_password && <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.clear_sentinel_password} onChange={(event) => updateBoolean("clear_sentinel_password", event.target.checked)} disabled={busy} /><span>清除已保存的 Sentinel 密码</span></label>}
+          <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.sentinel_tls} onChange={(event) => updateBoolean("sentinel_tls", event.target.checked)} disabled={busy} /><span>Sentinel 启用 TLS</span></label>
+          <p className="field-hint">上方用户名和密码用于 Redis 主节点。Sentinel TLS 与主节点 TLS 独立启用，共用下方证书和校验设置。</p>
+        </section>}
         <section className="connection-tls-panel" aria-label="SSH 配置">
           <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.ssh_enabled} onChange={(event) => updateBoolean("ssh_enabled", event.target.checked)} disabled={busy || values.topology === "cluster"} /><span>启用 SSH 隧道</span></label>
           {values.topology === "cluster" && <p className="field-hint">Cluster 暂不支持 SSH 隧道；请使用可直达各节点的网络。</p>}
@@ -496,33 +512,7 @@ export function ConnectionForm({
             </>}
           </>}
         </section>
-        {values.topology === "cluster" && <section className="connection-tls-panel" aria-label="Cluster 配置">
-          <h3>Cluster</h3><p>数据库固定为 DB 0。种子用于发现完整拓扑，每行一个节点。</p>
-          <label className="field"><span>Cluster 种子节点</span><textarea autoCapitalize="off" autoCorrect="off" value={values.cluster_nodes} onChange={(event) => updateValue("cluster_nodes", event.target.value)} disabled={busy} rows={4} /></label>
-          <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.cluster_read_from_replicas} onChange={(event) => updateBoolean("cluster_read_from_replicas", event.target.checked)} disabled={busy} /><span>允许从副本读取</span></label>
-        </section>}
-        {values.topology === "sentinel" && <section className="connection-tls-panel" aria-label="Sentinel 配置">
-          <h3>Sentinel</h3>
-          <p>重新连接时发现当前主节点；主从切换后请重新连接，正在运行的会话不会自动迁移。</p>
-          <div className="form-grid">
-            <label className="field"><span>Sentinel 主节点名称</span><input autoCapitalize="off" autoCorrect="off" value={values.sentinel_master_name} onChange={(event) => updateValue("sentinel_master_name", event.target.value)} disabled={busy} placeholder="mymaster" /></label>
-            <label className="field"><span>Sentinel 种子节点</span><textarea autoCapitalize="off" autoCorrect="off" value={values.sentinel_nodes} onChange={(event) => updateValue("sentinel_nodes", event.target.value)} disabled={busy} rows={3} /></label>
-            <label className="field"><span>Sentinel 用户名</span><input autoCapitalize="off" autoCorrect="off" autoComplete="username" value={values.sentinel_username} onChange={(event) => updateValue("sentinel_username", event.target.value)} disabled={busy} placeholder="可选，与 Redis 用户名独立" /></label>
-            <label className="field"><span>Sentinel 密码</span><input autoCapitalize="off" autoCorrect="off" type="password" autoComplete="new-password" value={values.sentinel_password} onChange={(event) => updateValue("sentinel_password", event.target.value)} disabled={busy} placeholder={initial?.sentinel?.has_password ? "留空保留已保存密码" : "可选"} /></label>
-          </div>
-          {initial?.sentinel?.has_password && <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.clear_sentinel_password} onChange={(event) => updateBoolean("clear_sentinel_password", event.target.checked)} disabled={busy} /><span>清除已保存的 Sentinel 密码</span></label>}
-          <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.sentinel_tls} onChange={(event) => updateBoolean("sentinel_tls", event.target.checked)} disabled={busy} /><span>Sentinel 启用 TLS</span></label>
-          <p className="field-hint">上方用户名和密码用于 Redis 主节点。Sentinel TLS 与主节点 TLS 独立启用，共用下方证书和校验设置。</p>
-        </section>}
-        <section className="connection-tls-panel" aria-labelledby="tls-panel-title">
-          <div className="connection-tls-heading">
-            <div>
-              <p className="eyebrow">传输安全</p>
-              <h3 id="tls-panel-title">TLS / 证书</h3>
-            </div>
-            <span className="panel-hint">host 同时作为 TLS SNI</span>
-          </div>
-
+        <section className="connection-tls-panel" aria-label="TLS / 证书">
           <label className="checkbox-field">
             <input
               autoCapitalize="off"
@@ -558,133 +548,138 @@ export function ConnectionForm({
                 </p>
               ) : null}
 
-              <div className="form-grid">
-                <label className="field">
-                  <span>CA 名称</span>
-                  <input
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    autoComplete="off"
-                    aria-label="CA 名称"
-                    value={values.ca_certificate_name}
-                    onChange={(event) =>
-                      updateValue("ca_certificate_name", event.target.value)
-                    }
-                    placeholder="例如：Redis Root CA"
-                    disabled={busy}
-                  />
-                </label>
+              <div className="connection-certificate-grid">
+                <div className="connection-certificate-block">
+                  <div className="form-grid">
+                    <label className="field">
+                      <span>CA 名称</span>
+                      <input
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        autoComplete="off"
+                        aria-label="CA 名称"
+                        value={values.ca_certificate_name}
+                        onChange={(event) =>
+                          updateValue("ca_certificate_name", event.target.value)
+                        }
+                        placeholder="例如：Redis Root CA"
+                        disabled={busy}
+                      />
+                    </label>
 
-                <label className="field field-wide">
-                  <span>CA 证书</span>
-                  <textarea
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    aria-label="CA 证书"
-                    value={values.ca_certificate}
-                    onChange={(event) =>
-                      updateValue("ca_certificate", event.target.value)
-                    }
-                    placeholder={
-                      initial?.has_ca_certificate
-                        ? "留空以保留现有 CA；正文不会回填"
-                        : "粘贴 -----BEGIN CERTIFICATE----- PEM"
-                    }
-                    rows={5}
-                    disabled={busy}
-                  />
-                </label>
+                    <label className="field field-wide">
+                      <span>CA 证书</span>
+                      <textarea
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        aria-label="CA 证书"
+                        value={values.ca_certificate}
+                        onChange={(event) =>
+                          updateValue("ca_certificate", event.target.value)
+                        }
+                        placeholder={
+                          initial?.has_ca_certificate
+                            ? "留空以保留现有 CA；正文不会回填"
+                            : "粘贴 -----BEGIN CERTIFICATE----- PEM"
+                        }
+                        rows={3}
+                        disabled={busy}
+                      />
+                    </label>
+                  </div>
+
+                  {initial?.has_ca_certificate ? (
+                    <label className="checkbox-field">
+                      <input
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        type="checkbox"
+                        aria-label="清除已有 CA 证书"
+                        checked={values.clear_ca_certificate}
+                        onChange={(event) =>
+                          updateBoolean("clear_ca_certificate", event.target.checked)
+                        }
+                        disabled={busy}
+                      />
+                      <span>清除已有 CA 证书</span>
+                    </label>
+                  ) : null}
+                </div>
+                <div className="connection-certificate-block">
+                  <div className="form-grid">
+                    <label className="field">
+                      <span>客户端证书名称</span>
+                      <input
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        autoComplete="off"
+                        aria-label="客户端证书名称"
+                        value={values.client_certificate_name}
+                        onChange={(event) =>
+                          updateValue("client_certificate_name", event.target.value)
+                        }
+                        placeholder="启用 mTLS 时填写"
+                        disabled={busy}
+                      />
+                    </label>
+
+                    <label className="field field-wide">
+                      <span>客户端证书</span>
+                      <textarea
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        aria-label="客户端证书"
+                        value={values.client_certificate}
+                        onChange={(event) =>
+                          updateValue("client_certificate", event.target.value)
+                        }
+                        placeholder={
+                          initial?.has_client_certificate
+                            ? "留空以保留现有证书；正文不会回填"
+                            : "粘贴客户端证书 PEM"
+                        }
+                        rows={3}
+                        disabled={busy}
+                      />
+                    </label>
+
+                    <label className="field field-wide">
+                      <span>客户端私钥</span>
+                      <textarea
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        aria-label="客户端私钥"
+                        value={values.client_key}
+                        onChange={(event) => updateValue("client_key", event.target.value)}
+                        placeholder={
+                          initial?.has_client_certificate
+                            ? "留空以保留现有私钥；正文不会回填"
+                            : "粘贴 PKCS#8 / RSA / EC 私钥 PEM"
+                        }
+                        rows={3}
+                        disabled={busy}
+                      />
+                    </label>
+                  </div>
+
+                  {initial?.has_client_certificate ? (
+                    <label className="checkbox-field">
+                      <input
+                        autoCapitalize="off"
+                        autoCorrect="off"
+                        type="checkbox"
+                        aria-label="清除已有客户端证书"
+                        checked={values.clear_client_certificate}
+                        onChange={(event) =>
+                          updateBoolean("clear_client_certificate", event.target.checked)
+                        }
+                        disabled={busy}
+                      />
+                      <span>清除已有客户端证书和私钥</span>
+                    </label>
+                  ) : null}
+                </div>
               </div>
-
-              {initial?.has_ca_certificate ? (
-                <label className="checkbox-field">
-                  <input
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    type="checkbox"
-                    aria-label="清除已有 CA 证书"
-                    checked={values.clear_ca_certificate}
-                    onChange={(event) =>
-                      updateBoolean("clear_ca_certificate", event.target.checked)
-                    }
-                    disabled={busy}
-                  />
-                  <span>清除已有 CA 证书</span>
-                </label>
-              ) : null}
-
-              <div className="form-grid">
-                <label className="field">
-                  <span>客户端证书名称</span>
-                  <input
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    autoComplete="off"
-                    aria-label="客户端证书名称"
-                    value={values.client_certificate_name}
-                    onChange={(event) =>
-                      updateValue("client_certificate_name", event.target.value)
-                    }
-                    placeholder="启用 mTLS 时填写"
-                    disabled={busy}
-                  />
-                </label>
-
-                <label className="field field-wide">
-                  <span>客户端证书</span>
-                  <textarea
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    aria-label="客户端证书"
-                    value={values.client_certificate}
-                    onChange={(event) =>
-                      updateValue("client_certificate", event.target.value)
-                    }
-                    placeholder={
-                      initial?.has_client_certificate
-                        ? "留空以保留现有证书；正文不会回填"
-                        : "粘贴客户端证书 PEM"
-                    }
-                    rows={5}
-                    disabled={busy}
-                  />
-                </label>
-
-                <label className="field field-wide">
-                  <span>客户端私钥</span>
-                  <textarea
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    aria-label="客户端私钥"
-                    value={values.client_key}
-                    onChange={(event) => updateValue("client_key", event.target.value)}
-                    placeholder={
-                      initial?.has_client_certificate
-                        ? "留空以保留现有私钥；正文不会回填"
-                        : "粘贴 PKCS#8 / RSA / EC 私钥 PEM"
-                    }
-                    rows={5}
-                    disabled={busy}
-                  />
-                </label>
-              </div>
-
-              {initial?.has_client_certificate ? (
-                <label className="checkbox-field">
-                  <input
-                    autoCapitalize="off"
-                    autoCorrect="off"
-                    type="checkbox"
-                    aria-label="清除已有客户端证书"
-                    checked={values.clear_client_certificate}
-                    onChange={(event) =>
-                      updateBoolean("clear_client_certificate", event.target.checked)
-                    }
-                    disabled={busy}
-                  />
-                  <span>清除已有客户端证书和私钥</span>
-                </label>
-              ) : null}
               <p className="form-help">
                 证书正文仅提交到本机安全存储，不会出现在连接配置 JSON 或导出文件中。
               </p>

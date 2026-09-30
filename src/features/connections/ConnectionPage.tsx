@@ -20,8 +20,6 @@ import type {
 } from "../../lib/types";
 import ConnectionForm from "./ConnectionForm";
 import ConnectionList from "./ConnectionList";
-import { listConnectionTags, type ConnectionTags } from "../../lib/localProductsApi";
-import { filterConnectionsByTag } from "./ConnectionTags";
 import {
   initialConnectionPageState,
   connectionCleanupFailedMessage,
@@ -93,14 +91,11 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
   const [failure, setFailure, failureToken] = useFeedbackState<ConnectionFailureFeedback | null>(null);
   const [transferBusy, setTransferBusy] = useState(false);
   const [transferFeedback, setTransferFeedback, transferFeedbackToken] = useTransientFeedback<TransferFeedback>();
-  const [tags, setTags] = useState<ConnectionTags | null>(null);
-  const [tagsError, setTagsError] = useState(false);
-  const [tagQuery, setTagQuery] = useState("");
-  const [onlyUntagged, setOnlyUntagged] = useState(false);
+  const [nameQuery, setNameQuery] = useState("");
   const activeId = activeConnectionId === undefined ? state.activeId : activeConnectionId;
   const { confirm, confirmationDialog } = useConfirmDialog(JSON.stringify([
     activeId, state.profiles, state.editingProfile, formOpen, state.loading, state.saving,
-    state.testingId, state.openingId, state.deletingId, transferBusy, tags, tagQuery, onlyUntagged,
+    state.testingId, state.openingId, state.deletingId, transferBusy, nameQuery,
   ]));
   const currentConfirmRef = useRef(confirm);
   currentConfirmRef.current = confirm;
@@ -110,13 +105,6 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
-  }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    void listConnectionTags().then((loaded) => { if (mounted) { setTags(loaded); setTagsError(false); } })
-      .catch(() => { if (mounted) setTagsError(true); });
-    return () => { mounted = false; };
   }, []);
 
   useEffect(() => {
@@ -349,13 +337,11 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
   };
 
   const editingId = state.editingProfile?.id ?? "new";
-  const visibleProfiles = tags ? filterConnectionsByTag(state.profiles, tags, tagQuery, onlyUntagged) : state.profiles;
-  const hasFilters = Boolean(tagQuery.trim()) || onlyUntagged;
-
-  const clearFilters = () => {
-    setTagQuery("");
-    setOnlyUntagged(false);
-  };
+  const normalizedQuery = nameQuery.trim().toLocaleLowerCase();
+  const visibleProfiles = state.profiles.filter((profile) =>
+    profile.name.toLocaleLowerCase().includes(normalizedQuery),
+  );
+  const hasSearch = normalizedQuery.length > 0;
 
   const actions = (
     <div className="page-heading-actions connections-actions" role="group" aria-label="连接操作">
@@ -415,68 +401,43 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
           ) : (
             <>
               {state.profiles.length > 0 && (
-                <div className="connections-toolbar" role="group" aria-label="连接筛选">
-                  {tags && (
-                    <div className="connections-filters">
-                      <label className="field connections-filter-search">
-                        <span>筛选连接标签</span>
-                        <input
-                          autoCapitalize="off"
-                          autoCorrect="off"
-                          value={tagQuery}
-                          placeholder="按标签键或值搜索，例如 env=prod"
-                          onChange={(event) => setTagQuery(event.target.value)}
-                        />
-                      </label>
-                      <label className="checkbox-field connections-filter-toggle">
-                        <input
-                          type="checkbox"
-                          checked={onlyUntagged}
-                          onChange={(event) => setOnlyUntagged(event.target.checked)}
-                        />
-                        <span>仅显示无标签连接</span>
-                      </label>
-                      {hasFilters && (
-                        <button type="button" className="button button-quiet" onClick={clearFilters}>
-                          清除筛选
-                        </button>
-                      )}
-                    </div>
+                <div className="connections-toolbar" role="group" aria-label="连接搜索">
+                  <label className="connections-search">
+                    <span className="sr-only">搜索连接名称</span>
+                    <svg className="connections-search-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                      <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.5" />
+                      <path d="m12.5 12.5 4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                    </svg>
+                    <input
+                      type="search"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
+                      value={nameQuery}
+                      placeholder="搜索连接名称"
+                      onChange={(event) => setNameQuery(event.target.value)}
+                    />
+                  </label>
+                  {nameQuery.length > 0 && (
+                    <button type="button" className="button button-quiet" onClick={() => setNameQuery("")}>
+                      清除搜索
+                    </button>
                   )}
                   <p className="connections-count" aria-live="polite" aria-atomic="true">
-                    {hasFilters && tags
+                    {hasSearch
                       ? `显示 ${visibleProfiles.length} / ${state.profiles.length} 个连接`
                       : `共 ${state.profiles.length} 个连接`}
                   </p>
                 </div>
               )}
-              {tagsError && (
-                <div className="connections-tags-error" role="status">
-                  <span>连接标签加载失败。</span>
-                  <button
-                    type="button"
-                    className="button button-quiet"
-                    onClick={() => {
-                      void listConnectionTags().then((loaded) => {
-                        setTags(loaded);
-                        setTagsError(false);
-                      }).catch(() => setTagsError(true));
-                    }}
-                  >
-                    重试加载标签
-                  </button>
-                </div>
-              )}
               {state.profiles.length > 0 && visibleProfiles.length === 0 ? (
                 <div className="empty-state connections-empty-filter">
-                  <h3>没有匹配标签的连接。</h3>
-                  <p>试试其他标签，或清除筛选查看全部连接。</p>
+                  <h3>没有匹配的连接</h3>
+                  <p>试试其他连接名称，或清除搜索查看全部连接。</p>
                 </div>
               ) : (
                 <ConnectionList
                   profiles={visibleProfiles}
-                  tags={tags ?? undefined}
-                  onTagsSaved={(id, updated) => setTags((current) => ({ ...current, [id]: updated }))}
                   activeId={activeId}
                   openingId={state.openingId}
                   deletingId={state.deletingId}
