@@ -10,6 +10,34 @@ interface ConnectionListProps {
   onDelete: (profile: ConnectionProfile) => void;
 }
 
+function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase();
+  if (normalized === "localhost" || normalized === "localhost.") return true;
+
+  const octets = normalized.split(".");
+  if (octets.length === 4 && octets[0] === "127"
+    && octets.every((octet) => /^\d{1,3}$/.test(octet) && Number(octet) <= 255)) {
+    return true;
+  }
+
+  if (!normalized.includes(":")) return false;
+  try {
+    const address = normalized.startsWith("[") ? normalized : `[${normalized}]`;
+    return new URL(`http://${address}`).hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+function isLocalConnection(profile: ConnectionProfile): boolean {
+  // SSH 中的回环地址属于远端；拓扑连接按配置的全部种子节点判断。
+  if (profile.ssh) return false;
+  const nodes = profile.cluster?.nodes ?? profile.sentinel?.nodes;
+  return nodes
+    ? nodes.length > 0 && nodes.every((node) => isLoopbackHost(node.host))
+    : isLoopbackHost(profile.host);
+}
+
 export function ConnectionList({
   profiles,
   activeId,
@@ -35,6 +63,8 @@ export function ConnectionList({
     <div className="connection-list" aria-label="Redis 连接列表">
       <div className="connection-list-header" aria-hidden="true">
         <span>连接名称</span>
+        <span>数据库</span>
+        <span>是否是本地连接</span>
         <span>连接状态</span>
         <span>操作</span>
       </div>
@@ -48,6 +78,14 @@ export function ConnectionList({
             key={profile.id}
           >
             <h3 className="connection-name" title={profile.name}>{profile.name}</h3>
+            <span className="connection-database" aria-label={`${profile.name} 数据库`}>
+              <span className="connection-detail-label" aria-hidden="true">数据库：</span>
+              DB {profile.cluster ? 0 : profile.database}
+            </span>
+            <span className="connection-local" aria-label={`${profile.name} 是否是本地连接`}>
+              <span className="connection-detail-label" aria-hidden="true">是否是本地连接：</span>
+              {isLocalConnection(profile) ? "是" : "否"}
+            </span>
             <span
               className={`connection-status${isOpening ? " status-opening" : isActive ? " status-active" : ""}`}
               role="status"

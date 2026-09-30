@@ -505,11 +505,12 @@ describe("Redis 连接管理页面", () => {
     expect(importConnectionsMock).not.toHaveBeenCalled();
   });
 
-  it("连接列表仅展示名称、状态和操作，详细配置留在编辑表单", async () => {
+  it("连接列表展示数据库和本地连接标记，详细配置留在编辑表单", async () => {
     const tlsProfile: ConnectionProfile = {
       ...localProfile,
       id: "tls-profile",
       name: "TLS Redis",
+      database: 9,
       tls: true,
       ca_certificate_name: "Root CA",
       has_ca_certificate: false,
@@ -521,10 +522,13 @@ describe("Redis 连接管理页面", () => {
 
     const row = screen.getByRole("article");
     expect(within(row).getByRole("heading", { name: "TLS Redis" })).toBeInTheDocument();
+    expect(screen.getByText("数据库")).toBeInTheDocument();
+    expect(screen.getByText("是否是本地连接")).toBeInTheDocument();
+    expect(within(row).getByLabelText("TLS Redis 数据库")).toHaveTextContent("DB 9");
+    expect(within(row).getByLabelText("TLS Redis 是否是本地连接")).toHaveTextContent("是");
     expect(within(row).getByRole("status")).toHaveTextContent("未连接");
     expect(within(row).getAllByRole("button")).toHaveLength(3);
     expect(row).not.toHaveTextContent("127.0.0.1");
-    expect(row).not.toHaveTextContent("数据库");
     expect(row).not.toHaveTextContent("证书");
     expect(row).not.toHaveTextContent("env=prod");
     expect(within(row).queryByRole("button", { name: /管理标签/ })).not.toBeInTheDocument();
@@ -532,6 +536,66 @@ describe("Redis 连接管理页面", () => {
     fireEvent.click(within(row).getByRole("button", { name: "编辑 TLS Redis" }));
     expect(screen.getByLabelText("启用 TLS")).toBeChecked();
     expect(screen.getByLabelText("CA 名称")).toHaveValue("Root CA");
+  });
+
+  it.each([
+    [" localhost ", "是"],
+    ["LOCALHOST", "是"],
+    ["127.0.0.2", "是"],
+    ["::1", "是"],
+    ["[::1]", "是"],
+    ["0:0:0:0:0:0:0:1", "是"],
+    ["192.168.1.10", "否"],
+    ["redis.example.com", "否"],
+    ["localhost.example.com", "否"],
+    ["127.0.0.1.example.com", "否"],
+  ])("连接列表将地址 %s 的本地连接标记显示为%s", async (host, expected) => {
+    listConnectionsMock.mockResolvedValue([{ ...localProfile, host }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+
+    expect(await screen.findByLabelText("本地 Redis 是否是本地连接")).toHaveTextContent(expected);
+  });
+
+  it("SSH 隧道中的回环地址不显示为本地连接", async () => {
+    listConnectionsMock.mockResolvedValue([{
+      ...localProfile,
+      ssh: {
+        host: "bastion.example.com", port: 22, username: "operator", auth_method: "agent",
+        has_password: false, has_private_key: false, has_passphrase: false,
+        has_identity_file: false, has_known_hosts_file: false,
+      },
+    }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+
+    expect(await screen.findByLabelText("本地 Redis 是否是本地连接")).toHaveTextContent("否");
+  });
+
+  it("Cluster 显示 DB 0 并根据全部种子节点判断本地连接", async () => {
+    listConnectionsMock.mockResolvedValue([{
+      ...localProfile, database: 9,
+      cluster: {
+        nodes: [{ host: "127.0.0.1", port: 7000 }, { host: "redis.example.com", port: 7001 }],
+        read_from_replicas: false,
+      },
+    }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+
+    expect(await screen.findByLabelText("本地 Redis 数据库")).toHaveTextContent("DB 0");
+    expect(screen.getByLabelText("本地 Redis 是否是本地连接")).toHaveTextContent("否");
+  });
+
+  it("Sentinel 根据种子节点判断本地连接并保留配置的数据库", async () => {
+    listConnectionsMock.mockResolvedValue([{
+      ...localProfile, host: "unused.example.com", database: 3,
+      sentinel: {
+        master_name: "primary", username: null, has_password: false, tls: false,
+        nodes: [{ host: "localhost", port: 26379 }, { host: "::1", port: 26380 }],
+      },
+    }]);
+    render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
+
+    expect(await screen.findByLabelText("本地 Redis 数据库")).toHaveTextContent("DB 3");
+    expect(screen.getByLabelText("本地 Redis 是否是本地连接")).toHaveTextContent("是");
   });
 
   it("保存成功后刷新连接列表并按顺序打开对应连接", async () => {
