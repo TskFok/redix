@@ -20,6 +20,7 @@ base64 = "0.22"
 flate2 = "1.1.9"
 thiserror = "2"
 keyring = { version = "4.1", default-features = false, features = ["v1"] }
+ring = "0.17.14"
 redis = { version = "1.5", features = ["tokio-comp", "tokio-rustls-comp", "tls-rustls-insecure", "cluster-async"] }
 tokio = { version = "1", features = ["sync", "macros", "rt-multi-thread"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }

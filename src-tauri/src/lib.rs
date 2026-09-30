@@ -9,7 +9,8 @@ pub mod persistence;
 pub mod redis;
 
 use persistence::{
-    migrate_legacy_ssh_paths, JsonProfileRepository, ProfileRepository, SecretStore, SystemKeyring,
+    migrate_legacy_ssh_paths, CredentialVault, JsonProfileRepository, ProfileRepository,
+    SecretStore, SystemKeyring, SystemVaultKeyStore,
 };
 
 pub struct AppState {
@@ -61,7 +62,11 @@ pub fn run() {
             let profiles: Arc<dyn ProfileRepository> = Arc::new(JsonProfileRepository::new(
                 data_dir.join("connections.json"),
             ));
-            let secrets: Arc<dyn SecretStore> = Arc::new(SystemKeyring::new());
+            let secrets: Arc<dyn SecretStore> = Arc::new(CredentialVault::new(
+                data_dir.join("connection-secrets.json"),
+                Arc::new(SystemVaultKeyStore),
+                Arc::new(SystemKeyring::new()),
+            ));
             migrate_legacy_ssh_paths(profiles.as_ref(), secrets.as_ref())?;
             app.manage(AppState::with_data_dir(profiles, secrets, data_dir));
             Ok(())

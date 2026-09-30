@@ -18,6 +18,8 @@ pub fn prepare_sensitive_storage(data_dir: &Path) -> Result<(), AppError> {
             "workbench-history.json",
             "analysis-history.json",
             "connections.json",
+            "connection-secrets.json",
+            "connection-secrets.lock",
             "query-library.json",
             "connection-tags.json",
             "settings.json",
@@ -75,6 +77,24 @@ pub(super) fn read_private_file(path: &Path) -> io::Result<String> {
     let mut raw = String::new();
     open_private_file(path)?.read_to_string(&mut raw)?;
     Ok(raw)
+}
+
+/// Keep a separate, stable lock file: the data file is atomically replaced on save.
+pub(super) fn lock_private_file(path: &Path) -> io::Result<File> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    create_parent(parent)?;
+    prepare_file(path)?;
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let file = options.open(path)?;
+    restrict_permissions(path, false)?;
+    file.lock()?;
+    Ok(file)
 }
 
 pub(super) fn write_private_file(path: &Path, bytes: &[u8]) -> io::Result<()> {

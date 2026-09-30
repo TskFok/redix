@@ -1,4 +1,5 @@
 pub mod analysis_history;
+mod credential_vault;
 mod document_store;
 #[cfg(target_os = "macos")]
 mod macos_permissions;
@@ -8,6 +9,7 @@ mod secret_store;
 #[cfg(windows)]
 mod windows_permissions;
 
+pub use credential_vault::{CredentialVault, SystemVaultKeyStore, VaultKeyStore};
 pub use document_store::{JsonDocumentStore, VersionedJsonDocument};
 pub use private_file::prepare_sensitive_storage;
 pub use profile_store::{migrate_legacy_ssh_paths, JsonProfileRepository, ProfileRepository};
