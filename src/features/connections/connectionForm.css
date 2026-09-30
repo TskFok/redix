@@ -1,3 +1,7 @@
+.workspace.workspace-connections:has(.connection-form-panel) {
+  padding-bottom: 0;
+}
+
 .connection-form-panel.connection-form-compact {
   --connection-form-padding: 24px;
 
