@@ -1,6 +1,8 @@
 .connection-form-panel.connection-form-compact {
-  max-width: 920px;
-  padding: 16px;
+  --connection-form-padding: 24px;
+
+  max-width: none;
+  padding: var(--connection-form-padding);
   box-shadow: none;
 }
 
@@ -12,18 +14,18 @@
 
 .connection-form-panel.connection-form-compact .panel-heading h2 {
   margin: 0;
-  font-size: 16px;
+  font-size: 18px;
   line-height: 1.4;
 }
 
 .connection-form-panel.connection-form-compact .connection-form {
-  margin-top: 14px;
+  margin-top: 20px;
 }
 
 .connection-form-panel.connection-form-compact .form-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
-  gap: 10px 12px;
+  gap: 16px 20px;
 }
 
 .connection-form-panel.connection-form-compact .connection-basic-fields {
@@ -69,65 +71,70 @@
 }
 
 .connection-form-panel.connection-form-compact .field {
-  gap: 5px;
+  gap: 8px;
+}
+
+.connection-form-panel.connection-form-compact .field > span {
+  font-size: 12px;
 }
 
 .connection-form-panel.connection-form-compact .field input:not([type="checkbox"]),
 .connection-form-panel.connection-form-compact .app-select {
-  min-height: 34px;
-  height: 34px;
-  padding-top: 6px;
-  padding-bottom: 6px;
+  min-height: 42px;
+  height: 42px;
+  padding-top: 10px;
+  padding-bottom: 10px;
+  font-size: 13px;
 }
 
 .connection-form-panel.connection-form-compact .field textarea {
-  min-height: 76px;
-  padding: 7px 10px;
-  font-size: 12px;
+  min-height: 104px;
+  padding: 10px 12px;
+  font-size: 13px;
   line-height: 1.5;
 }
 
 .connection-form-panel.connection-form-compact .connection-tls-panel {
-  gap: 10px;
-  margin-top: 12px;
-  padding-top: 12px;
+  gap: 14px;
+  margin-top: 20px;
+  padding-top: 16px;
 }
 
 .connection-form-panel.connection-form-compact .connection-tls-panel > h3 {
   color: var(--color-text-strong);
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 500;
 }
 
 .connection-form-panel.connection-form-compact .connection-tls-panel > p,
 .connection-form-panel.connection-form-compact .field-hint {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.5;
 }
 
 .connection-form-panel.connection-form-compact .checkbox-field {
-  min-height: 24px;
+  min-height: 28px;
   width: fit-content;
   max-width: 100%;
   color: var(--color-text);
 }
 
 .connection-form-panel.connection-form-compact .connection-tls-fields {
-  gap: 10px;
+  gap: 16px;
 }
 
 .connection-form-panel.connection-form-compact .connection-certificate-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: start;
-  gap: 12px;
+  gap: 20px;
 }
 
 .connection-form-panel.connection-form-compact .connection-certificate-block {
   display: grid;
   min-width: 0;
-  gap: 10px;
+  gap: 16px;
 }
 
 .connection-form-panel.connection-form-compact .connection-certificate-block .form-grid {
@@ -138,9 +145,9 @@
   position: sticky;
   bottom: 0;
   z-index: 1;
-  gap: 8px;
-  margin: 14px -16px -16px;
-  padding: 10px 16px;
+  gap: 12px;
+  margin: 20px calc(-1 * var(--connection-form-padding)) calc(-1 * var(--connection-form-padding));
+  padding: 14px var(--connection-form-padding);
   border-top: 1px solid var(--color-border);
   border-radius: 0 0 var(--radius-md) var(--radius-md);
   background: var(--color-surface);
@@ -151,11 +158,20 @@
 }
 
 .connection-form-panel.connection-form-compact .button {
-  min-height: 34px;
-  padding: 6px 12px;
+  min-height: 40px;
+  padding: 9px 16px;
+  font-size: 13px;
+}
+
+.connection-form-panel.connection-form-compact .form-actions > .button {
+  min-width: 104px;
 }
 
 @media (max-width: 760px) {
+  .connection-form-panel.connection-form-compact {
+    --connection-form-padding: 16px;
+  }
+
   .connection-form-panel.connection-form-compact .form-grid,
   .connection-form-panel.connection-form-compact .connection-certificate-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -179,11 +195,12 @@
   .connection-form-panel.connection-form-compact .form-actions {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 6px;
+    gap: 8px;
   }
 
   .connection-form-panel.connection-form-compact .form-actions > .button {
     width: 100%;
+    min-width: 0;
     padding-right: 10px;
     padding-left: 10px;
   }
