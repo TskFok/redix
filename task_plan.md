@@ -675,3 +675,15 @@ JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 
 已完成上列功能及审查修复，全量前端54文件420项、Rust420项/37ignored通过；隔离普通Redis11个真实流程、Cluster4个真实流程、launcher17单测通过。Web构建与non-cloud/fmt/diff通过，macOS原生release no-bundle构建通过（3分46秒）。RedisSearch模块实测受官方镜像拉取认证失败影响未执行。功能矩阵保持剩余差异，不将本批完成等同整体全量目标完成。
 
 最终记录：`docs/local-parity-2026-09-07.md`。临时预览标签页与Vite进程已关闭；未创建Docker测试容器，所有隔离Redis进程已由各launcher清理。源码保留在main工作区，未提交/推送。
+
+
+## Phase 22：Tauri/npm 依赖漏洞修复（2026-10-23）
+
+- 当前 main 分支工作，开始时工作区干净，不创建分支。
+- [x] 联网审计 npm 与 Rust 锁文件，核对官方公告。
+- [x] 定向升级受影响依赖，并核实 Tauri 上游残留告警。
+- [x] 重新审计、运行前后端回归与构建检查。
+- [x] 审查差异并交付实际修复与未解决项。
+- **Status:** complete（本轮兼容安全修复完成；glib unsound 与 9 条维护告警仍保留，见审计报告）
+- npm 审计首次因沙箱 DNS 限制失败；授权联网后取得真实结果。
+- 最终报告：`docs/security-audit-2026-10-23.md`。本轮未提交或推送。

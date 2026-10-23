@@ -566,3 +566,14 @@
 ## 继续补齐的实际问题
 
 JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 索引详情初始化与查询请求竞争正在修复。并行推进 typed KNN、后台分析与 Workbench 内置图表，随后补实例趋势和 Cluster 节点指标。上述完成状态仍以最终统一验证为准，Redis Cloud 仍排除。
+
+
+## 2026-10-23 依赖漏洞审计
+
+- npm 官方审计：4 个受影响包，2 high、2 moderate；Vite 锁定 7.3.6，Vitest/Mocker 4.1.11，source-map-js 1.2.1。官方修复分别为 7.3.7、4.1.12、1.2.2，兼容当前主版本和 CI Node 22。
+- 公告：GHSA-587h-7wmj-h5pm、GHSA-qxg6-89mg-rqv8、GHSA-xp26-3454-mjgp、GHSA-68fv-2mgg-jv7q 等，以完整审计 JSON 为准。
+- 初始 Rust 审计：rustls 0.23.42（4 条漏洞）、rustls-webpki 0.103.13（1 条）；另有 10 unmaintained、2 unsound、2 yanked，待逐项处理。
+- 原始 npm/Rust JSON 保存至 /tmp/redix-npm-audit-before.json 和 /tmp/redix-rust-audit-before.json。
+- 最终 npm 审计 0；RustSec 漏洞计数 0，保留 glib 0.18.5 的 1 条 unsound 与 9 条停维护告警，无任何忽略或平台过滤。额外修复 RustSec 未列出的 Tauri IPC channel 访问控制漏洞，升级至 2.11.6。
+- glib 受当前 Tauri Linux GTK3 依赖链约束；unic-* 可通过更大范围的 Tauri 配套组件升级移除，zbus 家族需主版本迁移。不能把所有剩余项统称为漏洞已清零或上游无解。
+- 完整依赖版本、公告、验证和剩余项见 `docs/security-audit-2026-10-23.md`。

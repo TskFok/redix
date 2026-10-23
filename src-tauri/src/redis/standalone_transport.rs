@@ -1,7 +1,8 @@
-use std::{fmt, io::Cursor, pin::Pin, sync::Arc, time::Duration};
+use std::{fmt, pin::Pin, sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
 use redis::aio::ConnectionLike;
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::{
@@ -474,7 +475,7 @@ fn build_tls_config(material: &TlsClientMaterial) -> Result<rustls::ClientConfig
     let mut roots = rustls::RootCertStore::empty();
     if material.verify_server_cert {
         if let Some(root_cert) = &material.root_cert {
-            let certificates = rustls_pemfile::certs(&mut Cursor::new(root_cert))
+            let certificates = CertificateDer::pem_slice_iter(root_cert)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| AppError::InvalidInput)?;
             if certificates.is_empty() {
@@ -501,12 +502,10 @@ fn build_tls_config(material: &TlsClientMaterial) -> Result<rustls::ClientConfig
         .with_root_certificates(roots);
     let mut config = match (&material.client_cert, &material.client_key) {
         (Some(certificate), Some(key)) => {
-            let certificate = rustls_pemfile::certs(&mut Cursor::new(certificate))
+            let certificate = CertificateDer::pem_slice_iter(certificate)
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(|_| AppError::InvalidInput)?;
-            let key = rustls_pemfile::private_key(&mut Cursor::new(key))
-                .map_err(|_| AppError::InvalidInput)?
-                .ok_or(AppError::InvalidInput)?;
+            let key = PrivateKeyDer::from_pem_slice(key).map_err(|_| AppError::InvalidInput)?;
             builder
                 .with_client_auth_cert(certificate, key)
                 .map_err(|_| AppError::InvalidInput)?
@@ -761,6 +760,94 @@ mod ssh_recovery_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // These public test keys must never be used outside the test fixtures.
+    const EC_CERT: &[u8] = include_bytes!("../../tests/fixtures/tls/ec-cert.pem");
+    const EC_PKCS8_KEY: &[u8] = include_bytes!("../../tests/fixtures/tls/ec-pkcs8-key.pem");
+    const EC_SEC1_KEY: &[u8] = include_bytes!("../../tests/fixtures/tls/ec-sec1-key.pem");
+    const RSA_CERT: &[u8] = include_bytes!("../../tests/fixtures/tls/rsa-cert.pem");
+    const RSA_PKCS1_KEY: &[u8] = include_bytes!("../../tests/fixtures/tls/rsa-pkcs1-key.pem");
+
+    #[test]
+    fn tls_config_accepts_pkcs8_pkcs1_and_sec1_keys_with_matching_certificate_chains() {
+        let cases = [
+            (
+                EC_CERT,
+                RSA_CERT,
+                EC_PKCS8_KEY,
+                rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            ),
+            (
+                EC_CERT,
+                RSA_CERT,
+                EC_SEC1_KEY,
+                rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            ),
+            (
+                RSA_CERT,
+                EC_CERT,
+                RSA_PKCS1_KEY,
+                rustls::SignatureScheme::RSA_PSS_SHA256,
+            ),
+        ];
+        for (certificate, extra_certificate, key, scheme) in cases {
+            let material = TlsClientMaterial {
+                root_cert: Some(certificate.to_vec()),
+                client_cert: Some([certificate, extra_certificate].concat()),
+                client_key: Some(key.to_vec()),
+                ..TlsClientMaterial::default()
+            };
+            let config = build_tls_config(&material).expect("valid mTLS material should load");
+            let certified_key = config
+                .client_auth_cert_resolver
+                .resolve(&[], &[scheme])
+                .expect("client certificate should be available for authentication");
+            assert_eq!(certified_key.cert.len(), 2);
+            assert!(certified_key.keys_match().is_ok());
+        }
+    }
+
+    #[test]
+    fn tls_config_rejects_missing_or_malformed_root_certificates() {
+        for certificate in [
+            "",
+            "not a certificate",
+            "-----BEGIN CERTIFICATE-----\n!invalid!\n-----END CERTIFICATE-----",
+            "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----",
+        ] {
+            let material = TlsClientMaterial {
+                root_cert: Some(certificate.as_bytes().to_vec()),
+                ..TlsClientMaterial::default()
+            };
+            assert!(matches!(
+                build_tls_config(&material),
+                Err(AppError::InvalidInput)
+            ));
+        }
+    }
+
+    #[test]
+    fn tls_config_rejects_missing_or_malformed_client_private_keys() {
+        for key in [
+            "",
+            "not a private key",
+            "-----BEGIN CERTIFICATE-----\nAQID\n-----END CERTIFICATE-----",
+            "-----BEGIN PRIVATE KEY-----\n!invalid!\n-----END PRIVATE KEY-----",
+            "-----BEGIN RSA PRIVATE KEY-----\nAQID\n-----END RSA PRIVATE KEY-----",
+            "-----BEGIN EC PRIVATE KEY-----\nAQID\n-----END EC PRIVATE KEY-----",
+        ] {
+            let material = TlsClientMaterial {
+                client_cert: Some(EC_CERT.to_vec()),
+                client_key: Some(key.as_bytes().to_vec()),
+                verify_server_cert: false,
+                ..TlsClientMaterial::default()
+            };
+            assert!(matches!(
+                build_tls_config(&material),
+                Err(AppError::InvalidInput)
+            ));
+        }
+    }
 
     #[test]
     fn connection_errors_include_safe_specific_diagnostics() {

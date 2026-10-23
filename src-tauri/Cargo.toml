@@ -13,7 +13,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["test"] }
+tauri = { version = "2.11.6", features = ["test"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
@@ -28,10 +28,9 @@ uuid = { version = "1", features = ["v4"] }
 
 tempfile = "3"
 ssh2 = { version = "0.9.5", features = ["vendored-openssl"] }
-rustls = "0.23.42"
+rustls = "0.23.46"
 tokio-rustls = "0.26.4"
 rustls-native-certs = "0.8.3"
-rustls-pemfile = "2"
 tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]

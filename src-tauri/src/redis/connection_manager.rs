@@ -3822,6 +3822,7 @@ mod tests {
         time::Duration,
     };
 
+    use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
     use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
     use tokio::sync::oneshot;
 
@@ -4065,12 +4066,10 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
 "#;
 
     async fn spawn_tls_sentinel_fixture(response: String) -> (SocketAddr, Arc<Mutex<Vec<String>>>) {
-        let certs = rustls_pemfile::certs(&mut TEST_TLS_CERT.as_bytes())
+        let certs = CertificateDer::pem_slice_iter(TEST_TLS_CERT.as_bytes())
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        let key = rustls_pemfile::private_key(&mut TEST_TLS_KEY.as_bytes())
-            .unwrap()
-            .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(TEST_TLS_KEY.as_bytes()).unwrap();
         let config = rustls::ServerConfig::builder_with_provider(Arc::new(
             rustls::crypto::aws_lc_rs::default_provider(),
         ))

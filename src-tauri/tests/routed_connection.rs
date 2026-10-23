@@ -10,6 +10,7 @@ use futures_util::StreamExt;
 use redis::aio::ConnectionLike;
 use redix_lib::domain::{ClusterConfig, ConnectionEndpoint};
 use redix_lib::redis::{RoutedClient, StandaloneClient, TlsClientMaterial, TunneledClient};
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 async fn spawn_fake_redis() -> u16 {
@@ -236,12 +237,10 @@ async fn spawn_fake_monitor_server() -> (u16, ObservedConnections) {
 }
 
 async fn spawn_fake_tls_redis() -> (u16, Arc<Mutex<Vec<String>>>) {
-    let certs = rustls_pemfile::certs(&mut TEST_SERVER_CERT.as_bytes())
+    let certs = CertificateDer::pem_slice_iter(TEST_SERVER_CERT.as_bytes())
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    let key = rustls_pemfile::private_key(&mut TEST_SERVER_KEY.as_bytes())
-        .unwrap()
-        .unwrap();
+    let key = PrivateKeyDer::from_pem_slice(TEST_SERVER_KEY.as_bytes()).unwrap();
     let config = rustls::ServerConfig::builder_with_provider(Arc::new(
         rustls::crypto::aws_lc_rs::default_provider(),
     ))

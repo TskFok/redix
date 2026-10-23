@@ -541,3 +541,23 @@ JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 
 前端54文件420测试与Rust420测试（37ignored）通过；普通Redis11真实流程、Cluster4真实流程、launcher17单测通过。Search AS别名补齐JSON创建到typed KNN的流程。最终交叉审查未发现新增P1/P2。Web120模块构建通过，主包525.74kB有体积提示；macOS原生release验证中。Docker官方镜像拉取认证失败，Search模块实测未运行。详见docs/local-parity-2026-09-07.md；当前main未提交或推送。
 
 最终macOS离线no-bundle release构建通过（3分46秒），产物src-tauri/target/release/redix。临时浏览器和Vite预览已清理；所有验收完成，剩余功能明确保留在矩阵，整体目标未冒称全量完成。
+
+
+## 2026-10-23 Tauri/npm 漏洞修复
+
+- 使用 systematic-debugging、dispatching-parallel-agents、planning-with-files、verification-before-completion 流程；npm 与 Rust 按文件职责分开处理。
+- 已取得联网审计基线并核对修复版本；以升级前后审计结果验证漏洞消除，不改业务逻辑。
+- 当前目录未安装 node_modules；锁文件更新后将按 npm ci 安装并跑已有回归。
+
+- npm 定向升级完成：Vite 7.3.6 → 7.3.7、Vitest/Mocker 4.1.11 → 4.1.12、source-map-js 1.2.1 → 1.2.2；npm audit 从 4 降为 0。
+- npm ci 成功。npm 11 报告 esbuild/fsevents/msgpackr-extract 安装脚本尚未批准；没有改变脚本安全策略，已安装的平台二进制满足本次测试与构建。
+- npm test -- --maxWorkers=2：73 个文件、850 个测试全部通过；保留两条既有 jsdom navigation 提示。npm run build 通过，保留主包 615.27 kB 的体积提示。
+- npm run test:release：38/38 通过；npm run check:non-cloud 通过。
+
+- 官方 Tauri 公告补充发现 GHSA-w28w-mhc8-qvjv（未出现在本次RustSec输出），tauri 2.11.5 → 2.11.6；Tauri/rustls最低版本写入Cargo.toml。
+- Rust最终审计：5→0漏洞，10→9停维护，2→1 unsound，2→0 yanked；保留glib未解决项，无忽略规则。cargo check --offline通过，5条既有unused警告保留。
+- 全量Rust测试首次编译发现 tests/routed_connection.rs 两处旧PEM测试fixture引用，正在同步迁移；独立复审要求私钥负例使用有效证书并补成功mTLS对照，避免无效证书掩盖回归。
+- 已迁移全部测试 fixture；全量 `cargo test --locked` 522 通过、49 ignored。随后新增成功mTLS回归，最终3项定向测试通过；独立复审关闭P2测试盲点。新增测试使用真实匹配PKCS#8/PKCS#1/SEC1材料，fixture明确为测试用途。
+- 主任务独立联网重跑 `cargo audit --file src-tauri/Cargo.lock --json`，退出0，确认0漏洞、9停维护、1unsound，ignore和平台过滤均为空；结果 `/tmp/redix-rust-audit-verified.json`。
+- `npm run tauri -- build --debug --no-bundle --ci -- --locked` 通过，原生构建1分07秒，生成macOS调试二进制。未运行Windows/Linux原生构建、真实外部Redis/SSH集成或安装包发布。
+- 最终 `cargo fmt --check`、`git diff --check` 通过。审计报告完成；所有改动留在当前main工作区，未提交或推送。
