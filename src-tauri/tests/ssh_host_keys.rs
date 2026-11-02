@@ -316,3 +316,107 @@ fn simultaneous_confirmations_do_not_lose_other_host_records() {
         );
     }
 }
+
+#[test]
+fn clearing_hosts_requires_fresh_confirmation_and_preserves_other_app_data() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    let unrelated = directory.path().join("connection-secrets.json");
+    std::fs::write(&unrelated, "untouched").unwrap();
+    let store = SshHostKeyStore::new(path.clone());
+    let key = ed25519_key(7);
+    for host in ["first.example", "second.example"] {
+        let id = unknown_id(store.verify(host, 22, &key, HostKeyType::Ed25519));
+        store.trust(id).unwrap();
+    }
+    let pending = unknown_id(store.verify("pending.example", 22, &key, HostKeyType::Ed25519));
+    store.clear().unwrap();
+    assert_eq!(
+        store.get_challenge(pending),
+        Err(AppError::SshHostKeyChallengeExpired)
+    );
+    assert_eq!(
+        store.trust(pending),
+        Err(AppError::SshHostKeyChallengeExpired)
+    );
+    assert_eq!(std::fs::read_to_string(unrelated).unwrap(), "untouched");
+    let restored = SshHostKeyStore::new(path);
+    for host in ["first.example", "second.example"] {
+        let id = unknown_id(restored.verify(host, 22, &key, HostKeyType::Ed25519));
+        restored.trust(id).unwrap();
+        assert_eq!(
+            restored.verify(host, 22, &key, HostKeyType::Ed25519),
+            Ok(())
+        );
+    }
+}
+
+#[test]
+fn clearing_an_empty_store_invalidates_challenges_from_other_instances() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    let clearing = SshHostKeyStore::new(path.clone());
+    let other = SshHostKeyStore::new(path);
+    let key = ed25519_key(7);
+    for _ in 0..2 {
+        let id = unknown_id(other.verify("example.com", 22, &key, HostKeyType::Ed25519));
+        clearing.clear().unwrap();
+        assert_eq!(other.trust(id), Err(AppError::SshHostKeyChallengeExpired));
+    }
+    let id = unknown_id(other.verify("example.com", 22, &key, HostKeyType::Ed25519));
+    other.trust(id).unwrap();
+    assert_eq!(
+        clearing.verify("example.com", 22, &key, HostKeyType::Ed25519),
+        Ok(())
+    );
+}
+
+#[test]
+fn clearing_a_corrupt_store_recovers_without_parsing_the_old_contents() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    std::fs::write(&path, "corrupt data").unwrap();
+    let store = SshHostKeyStore::new(path);
+    store.clear().unwrap();
+    unknown_id(store.verify("example.com", 22, &ed25519_key(7), HostKeyType::Ed25519));
+}
+
+#[test]
+fn failed_clear_preserves_pending_challenges_and_reports_storage_error() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    let store = SshHostKeyStore::new(path.clone());
+    let id = unknown_id(store.verify("example.com", 22, &ed25519_key(7), HostKeyType::Ed25519));
+    std::fs::create_dir(&path).unwrap();
+    assert_eq!(store.clear(), Err(AppError::SshHostKeyStoreFailed));
+    assert!(store.get_challenge(id).is_ok());
+    assert!(path.is_dir());
+}
+
+#[test]
+fn clearing_and_confirming_concurrently_never_restore_pre_clear_trust() {
+    use std::sync::{Arc, Barrier};
+    for _ in 0..8 {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("known_hosts");
+        let clearing = SshHostKeyStore::new(path.clone());
+        let other = SshHostKeyStore::new(path.clone());
+        let key = ed25519_key(7);
+        let id = unknown_id(other.verify("example.com", 22, &key, HostKeyType::Ed25519));
+        let barrier = Arc::new(Barrier::new(2));
+        let other_barrier = barrier.clone();
+        let confirm = std::thread::spawn(move || {
+            other_barrier.wait();
+            other.trust(id)
+        });
+        barrier.wait();
+        clearing.clear().unwrap();
+        let result = confirm.join().unwrap();
+        assert!(matches!(
+            result,
+            Ok(()) | Err(AppError::SshHostKeyChallengeExpired)
+        ));
+        let restored = SshHostKeyStore::new(path);
+        unknown_id(restored.verify("example.com", 22, &key, HostKeyType::Ed25519));
+    }
+}

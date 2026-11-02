@@ -696,3 +696,10 @@ JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 
 - [x] 回归、独立审查与文档
 - **Status:** complete
 - 详细设计与计划：docs/superpowers/{specs/2026-11-02-ssh-host-trust-design.md,plans/2026-11-02-ssh-host-trust.md}
+
+## 手动清除应用 known_hosts
+
+- [x] 后端清除与旧确认失效
+- [x] 编辑连接入口、确认与反馈
+- [x] 回归、审查与构建
+- **Status:** complete

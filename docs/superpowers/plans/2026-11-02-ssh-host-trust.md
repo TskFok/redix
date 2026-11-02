@@ -70,3 +70,12 @@ Files: `src/lib/types.ts`、`tauri.ts`、连接功能模块及其测试。
 - `cargo fmt --check`、`git diff --check`、非 Cloud 范围检查通过；独立审查未发现遗留 P1/P2。
 - 保留既有 Rust 未使用代码、测试 support helper、前端大 chunk 与 JSDOM 导航提示。Windows/Linux、SSH 密码与 Agent 的真实认证、本机桌面完整交互 E2E 本次未实测。
 - 全部改动保留在当前 main 工作区；未提交、推送或发布。测试临时 SSH/Redis 服务与密钥已清理。
+
+## 后续任务：手动清除 known_hosts
+
+- [x] 为清除全部主机、重新确认、过期旧challenge、跨实例并发、损坏/缺失文件及失败写入增加后端回归，先验证失败。
+- [x] 实现 `SshHostKeyStore::clear()` 与 `clear_ssh_known_hosts()` IPC，清除与确认使用同一文件锁及持久重置标记。
+- [x] 编辑连接界面增加确认操作与反馈，测试取消、卸载、防重复、无需保存设置及失败恢复。
+- [x] 独立审查，运行前后端回归、构建和格式检查，保留当前分支未提交改动。
+
+验证：前端75文件892项、Rust550项通过（52项需fixture默认忽略），macOS debug no-bundle构建通过。独立审查无遗留P1/P2，未提交或推送。

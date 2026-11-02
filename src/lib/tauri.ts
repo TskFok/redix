@@ -190,6 +190,10 @@ export function discardSshHostKey(challengeId: string): Promise<void> {
   return call<void>("discard_ssh_host_key", { challenge_id: challengeId });
 }
 
+export function clearSshKnownHosts(): Promise<void> {
+  return call<void>("clear_ssh_known_hosts");
+}
+
 export function closeConnection(connectionId: string): Promise<void> {
   return call<void>("close_connection", { connection_id: connectionId });
 }

@@ -21,6 +21,7 @@ const CHALLENGE_TTL: Duration = Duration::from_secs(5 * 60);
 const MAX_PENDING_CHALLENGES: usize = 128;
 const MAX_STORE_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_KEY_BYTES: usize = 64 * 1024;
+const RESET_MARKER: &str = "# redix-known-hosts-reset: ";
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct SshHostKeyChallenge {
@@ -35,6 +36,7 @@ struct PendingHostKey {
     challenge: SshHostKeyChallenge,
     key: Vec<u8>,
     created: Instant,
+    reset_epoch: Option<Uuid>,
 }
 
 pub struct SshHostKeyStore {
@@ -61,7 +63,8 @@ impl SshHostKeyStore {
         if !valid_host(host) || port == 0 || !valid_key(key, algorithm) {
             return Err(AppError::SshTunnelFailed);
         }
-        let (known_hosts, _) = self.load()?;
+        let (known_hosts, raw) = self.load()?;
+        let reset_epoch = reset_epoch(&raw)?;
         match known_hosts.check_port(host, port, key) {
             CheckResult::Match => Ok(()),
             CheckResult::Mismatch => Err(AppError::SshHostKeyChanged),
@@ -98,6 +101,7 @@ impl SshHostKeyStore {
                         },
                         key: key.to_vec(),
                         created: now,
+                        reset_epoch,
                     },
                 );
                 Err(AppError::SshHostKeyUnknown(id))
@@ -132,6 +136,11 @@ impl SshHostKeyStore {
             return Err(AppError::SshHostKeyChallengeExpired);
         }
         let (known_hosts, mut raw) = self.load()?;
+        // A reset in this or another application instance invalidates older dialogs,
+        // including a trust operation that was already waiting for the file lock.
+        if reset_epoch(&raw)? != value.reset_epoch {
+            return Err(AppError::SshHostKeyChallengeExpired);
+        }
         match known_hosts.check_port(&value.challenge.host, value.challenge.port, &value.key) {
             CheckResult::Match => return Ok(()),
             CheckResult::Mismatch => return Err(AppError::SshHostKeyChanged),
@@ -152,6 +161,22 @@ impl SshHostKeyStore {
             return Err(AppError::SshHostKeyStoreFailed);
         }
         write_private_file(&self.path, raw.as_bytes()).map_err(|_| AppError::SshHostKeyStoreFailed)
+    }
+
+    pub fn clear(&self) -> Result<(), AppError> {
+        let _lock = lock_private_file(&self.path.with_extension("lock"))
+            .map_err(|_| AppError::SshHostKeyStoreFailed)?;
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| AppError::SshHostKeyStoreFailed)?;
+        // Keep a reset generation in an OpenSSH-compatible comment so outstanding
+        // challenges in other instances cannot restore trust after clearing.
+        let empty_store = format!("{RESET_MARKER}{}\n", Uuid::new_v4());
+        write_private_file(&self.path, empty_store.as_bytes())
+            .map_err(|_| AppError::SshHostKeyStoreFailed)?;
+        pending.clear();
+        Ok(())
     }
 
     pub fn discard(&self, id: Uuid) -> Result<(), AppError> {
@@ -205,6 +230,19 @@ impl SshHostKeyStore {
         }
         Ok((known_hosts, raw))
     }
+}
+
+fn reset_epoch(raw: &str) -> Result<Option<Uuid>, AppError> {
+    let mut epoch = None;
+    for line in raw.lines().map(str::trim) {
+        if let Some(value) = line.strip_prefix(RESET_MARKER) {
+            if epoch.is_some() {
+                return Err(AppError::SshHostKeyStoreFailed);
+            }
+            epoch = Some(Uuid::parse_str(value).map_err(|_| AppError::SshHostKeyStoreFailed)?);
+        }
+    }
+    Ok(epoch)
 }
 
 fn valid_host(host: &str) -> bool {

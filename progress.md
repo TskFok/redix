@@ -590,3 +590,18 @@ JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 
 - cargo fmt、diff、非Cloud范围检查均通过；两轮有针对性的独立复审关闭全部P2，无已知遗留P1/P2。
 - 既有Rust unused/support helper、前端chunk/JSDOM提示保留。未实测Windows/Linux、SSH密码/Agent真实认证或完整原生UI端到端。
 - 当前main工作区保留改动，未提交、推送或发布。
+
+## 手动清除 known_hosts
+
+- 当前分支工作；设置页前端交给独立代理，主代理负责后端存储/IPC。
+- 使用既有设计与计划补充范围，按TDD验证确认、取消、重新信任和并发清除。
+
+- 用户将入口指定到编辑连接界面，前端任务已相应调整。后端RED验证为clear方法缺失导致编译失败，正在实现清除与持久重置标记。
+
+- 后端19项store测试与实际Tauri清除IPC通过，独立审查未发现P1/P2。用户中断令前端代理暂停，已按编辑连接入口的新要求恢复代理实施。
+
+- 最终前端75文件892项通过；Rust550 passed/52 ignored，含19项主机信任存储回归和清除IPC。
+- 编辑连接新增12项交互回归，取消/卸载/切换、草稿保留和清除与其他操作互斥通过；设置页无改动。
+- 独立审查未发现P1/P2；fmt、diff和non-cloud通过。保留既有JSDOM导航、前端chunk和Rust未使用代码提示。
+
+- macOS `npm run tauri -- build --debug --no-bundle --ci -- --locked` 通过，产物src-tauri/target/debug/redix；本轮实现与验收完成，保留当前分支未提交改动。未操作用户实际主机信任记录，测试仅使用临时文件。

@@ -532,6 +532,14 @@ pub async fn trust_ssh_host_key(
         .map_err(|_| AppError::SshHostKeyStoreFailed)?
 }
 
+#[tauri::command]
+pub async fn clear_ssh_known_hosts(state: tauri::State<'_, AppState>) -> Result<(), AppError> {
+    let store = state.ssh_host_keys.clone();
+    tokio::task::spawn_blocking(move || store.clear())
+        .await
+        .map_err(|_| AppError::SshHostKeyStoreFailed)?
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub async fn discard_ssh_host_key(
     state: tauri::State<'_, AppState>,
@@ -1194,6 +1202,7 @@ mod tests {
                 get_ssh_host_key_challenge,
                 trust_ssh_host_key,
                 discard_ssh_host_key,
+                clear_ssh_known_hosts,
             ])
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
@@ -1208,7 +1217,12 @@ mod tests {
                     callback: tauri::ipc::CallbackFn(0),
                     error: tauri::ipc::CallbackFn(1),
                     url: webview.url().unwrap(),
-                    body: serde_json::json!({"challenge_id": id}).into(),
+                    body: if cmd == "clear_ssh_known_hosts" {
+                        serde_json::json!({})
+                    } else {
+                        serde_json::json!({"challenge_id": id})
+                    }
+                    .into(),
                     headers: Default::default(),
                     invoke_key: tauri::test::INVOKE_KEY.to_owned(),
                 },
@@ -1242,6 +1256,24 @@ mod tests {
         let saved = std::fs::read_to_string(directory.path().join("known_hosts")).unwrap();
         assert!(saved.contains("[accepted.example]:22"));
         assert!(!saved.contains("cancelled.example"));
+
+        let stale = pending_id("stale.example");
+        invoke("clear_ssh_known_hosts", "").unwrap();
+        assert!(matches!(
+            store.verify("accepted.example", 22, &key, ssh2::HostKeyType::Ed25519),
+            Err(AppError::SshHostKeyUnknown(_))
+        ));
+        assert_eq!(
+            invoke("trust_ssh_host_key", &stale).unwrap_err()["code"],
+            "SSH_HOST_KEY_CHALLENGE_EXPIRED"
+        );
+        let path = directory.path().join("known_hosts");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(path).unwrap();
+        assert_eq!(
+            invoke("clear_ssh_known_hosts", "").unwrap_err()["code"],
+            "SSH_HOST_KEY_STORE_FAILED"
+        );
     }
 
     #[test]

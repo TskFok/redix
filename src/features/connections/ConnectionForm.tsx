@@ -1,6 +1,7 @@
 import Select from "../../components/Select";
-import { useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import Toast from "../../components/Toast";
+import { useConfirmDialog } from "../../components/useConfirmDialog";
 import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 import "./connectionForm.css";
@@ -8,6 +9,7 @@ import "./connectionForm.css";
 import { pickLocalFile } from "../../lib/pickLocalFile";
 import { useSshHostKeyConfirmation } from "./useSshHostKeyConfirmation";
 import {
+  clearSshKnownHosts,
   closeConnectionIfCurrent,
   openConnection,
   saveConnection,
@@ -222,11 +224,22 @@ export function ConnectionForm({
   const [error, setError, errorToken] = useFeedbackState<string | null>(null);
   const [failure, setFailure, failureToken] = useFeedbackState<ConnectionFailureFeedback | null>(null);
   const [testStatus, setTestStatus, testStatusToken] = useTransientFeedback();
+  const [hostTrustStatus, setHostTrustStatus, hostTrustStatusToken] = useTransientFeedback();
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pickingFile, setPickingFile] = useState(false);
+  const [clearHostsState, setClearHostsState] = useState<"idle" | "confirming" | "clearing">("idle");
   const operationInFlight = useRef(false);
   const { runWithSshHostKeyConfirmation, confirmationDialog } = useSshHostKeyConfirmation(profileId);
+  const { confirm: confirmClearHosts, confirmationDialog: clearHostsDialog } = useConfirmDialog(
+    JSON.stringify([initial?.id, values.ssh_enabled]),
+  );
+  const clearScope = useMemo(() => ({}), [initial?.id, values.ssh_enabled]);
+  const activeClearScope = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    activeClearScope.current = clearScope;
+    return () => { activeClearScope.current = null; };
+  }, [clearScope]);
 
   const updateValue = (field: keyof ConnectionFormValues, value: string) => {
     setValues((current) => ({ ...current, [field]: value,
@@ -246,9 +259,10 @@ export function ConnectionForm({
   };
 
   const handlePickIdentityFile = async () => {
-    if (testing || saving || pickingFile) {
+    if (operationInFlight.current || testing || saving || pickingFile) {
       return;
     }
+    operationInFlight.current = true;
     setPickingFile(true);
     try {
       const path = await pickLocalFile("选择 SSH 私钥文件");
@@ -258,12 +272,40 @@ export function ConnectionForm({
     } catch {
       setError("选择 SSH 私钥文件失败，请重试。");
     } finally {
+      operationInFlight.current = false;
       setPickingFile(false);
     }
   };
 
+  const handleClearHosts = async () => {
+    if (!initial || !values.ssh_enabled || operationInFlight.current || testing || saving || pickingFile) return;
+    operationInFlight.current = true;
+    setClearHostsState("confirming");
+    try {
+      const accepted = await confirmClearHosts(
+        "将清除应用内全部已信任的 SSH 主机。所有 SSH 主机下次新建连接时，都需要重新确认主机指纹；当前已建立的连接不受影响。此操作立即生效，无需保存连接。",
+        { title: "清除全部已信任的 SSH 主机", confirmLabel: "确认清除", danger: true },
+      );
+      if (!accepted || activeClearScope.current !== clearScope) return;
+      setClearHostsState("clearing");
+      setError(null);
+      setFailure(null);
+      setTestStatus(null);
+      setHostTrustStatus(null);
+      await clearSshKnownHosts();
+      if (activeClearScope.current === clearScope) {
+        setHostTrustStatus("已清除全部 SSH 主机信任记录，下次新建 SSH 连接时请重新核对指纹。");
+      }
+    } catch {
+      if (activeClearScope.current === clearScope) setError("SSH 主机信任记录清除失败，请稍后重试。");
+    } finally {
+      operationInFlight.current = false;
+      if (activeClearScope.current !== null) setClearHostsState("idle");
+    }
+  };
+
   const handleTest = async () => {
-    if (operationInFlight.current || testing || saving) {
+    if (operationInFlight.current || testing || saving || pickingFile) {
       return;
     }
 
@@ -294,7 +336,7 @@ export function ConnectionForm({
   };
 
   const handleSave = async (connectAfterSave: boolean) => {
-    if (operationInFlight.current || testing || saving) {
+    if (operationInFlight.current || testing || saving || pickingFile) {
       return;
     }
 
@@ -346,11 +388,12 @@ export function ConnectionForm({
     onSavingChange?.(false);
   };
 
-  const busy = testing || saving || pickingFile;
+  const busy = testing || saving || pickingFile || clearHostsState !== "idle";
 
   return (
     <section className="connection-form-panel connection-form-compact" aria-labelledby="connection-form-title">
       {confirmationDialog}
+      {clearHostsDialog}
       <div className="panel-heading">
         <h2 id="connection-form-title">{initial ? "编辑连接" : "新增连接"}</h2>
       </div>
@@ -521,6 +564,19 @@ export function ConnectionForm({
               <p className="field-hint">{values.clear_ssh_secrets ? "已选择清除旧材料，可填写替换材料。私钥口令也会清除，请按需重新填写。" : "已保存材料仅显示状态，留空保留当前认证方式的材料。切换私钥内容与文件路径来源前，请先勾选清除。"}</p>
               {!values.clear_ssh_secrets && <p className="field-hint">{initial.ssh.auth_method === values.ssh_auth_method && [initial.ssh.has_password && "密码已保存", initial.ssh.has_private_key && "私钥已保存", initial.ssh.has_identity_file && "私钥路径已保存", initial.ssh.has_passphrase && "私钥口令已保存"].filter(Boolean).join(" · ")}</p>}
               <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.clear_ssh_secrets} onChange={(event) => updateBoolean("clear_ssh_secrets", event.target.checked)} disabled={busy} /><span>清除已保存的 SSH 凭据和路径</span></label>
+            </>}
+            {initial && <>
+              <p className="field-hint">可清除 Redix 内全部 SSH 主机的信任记录。所有 SSH 主机下次新建连接时都需要重新确认指纹，当前已建立的连接不受影响。清除立即生效，无需保存连接。</p>
+              <div>
+                <button
+                  type="button"
+                  className="button button-danger"
+                  onClick={() => void handleClearHosts()}
+                  disabled={busy}
+                >
+                  {clearHostsState === "clearing" ? "清除中…" : "清除全部已信任的 SSH 主机"}
+                </button>
+              </div>
             </>}
           </>}
         </section>
@@ -702,6 +758,7 @@ export function ConnectionForm({
         {error ? <Toast kind="error" message={error} resetKey={errorToken} onClose={() => setError(null)} /> : null}
         {failure ? <Toast kind="error" message={failure.message} details={failure.details} durationMs={null} resetKey={failureToken} onClose={() => setFailure(null)} /> : null}
         {testStatus ? <Toast kind="success" message={testStatus} resetKey={testStatusToken} onClose={() => setTestStatus(null)} /> : null}
+        {hostTrustStatus ? <Toast kind="success" message={hostTrustStatus} resetKey={hostTrustStatusToken} onClose={() => setHostTrustStatus(null)} /> : null}
 
         <div className="form-actions">
           <button type="button" className="button button-quiet" onClick={onCancel} disabled={busy}>

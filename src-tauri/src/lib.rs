@@ -145,6 +145,7 @@ pub fn run() {
             commands::connections::get_ssh_host_key_challenge,
             commands::connections::trust_ssh_host_key,
             commands::connections::discard_ssh_host_key,
+            commands::connections::clear_ssh_known_hosts,
             commands::connections::open_connection,
             commands::connections::close_connection,
             commands::connections::close_connection_if_current,

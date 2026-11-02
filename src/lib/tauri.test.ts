@@ -2,6 +2,7 @@ import * as core from "@tauri-apps/api/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  clearSshKnownHosts,
   clearSlowLogs,
   acknowledgeStreamPendingEntries,
   aggregateArray,
@@ -158,6 +159,23 @@ beforeEach(() => {
 });
 
 describe("Tauri IPC bridge", () => {
+  it("清除 SSH 主机信任记录使用无参数命令", async () => {
+    invokeMock.mockResolvedValue(undefined);
+
+    await expect(clearSshKnownHosts()).resolves.toBeUndefined();
+
+    expect(invokeMock).toHaveBeenCalledExactlyOnceWith("clear_ssh_known_hosts");
+  });
+
+  it("清除 SSH 主机信任记录失败保留存储错误代码", async () => {
+    invokeMock.mockRejectedValue({ code: "SSH_HOST_KEY_STORE_FAILED", message: "清除失败" });
+
+    await expect(clearSshKnownHosts()).rejects.toEqual({
+      code: "SSH_HOST_KEY_STORE_FAILED",
+      message: "清除失败",
+    });
+  });
+
   it.each([
     ["get_cluster_topology", getClusterTopology],
     ["refresh_cluster_topology", refreshClusterTopology],
