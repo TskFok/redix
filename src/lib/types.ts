@@ -88,6 +88,7 @@ export interface ImportConnectionsResult {
 export interface ConnectionInfo {
   server_version: string;
   resolved_endpoint?: ConnectionEndpoint | null;
+  connection_token?: string;
 }
 
 export interface ConnectionEndpoint {
@@ -1108,6 +1109,15 @@ export interface IpcError {
   code: string;
   message: string;
   diagnostics?: string;
+  challenge_id?: string;
+}
+
+export interface SshHostKeyChallenge {
+  challenge_id: string;
+  host: string;
+  port: number;
+  algorithm: string;
+  fingerprint: string;
 }
 
 export interface ClaimStreamPendingEntriesInput {

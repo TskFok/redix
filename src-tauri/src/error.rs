@@ -42,8 +42,16 @@ pub enum AppError {
     ConnectionFailed,
     #[error("无法连接到 Redis 服务器")]
     ConnectionDiagnostic(ConnectionFailureReason),
-    #[error("SSH 隧道建立失败，请检查 ssh-agent、私钥及 known_hosts")]
+    #[error("SSH 隧道建立失败，请检查 SSH 网络连接及认证凭据")]
     SshTunnelFailed,
+    #[error("首次连接此 SSH 主机，请确认主机指纹")]
+    SshHostKeyUnknown(uuid::Uuid),
+    #[error("SSH 主机密钥已变化，连接已拒绝，请联系服务器管理员核实")]
+    SshHostKeyChanged,
+    #[error("无法读取或保存 SSH 主机信任记录，请检查应用数据目录权限")]
+    SshHostKeyStoreFailed,
+    #[error("SSH 主机指纹确认已过期，请重新连接")]
+    SshHostKeyChallengeExpired,
     #[error("Redis 集群拓扑发现失败")]
     ClusterTopologyFailed,
     #[error("Redis 集群节点不可用")]
@@ -76,6 +84,10 @@ impl AppError {
             Self::InvalidConnection => "INVALID_CONNECTION",
             Self::ConnectionFailed | Self::ConnectionDiagnostic(_) => "CONNECTION_FAILED",
             Self::SshTunnelFailed => "SSH_TUNNEL_FAILED",
+            Self::SshHostKeyUnknown(_) => "SSH_HOST_KEY_UNKNOWN",
+            Self::SshHostKeyChanged => "SSH_HOST_KEY_CHANGED",
+            Self::SshHostKeyStoreFailed => "SSH_HOST_KEY_STORE_FAILED",
+            Self::SshHostKeyChallengeExpired => "SSH_HOST_KEY_CHALLENGE_EXPIRED",
             Self::ClusterTopologyFailed => "CLUSTER_TOPOLOGY_FAILED",
             Self::ClusterNodeUnavailable => "CLUSTER_NODE_UNAVAILABLE",
             Self::PartialFailure => "PARTIAL_FAILURE",
@@ -95,7 +107,13 @@ impl AppError {
         match self {
             Self::InvalidConnection => "连接配置无效",
             Self::ConnectionFailed | Self::ConnectionDiagnostic(_) => "无法连接到 Redis 服务器",
-            Self::SshTunnelFailed => "SSH 隧道建立失败，请检查 ssh-agent、私钥及 known_hosts",
+            Self::SshTunnelFailed => "SSH 隧道建立失败，请检查 SSH 网络连接及认证凭据",
+            Self::SshHostKeyUnknown(_) => "首次连接此 SSH 主机，请确认主机指纹",
+            Self::SshHostKeyChanged => "SSH 主机密钥已变化，连接已拒绝，请联系服务器管理员核实",
+            Self::SshHostKeyStoreFailed => {
+                "无法读取或保存 SSH 主机信任记录，请检查应用数据目录权限"
+            }
+            Self::SshHostKeyChallengeExpired => "SSH 主机指纹确认已过期，请重新连接",
             Self::ClusterTopologyFailed => "Redis 集群拓扑发现失败",
             Self::ClusterNodeUnavailable => "Redis 集群节点不可用",
             Self::PartialFailure => "部分节点操作失败",
@@ -126,12 +144,21 @@ impl Serialize for AppError {
         S: Serializer,
     {
         let diagnostics = self.diagnostics();
-        let mut state =
-            serializer.serialize_struct("AppError", if diagnostics.is_some() { 3 } else { 2 })?;
+        let challenge_id = match self {
+            Self::SshHostKeyUnknown(id) => Some(id.to_string()),
+            _ => None,
+        };
+        let mut state = serializer.serialize_struct(
+            "AppError",
+            2 + usize::from(diagnostics.is_some()) + usize::from(challenge_id.is_some()),
+        )?;
         state.serialize_field("code", self.code())?;
         state.serialize_field("message", self.message())?;
         if let Some(diagnostics) = diagnostics {
             state.serialize_field("diagnostics", diagnostics)?;
+        }
+        if let Some(challenge_id) = challenge_id {
+            state.serialize_field("challenge_id", &challenge_id)?;
         }
         state.end()
     }

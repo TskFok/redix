@@ -687,3 +687,12 @@ JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 
 - **Status:** complete（本轮兼容安全修复完成；glib unsound 与 9 条维护告警仍保留，见审计报告）
 - npm 审计首次因沙箱 DNS 限制失败；授权联网后取得真实结果。
 - 最终报告：`docs/security-audit-2026-10-23.md`。本轮未提交或推送。
+
+## 2026-11-02 SSH 应用内主机确认
+
+- [x] 后端应用信任库与确认 IPC
+- [x] SSH 首连、自动重连接入，移除系统路径依赖
+- [x] 前端首次指纹确认、取消和继续连接
+- [x] 回归、独立审查与文档
+- **Status:** complete
+- 详细设计与计划：docs/superpowers/{specs/2026-11-02-ssh-host-trust-design.md,plans/2026-11-02-ssh-host-trust.md}

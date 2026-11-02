@@ -938,4 +938,22 @@ describe("Tauri IPC bridge", () => {
       diagnostics: "TCP 连接被拒绝，请确认 Redis 已启动并监听目标端口。",
     });
   });
+
+  it("只为未知 SSH 主机保留 UUID 确认凭据，不透传密钥或路径", async () => {
+    const challengeId = "11c630fb-3c1b-431c-8ca7-911260dc5925";
+    invokeMock.mockRejectedValue({
+      code: "SSH_HOST_KEY_UNKNOWN", message: "未知主机", challenge_id: challengeId,
+      public_key: "untrusted-key", known_hosts_file: "/private/known_hosts",
+    });
+    await expect(openConnection("local")).rejects.toEqual({
+      code: "SSH_HOST_KEY_UNKNOWN", message: "未知主机", challenge_id: challengeId,
+    });
+    for (const failure of [
+      { code: "SSH_HOST_KEY_UNKNOWN", message: "未知主机", challenge_id: "not-a-uuid" },
+      { code: "CONNECTION_FAILED", message: "连接失败", challenge_id: challengeId },
+    ]) {
+      invokeMock.mockRejectedValue(failure);
+      await expect(openConnection("local")).rejects.toEqual({ code: failure.code, message: failure.message });
+    }
+  });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { createPortal } from "react-dom";
 import { useConfirmDialog } from "../../components/useConfirmDialog";
 import Toast from "../../components/Toast";
@@ -7,6 +7,7 @@ import { useFeedbackState } from "../../components/useFeedbackState";
 
 import {
   closeConnection,
+  closeConnectionIfCurrent,
   deleteConnection,
   exportConnections,
   importConnections,
@@ -15,11 +16,13 @@ import {
 } from "../../lib/tauri";
 import type {
   ConnectionExportDocument,
+  ConnectionInfo,
   ConnectionProfile,
   ImportConnectionsResult,
 } from "../../lib/types";
 import ConnectionForm from "./ConnectionForm";
 import ConnectionList from "./ConnectionList";
+import { useSshHostKeyConfirmation } from "./useSshHostKeyConfirmation";
 import {
   initialConnectionPageState,
   connectionCleanupFailedMessage,
@@ -100,6 +103,11 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
   const currentConfirmRef = useRef(confirm);
   currentConfirmRef.current = confirm;
   const deleteInFlight = useRef(false);
+  const openInFlight = useRef(false);
+  const openScope = useMemo(() => ({}), [activeId]);
+  const currentOpenScope = useRef(openScope);
+  currentOpenScope.current = openScope;
+  const { runWithSshHostKeyConfirmation, confirmationDialog: sshHostKeyDialog } = useSshHostKeyConfirmation(JSON.stringify(["connection-page", activeId]));
   const mountedRef = useRef(false);
 
   useEffect(() => {
@@ -160,6 +168,13 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
   };
 
   const handleOpen = async (profile: ConnectionProfile, openFailedMessage?: string) => {
+    if (openInFlight.current) return;
+    openInFlight.current = true;
+    const requestScope = currentOpenScope.current;
+    const isCurrent = () => mountedRef.current && currentOpenScope.current === requestScope;
+    const cleanupOpenedConnection = async (info: ConnectionInfo) => {
+      if (info.connection_token) await closeConnectionIfCurrent(profile.id, info.connection_token);
+    };
     setFailure(null);
     const previousActiveId = activeId;
     setState((current) => ({
@@ -168,17 +183,24 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
       error: null,
     }));
     try {
-      await openConnection(profile.id);
+      const info = await runWithSshHostKeyConfirmation(() => openConnection(profile.id), cleanupOpenedConnection);
+      if (info === null) return;
+      if (!isCurrent()) {
+        await cleanupOpenedConnection(info);
+        return;
+      }
       if (previousActiveId && previousActiveId !== profile.id) {
         try {
           await closeConnection(previousActiveId);
         } catch {
           let cleanupFailed = false;
           try {
-            await closeConnection(profile.id);
+            if (info.connection_token) await cleanupOpenedConnection(info);
+            else await closeConnection(profile.id);
           } catch {
             cleanupFailed = true;
           }
+          if (!isCurrent()) return;
           setState((current) => ({
             ...current,
             activeId: previousActiveId,
@@ -189,11 +211,16 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
           return;
         }
       }
+      if (!isCurrent()) {
+        await cleanupOpenedConnection(info);
+        return;
+      }
       handleOpened(profile);
     } catch (caught) {
-      setFailure(connectionFailureFeedback(caught, profile, "打开连接失败，请稍后重试。", openFailedMessage));
+      if (isCurrent()) setFailure(connectionFailureFeedback(caught, profile, "打开连接失败，请稍后重试。", openFailedMessage));
     } finally {
-      setState((current) => ({ ...current, openingId: null }));
+      openInFlight.current = false;
+      if (mountedRef.current) setState((current) => ({ ...current, openingId: null }));
     }
   };
 
@@ -242,6 +269,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
   };
 
   const handleAdd = () => {
+    if (openInFlight.current) return;
     setFailure(null);
     setState((current) => ({
       ...current,
@@ -252,6 +280,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
   };
 
   const handleEdit = (profile: ConnectionProfile) => {
+    if (openInFlight.current) return;
     setFailure(null);
     setState((current) => ({
       ...current,
@@ -366,7 +395,7 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
         {transferBusy ? "处理中…" : "导出连接"}
       </button>
       {!state.loading ? (
-        <button type="button" className="button button-primary" onClick={handleAdd}>
+        <button type="button" className="button button-primary" onClick={handleAdd} disabled={Boolean(state.openingId)}>
           新增连接
         </button>
       ) : null}
@@ -378,10 +407,11 @@ export function ConnectionPage({ activeConnectionId, onOpenConnection, actionsTa
       className="connections-page"
       aria-labelledby={formOpen ? "connection-form-title" : "connections-page-title"}
       aria-busy={
-        state.loading || state.saving || Boolean(state.testingId) || transferBusy
+        state.loading || state.saving || Boolean(state.testingId) || Boolean(state.openingId) || transferBusy
       }
     >
       {confirmationDialog}
+      {sshHostKeyDialog}
       {!formOpen ? (
         <>
           <div className="page-heading connections-heading">

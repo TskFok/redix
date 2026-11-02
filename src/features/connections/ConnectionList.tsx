@@ -99,7 +99,7 @@ export function ConnectionList({
                 type="button"
                 className="button button-primary button-compact"
                 onClick={() => onOpen(profile)}
-                disabled={isOpening || isDeleting}
+                disabled={Boolean(openingId) || isDeleting}
               >
                 {isOpening ? "连接中…" : isActive ? "重新连接" : "连接"}
               </button>
@@ -108,7 +108,7 @@ export function ConnectionList({
                 className="button button-secondary button-compact"
                 aria-label={`编辑 ${profile.name}`}
                 onClick={() => onEdit(profile)}
-                disabled={isOpening || isDeleting}
+                disabled={Boolean(openingId) || isDeleting}
               >
                 编辑
               </button>
@@ -117,7 +117,7 @@ export function ConnectionList({
                 className="button button-danger button-compact connection-delete-button"
                 aria-label={isDeleting ? "删除中…" : `删除 ${profile.name}`}
                 onClick={() => onDelete(profile)}
-                disabled={isOpening || isDeleting}
+                disabled={Boolean(openingId) || isDeleting}
               >
                 {isDeleting ? "删除中…" : "删除"}
               </button>

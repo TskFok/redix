@@ -20,6 +20,8 @@ pub fn prepare_sensitive_storage(data_dir: &Path) -> Result<(), AppError> {
             "connections.json",
             "connection-secrets.json",
             "connection-secrets.lock",
+            "known_hosts",
+            "known_hosts.lock",
             "query-library.json",
             "connection-tags.json",
             "settings.json",

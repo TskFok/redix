@@ -5,7 +5,7 @@
 ## 允许项
 
 - 自管理 Redis Standalone、Sentinel 与 Cluster DB 0；Cluster 支持普通命令 slot 路由、跨 primary 的 UTF-8 键名完整 `SCAN`、拓扑摘要和 primary-only Database Analysis。二进制键名使对应节点返回可重试失败并保留游标，不承诺任意键空间都能完成遍历。
-- `ssh2` transport 使用严格 known_hosts，支持 Agent、Password、内存 PrivateKey 和本机 identity file；Standalone/Sentinel 可与 TLS 组合并保留原目标 SNI。TCP 建连、握手和远端认证共享 6 秒预算，Agent 最多按顺序尝试 32 个身份；本地 Agent IPC 仍可能不可中断并占用 worker、permit 与 CLI 生命周期锁，不能称认证全程均可取消。Cluster+SSH 禁用。
+- `ssh2` transport 使用应用数据目录的独立 `known_hosts`，不依赖系统或旧连接自定义文件；未知主机须在应用中确认 SHA256 指纹后才保存并继续，已知主机密钥变化直接拒绝。支持 Agent、Password、内存 PrivateKey 和本机 identity file；Standalone/Sentinel 可与 TLS 组合并保留原目标 SNI。TCP 建连、握手和远端认证共享 6 秒预算，Agent 最多按顺序尝试 32 个身份；本地 Agent IPC 仍可能不可中断并占用 worker、permit 与 CLI 生命周期锁，不能称认证全程均可取消。Cluster+SSH 禁用。
 - 连接配置导入导出；普通导出只包含可迁移 profile 元数据，不包含密码、CA PEM、客户端证书、SSH 私钥/口令或 SSH 本机路径。
 - 使用系统钥匙串保存本地连接密码；前端 DTO 和连接列表不暴露密码。
 - Standalone TLS 的启用/关闭、服务端证书校验、自定义 CA 和 mTLS；TLS 材料继续保存在本机安全存储，不写普通 JSON 文档。
@@ -77,7 +77,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib redis::ssh::tests -- --ign
 
 `test:redis:local` 覆盖普通 Redis 的流程数见最新交付记录，另有 3 个 Redis Stack 流程在缺少环境变量时只记录 early-skip。`test:redis:cluster` 先运行 launcher 安全单测，再随机保留三组 client/cluster-bus 端口，启动三个仅 loopback 的 owned Redis 子进程；`CLUSTER CREATE` 前后均用 `INFO` 校验 PID，且只清理自身子进程和临时目录，不继承用户的 `REDIX_TEST_REDIS*` 地址。
 
-CLI/Sentinel 需要 `redis-server`。真实 SSH fixture 位于 `src-tauri/tests/ssh.rs`，使用外部隔离 SSH/Redis 服务的 `REDIX_TEST_SSH_HOST`、`REDIX_TEST_SSH_PORT`、`REDIX_TEST_SSH_USERNAME`、`REDIX_TEST_SSH_KNOWN_HOSTS`、Redis host/port 及所选认证字段；本轮未运行真实 sshd fixture。SSH 单元测试不代表已通过 Linux/Windows 原生端到端测试。
+CLI/Sentinel 需要 `redis-server`。真实 SSH fixture 位于 `src-tauri/tests/ssh.rs`，使用外部隔离 SSH/Redis 服务的 `REDIX_TEST_SSH_HOST`、`REDIX_TEST_SSH_PORT`、`REDIX_TEST_SSH_USERNAME`、`REDIX_TEST_SSH_KNOWN_HOSTS`、Redis host/port 及所选认证字段；2026-11-02 已在 macOS 的隔离本机 sshd/Redis 下验证内存和文件私钥、首次确认与持久化、旧路径不能绕过确认、密钥变化拒绝和重连校验共 6 项，密码/Agent 的真实认证本次未实测。SSH 单元测试不代表已通过 Linux/Windows 原生端到端测试。
 
 `.github/workflows/release.yml` 统一配置 Pull Request 验证与标签发布，直接推送 `main` 或其他分支不触发 CI。验证任务覆盖 macOS、Windows、Ubuntu 的前端、Rust、Web 与 native no-bundle 构建；macOS/Linux 安装 Redis 后执行隔离网络流程，Windows 显式跳过缺少 Redis 可执行文件的流程。标签发布必须先通过版本预检和全部跨平台验证。CI 配置不等于 CI 已运行，本轮本机结果只代表 macOS。
 

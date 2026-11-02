@@ -577,3 +577,10 @@ JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 
 - 最终 npm 审计 0；RustSec 漏洞计数 0，保留 glib 0.18.5 的 1 条 unsound 与 9 条停维护告警，无任何忽略或平台过滤。额外修复 RustSec 未列出的 Tauri IPC channel 访问控制漏洞，升级至 2.11.6。
 - glib 受当前 Tauri Linux GTK3 依赖链约束；unic-* 可通过更大范围的 Tauri 配套组件升级移除，zbus 家族需主版本迁移。不能把所有剩余项统称为漏洞已清零或上游无解。
 - 完整依赖版本、公告、验证和剩余项见 `docs/security-audit-2026-10-23.md`。
+
+## 2026-11-02 SSH 主机信任
+
+- 现有验证在 handshake 后认证前；AppError 是 Copy，可用 UUID 携带待确认凭据。
+- 应用已有私有文件原子写与独立文件锁；将复用存储 known_hosts。
+- 前端保存后会卸载表单，确认弹框需由 ConnectionPage 持有，测试连接使用表单自己的稳定 scope。
+- 本次按用户明确需求替代旧严格系统 known_hosts 策略；旧字段兼容保留但不参与连接。

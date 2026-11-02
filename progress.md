@@ -561,3 +561,32 @@ JSON 同值/TTL/能力更新触发草稿重置已稳定复现并修复；Search 
 - 主任务独立联网重跑 `cargo audit --file src-tauri/Cargo.lock --json`，退出0，确认0漏洞、9停维护、1unsound，ignore和平台过滤均为空；结果 `/tmp/redix-rust-audit-verified.json`。
 - `npm run tauri -- build --debug --no-bundle --ci -- --locked` 通过，原生构建1分07秒，生成macOS调试二进制。未运行Windows/Linux原生构建、真实外部Redis/SSH集成或安装包发布。
 - 最终 `cargo fmt --check`、`git diff --check` 通过。审计报告完成；所有改动留在当前main工作区，未提交或推送。
+
+## 2026-11-02 SSH 主机指纹确认
+
+- 当前分支工作区初始干净；已完成只读分析，设计/计划已记录。
+- 后端 store/IPC、前端确认分配独立代理；主代理集成 SSH transport 和恢复路径。
+- 测试先行：新增 store 回归与真实 sshd 首次确认流程，重连凭据不再保留历史 known_hosts 路径。Rust 首次构建为冷编译。
+- 探索中一次 src/lib/api.ts 不存在，改为实际 src/lib/tauri.ts；无文件修改影响。
+
+- RED证据：store缺失API编译失败；重连凭据测试因旧known_hosts路径仍保留而断言失败；前端首轮16个新增流程失败和challenge_id丢失回归失败。
+- 首轮GREEN：store14项、TTL/容量/IPC3项；前端74文件870项与生产构建通过。
+- 独立审查提出一个P2：卸载时迟到的open成功句柄需清理。已安排连接发布token与条件关闭，防止误关新连接。
+- 格式检查发现新增Rust代码待rustfmt（无逻辑失败），最终统一处理。非Cloud范围检查通过。
+
+- 真实隔离本机sshd验证：库重连测试1项通过（确认后连接/重连及变化后拒绝），fixture OpenSSH严格校验与Redis转发自检通过，服务与临时密钥已清理。
+
+- 第一轮Rust全量（包含所有integration targets）exit0，测试日志/tmp/redix-ssh-rust-tests.log；随后继续修复复审发现的后续连接失败分支，最终将重新跑受影响单元回归。
+- 前端最终74文件878项通过，build通过；既有2条JSDOM导航与大chunk提示仍在。
+- 真实sshd集成5项全部通过：内存/文件私钥、确认后连接及重启持久化、旧known_hosts不绕过首次确认、变化在认证前拒绝；加库重连共6项，全部临时服务和密钥已清理。
+
+- scoped复审通过：活动连接发布token与pending尝试分离，修复后续请求失败/pending的旧连接清理，未发现新增P1/P2。生命周期表仍局限connection_manager，未扩散任务模块。
+
+### 2026-11-02 最终验收
+
+- 最终Rust全量545 passed / 0 failed / 52 ignored；取消/abort回归包含其中。日志/tmp/redix-ssh-rust-tests-final.log。
+- 前端74文件878测试通过；6项隔离真实SSH测试通过（包括默认ignored中的fixture测试），服务与密钥已清理。
+- macOS原生debug no-bundle构建通过（1分01秒），产物src-tauri/target/debug/redix，日志/tmp/redix-ssh-native-build.log。
+- cargo fmt、diff、非Cloud范围检查均通过；两轮有针对性的独立复审关闭全部P2，无已知遗留P1/P2。
+- 既有Rust unused/support helper、前端chunk/JSDOM提示保留。未实测Windows/Linux、SSH密码/Agent真实认证或完整原生UI端到端。
+- 当前main工作区保留改动，未提交、推送或发布。

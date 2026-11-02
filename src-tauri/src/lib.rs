@@ -18,6 +18,7 @@ pub struct AppState {
     pub(crate) bulk_tasks: redis::bulk_tasks::BulkTaskManager,
     pub(crate) profiles: Arc<dyn ProfileRepository>,
     pub(crate) secrets: Arc<dyn SecretStore>,
+    pub(crate) ssh_host_keys: Arc<persistence::SshHostKeyStore>,
     pub(crate) redis: redis::RedisService,
     pub(crate) cli: redis::CliManager,
     pub(crate) data_dir: PathBuf,
@@ -34,16 +35,24 @@ impl AppState {
         secrets: Arc<dyn SecretStore>,
         data_dir: PathBuf,
     ) -> Self {
+        let ssh_host_keys = Arc::new(persistence::SshHostKeyStore::new(
+            data_dir.join("known_hosts"),
+        ));
         Self {
             analysis_tasks: redis::analysis_tasks::AnalysisTaskManager::default(),
             bulk_tasks: redis::bulk_tasks::BulkTaskManager::default(),
-            redis: redis::RedisService::new(profiles.clone(), secrets.clone()),
+            redis: redis::RedisService::with_ssh_host_keys(
+                profiles.clone(),
+                secrets.clone(),
+                ssh_host_keys.clone(),
+            ),
             cli: redis::CliManager::new(),
             analysis_history: persistence::analysis_history::AnalysisHistoryStore::new(
                 data_dir.join("analysis-history.json"),
             ),
             profiles,
             secrets,
+            ssh_host_keys,
             data_dir,
         }
     }
@@ -133,8 +142,12 @@ pub fn run() {
             commands::connections::export_connections,
             commands::connections::import_connections,
             commands::connections::test_connection,
+            commands::connections::get_ssh_host_key_challenge,
+            commands::connections::trust_ssh_host_key,
+            commands::connections::discard_ssh_host_key,
             commands::connections::open_connection,
             commands::connections::close_connection,
+            commands::connections::close_connection_if_current,
             commands::browser::scan_keys,
             commands::browser::scan_all_keys,
             commands::browser::get_key,

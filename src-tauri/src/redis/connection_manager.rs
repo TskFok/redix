@@ -33,7 +33,7 @@ use crate::{
         VectorSimilarityResult,
     },
     error::AppError,
-    persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
+    persistence::{ConnectionSecrets, ProfileRepository, SecretStore, SshHostKeyStore},
 };
 
 use super::{
@@ -292,12 +292,14 @@ pub trait RedisOperations: Send + Sync {
 }
 
 pub struct RedisService {
+    ssh_host_keys: Arc<SshHostKeyStore>,
     profiles: Arc<dyn ProfileRepository>,
     secrets: Arc<dyn SecretStore>,
     profile_transaction: Mutex<()>,
     active: Arc<RwLock<HashMap<String, ConnectionHandle>>>,
     capabilities: Arc<RwLock<HashMap<String, ModuleCapabilities>>>,
     generations: Arc<RwLock<HashMap<String, u64>>>,
+    pending_attempts: Arc<Mutex<HashMap<String, u64>>>,
     pubsub: Arc<PubSubManager>,
     profiler: Arc<ProfilerManager>,
     #[cfg(test)]
@@ -315,11 +317,65 @@ struct NodeScopedSnapshotGate {
 
 #[derive(Clone)]
 struct ConnectionHandle {
+    published_token: Option<u64>,
     client: RoutedClient,
     profile: ConnectionProfile,
     target: ConnectionTarget,
     cluster_node_factory: Option<Arc<ClusterNodeConnectionFactory>>,
     _ssh: Option<super::ssh::SshTransport>,
+}
+
+struct PendingConnectionAttempt {
+    connection_id: String,
+    token: u64,
+    generations: Arc<RwLock<HashMap<String, u64>>>,
+    pending: Arc<Mutex<HashMap<String, u64>>>,
+    armed: bool,
+}
+
+impl PendingConnectionAttempt {
+    async fn finish(mut self) {
+        clear_connection_attempt(
+            &self.generations,
+            &self.pending,
+            &self.connection_id,
+            self.token,
+        )
+        .await;
+        self.armed = false;
+    }
+}
+
+impl Drop for PendingConnectionAttempt {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        // An aborted connection future cannot await cleanup. The token comparison keeps
+        // this deferred cleanup from removing an attempt started by a newer request.
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            let generations = self.generations.clone();
+            let pending = self.pending.clone();
+            let connection_id = self.connection_id.clone();
+            let token = self.token;
+            let _ = runtime.spawn(async move {
+                clear_connection_attempt(&generations, &pending, &connection_id, token).await;
+            });
+        }
+    }
+}
+
+async fn clear_connection_attempt(
+    generations: &RwLock<HashMap<String, u64>>,
+    pending: &Mutex<HashMap<String, u64>>,
+    connection_id: &str,
+    token: u64,
+) {
+    let _generation_guard = generations.write().await;
+    let mut pending = pending.lock().await;
+    if pending.get(connection_id).copied() == Some(token) {
+        pending.remove(connection_id);
+    }
 }
 
 #[derive(Clone)]
@@ -371,13 +427,29 @@ impl ClusterScanBackend for RedisClusterScanBackend {
 
 impl RedisService {
     pub fn new(profiles: Arc<dyn ProfileRepository>, secrets: Arc<dyn SecretStore>) -> Self {
+        Self::with_ssh_host_keys(
+            profiles,
+            secrets,
+            Arc::new(SshHostKeyStore::new(std::path::PathBuf::from(
+                "known_hosts",
+            ))),
+        )
+    }
+
+    pub fn with_ssh_host_keys(
+        profiles: Arc<dyn ProfileRepository>,
+        secrets: Arc<dyn SecretStore>,
+        ssh_host_keys: Arc<SshHostKeyStore>,
+    ) -> Self {
         Self {
+            ssh_host_keys,
             profiles,
             secrets,
             profile_transaction: Mutex::new(()),
             active: Arc::new(RwLock::new(HashMap::new())),
             capabilities: Arc::new(RwLock::new(HashMap::new())),
             generations: Arc::new(RwLock::new(HashMap::new())),
+            pending_attempts: Arc::new(Mutex::new(HashMap::new())),
             pubsub: Arc::new(PubSubManager::new()),
             profiler: Arc::new(ProfilerManager::new()),
             #[cfg(test)]
@@ -406,9 +478,15 @@ impl RedisService {
     ) -> Result<(ConnectionHandle, Option<ConnectionEndpoint>), AppError> {
         #[cfg(test)]
         if let Some(transport) = self.test_ssh_transport.as_ref() {
-            return connect_handle_with_transport(profile, secrets, Some(transport.clone())).await;
+            return connect_handle_with_transport(
+                profile,
+                secrets,
+                self.ssh_host_keys.clone(),
+                Some(transport.clone()),
+            )
+            .await;
         }
-        connect_handle_with_transport(profile, secrets, None).await
+        connect_handle_with_transport(profile, secrets, self.ssh_host_keys.clone(), None).await
     }
 
     // Shared with commands so profile and keyring writes, including rollback, are atomic
@@ -1230,6 +1308,7 @@ impl RedisService {
 
         Ok(ConnectionInfo {
             server_version,
+            connection_token: None,
             resolved_endpoint: None,
         })
     }
@@ -1275,24 +1354,81 @@ impl RedisService {
         true
     }
 
+    #[cfg(test)]
     async fn bump_connection_generation(&self, connection_id: &str) -> u64 {
         let mut generations = self.generations.write().await;
         bump_generation(&mut generations, connection_id)
+    }
+
+    async fn begin_connection_attempt(&self, connection_id: &str) -> PendingConnectionAttempt {
+        let mut generations = self.generations.write().await;
+        let token = bump_generation(&mut generations, connection_id);
+        self.pending_attempts
+            .lock()
+            .await
+            .insert(connection_id.to_owned(), token);
+        PendingConnectionAttempt {
+            connection_id: connection_id.to_owned(),
+            token,
+            generations: self.generations.clone(),
+            pending: self.pending_attempts.clone(),
+            armed: true,
+        }
+    }
+
+    pub(crate) async fn close_connection_if_current(
+        &self,
+        connection_id: &str,
+        token: u64,
+    ) -> Result<bool, AppError> {
+        self.close_connection_for_generation(connection_id, Some(token))
+            .await
+    }
+
+    async fn close_connection_for_generation(
+        &self,
+        connection_id: &str,
+        expected: Option<u64>,
+    ) -> Result<bool, AppError> {
+        let mut generations = self.generations.write().await;
+        let mut pending = self.pending_attempts.lock().await;
+        let mut capabilities = self.capabilities.write().await;
+        let mut active = self.active.write().await;
+        if expected.is_some_and(|token| {
+            active
+                .get(connection_id)
+                .and_then(|handle| handle.published_token)
+                != Some(token)
+        }) {
+            return Ok(false);
+        }
+        // Expire every old snapshot/task even when a newer connection is pending.
+        // Its independent attempt token remains valid until publication or cancellation.
+        bump_generation(&mut generations, connection_id);
+        if expected.is_none() {
+            pending.remove(connection_id);
+        }
+        self.pubsub.cancel_connection(connection_id);
+        self.profiler.cancel_connection(connection_id);
+        capabilities.remove(connection_id);
+        active.remove(connection_id);
+        Ok(true)
     }
 
     async fn publish_connection_if_current(
         &self,
         connection_id: &str,
         token: u64,
-        handle: ConnectionHandle,
+        mut handle: ConnectionHandle,
         previous_profile: Option<&ConnectionProfile>,
         expected_secrets: &ConnectionSecrets,
-    ) -> Result<(), AppError> {
+    ) -> Result<u64, AppError> {
         // Serialize the check, optional persistence, cache invalidation and publication.
         // Network work must stay outside this guard so close/newer attempts can cancel it.
         let _transaction = self.profile_transaction().await;
         let mut generations = self.generations.write().await;
-        if generations.get(connection_id).copied().unwrap_or(0) != token {
+        let mut pending = self.pending_attempts.lock().await;
+        if pending.get(connection_id).copied() != Some(token) {
             return Err(AppError::OperationCancelled);
         }
         let mut capabilities = self.capabilities.write().await;
@@ -1329,10 +1465,12 @@ impl RedisService {
         self.profiler.cancel_connection(connection_id);
         // Probes started against the previous active handle during this attempt must
         // also expire, even though they captured the attempt's generation.
-        bump_generation(&mut generations, connection_id);
+        let published_token = bump_generation(&mut generations, connection_id);
+        handle.published_token = Some(published_token);
+        pending.remove(connection_id);
         capabilities.remove(connection_id);
         active.insert(connection_id.to_owned(), handle);
-        Ok(())
+        Ok(published_token)
     }
 }
 
@@ -1446,26 +1584,27 @@ impl RedisOperations for RedisService {
     }
 
     async fn open_connection(&self, connection_id: &str) -> Result<ConnectionInfo, AppError> {
-        let token = self.bump_connection_generation(connection_id).await;
-        let (profile, secrets) = self.connection_snapshot(connection_id).await?;
-        let (handle, endpoint) = self.connect_handle(&profile, &secrets).await?;
-        let mut info = Self::inspect_client(&handle.client).await?;
-        info.resolved_endpoint = endpoint;
-        self.publish_connection_if_current(connection_id, token, handle, None, &secrets)
-            .await?;
-        Ok(info)
+        let attempt = self.begin_connection_attempt(connection_id).await;
+        let result = async {
+            let (profile, secrets) = self.connection_snapshot(connection_id).await?;
+            let (handle, endpoint) = self.connect_handle(&profile, &secrets).await?;
+            let mut info = Self::inspect_client(&handle.client).await?;
+            info.resolved_endpoint = endpoint;
+            let published_token = self
+                .publish_connection_if_current(connection_id, attempt.token, handle, None, &secrets)
+                .await?;
+            info.connection_token = Some(published_token.to_string());
+            Ok(info)
+        }
+        .await;
+        attempt.finish().await;
+        result
     }
 
     async fn close_connection(&self, connection_id: &str) -> Result<(), AppError> {
-        let mut generations = self.generations.write().await;
-        bump_generation(&mut generations, connection_id);
-        let mut capabilities = self.capabilities.write().await;
-        let mut active = self.active.write().await;
-        self.pubsub.cancel_connection(connection_id);
-        self.profiler.cancel_connection(connection_id);
-        capabilities.remove(connection_id);
-        active.remove(connection_id);
-        Ok(())
+        self.close_connection_for_generation(connection_id, None)
+            .await
+            .map(|_| ())
     }
 
     async fn get_slow_logs(&self, input: GetSlowLogsInput) -> Result<Vec<SlowLogEntry>, AppError> {
@@ -2673,25 +2812,30 @@ impl RedisOperations for RedisService {
         input: SelectDatabaseInput,
     ) -> Result<ConnectionProfile, AppError> {
         input.validate()?;
-        let token = self.bump_connection_generation(&input.connection_id).await;
-        let (old_profile, secrets) = self.connection_snapshot(&input.connection_id).await?;
-        if old_profile.cluster.is_some() && input.database != 0 {
-            return Err(AppError::UnsupportedFeature);
-        }
-        let mut new_profile = old_profile.clone();
-        new_profile.database = input.database;
-        let (handle, _) = self.connect_handle(&new_profile, &secrets).await?;
-        Self::inspect_client(&handle.client).await?;
+        let attempt = self.begin_connection_attempt(&input.connection_id).await;
+        let result = async {
+            let (old_profile, secrets) = self.connection_snapshot(&input.connection_id).await?;
+            if old_profile.cluster.is_some() && input.database != 0 {
+                return Err(AppError::UnsupportedFeature);
+            }
+            let mut new_profile = old_profile.clone();
+            new_profile.database = input.database;
+            let (handle, _) = self.connect_handle(&new_profile, &secrets).await?;
+            Self::inspect_client(&handle.client).await?;
 
-        self.publish_connection_if_current(
-            &input.connection_id,
-            token,
-            handle,
-            Some(&old_profile),
-            &secrets,
-        )
-        .await?;
-        Ok(new_profile)
+            self.publish_connection_if_current(
+                &input.connection_id,
+                attempt.token,
+                handle,
+                Some(&old_profile),
+                &secrets,
+            )
+            .await?;
+            Ok(new_profile)
+        }
+        .await;
+        attempt.finish().await;
+        result
     }
 
     async fn execute_command(
@@ -3437,6 +3581,7 @@ pub fn connection_url(
 async fn connect_handle_with_transport(
     profile: &ConnectionProfile,
     secrets: &ConnectionSecrets,
+    ssh_host_keys: Arc<SshHostKeyStore>,
     injected_ssh: Option<super::ssh::SshTransport>,
 ) -> Result<(ConnectionHandle, Option<ConnectionEndpoint>), AppError> {
     profile.validate()?;
@@ -3458,7 +3603,7 @@ async fn connect_handle_with_transport(
     let ssh = if injected_ssh.is_some() {
         injected_ssh
     } else if let Some(config) = profile.ssh.as_ref() {
-        Some(super::ssh::SshTransport::connect(config, secrets).await?)
+        Some(super::ssh::SshTransport::connect(config, secrets, ssh_host_keys).await?)
     } else {
         None
     };
@@ -3466,6 +3611,7 @@ async fn connect_handle_with_transport(
         discover_client(profile, secrets, &target, ssh.as_ref(), cluster_tls).await?;
     Ok((
         ConnectionHandle {
+            published_token: None,
             client,
             profile: profile.clone(),
             target,
@@ -4792,6 +4938,220 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
     }
 
     #[tokio::test]
+    async fn lifecycle_open_exposes_the_published_connection_token() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles, Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        server.wait_for_ping().await;
+        let attempt = service.capture_capability_token("local").await;
+        server.resume();
+        let info = serde_json::to_value(opening.await.unwrap().unwrap()).unwrap();
+        let published = info["connection_token"]
+            .as_str()
+            .expect("published connection token")
+            .parse::<u64>()
+            .unwrap();
+        assert_ne!(published, attempt);
+        assert_eq!(published, service.capture_capability_token("local").await);
+        service
+            .cache_capabilities_if_current(
+                "local",
+                published,
+                ModuleCapabilities::from_modules(Vec::new()),
+            )
+            .await;
+        assert!(service
+            .close_connection_if_current("local", published)
+            .await
+            .unwrap());
+        assert!(service.client("local").await.is_err());
+        assert!(!service.capabilities.read().await.contains_key("local"));
+        assert!(!service
+            .close_connection_if_current("local", published)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn lifecycle_stale_cleanup_preserves_newer_pending_and_published_connections() {
+        let mut first = PausedRedis::start().await;
+        let mut second = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![first.profile()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        first.wait_for_ping().await;
+        first.resume();
+        let old_token = opening
+            .await
+            .unwrap()
+            .unwrap()
+            .connection_token
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        profiles.save(&[second.profile()]).unwrap();
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        second.wait_for_ping().await;
+        let pending_generation = service.capture_capability_token("local").await;
+        assert!(service
+            .close_connection_if_current("local", old_token)
+            .await
+            .unwrap());
+        assert!(!service.active.read().await.contains_key("local"));
+        assert_eq!(
+            service
+                .ensure_generation_current("local", pending_generation)
+                .await,
+            Err(AppError::OperationCancelled)
+        );
+        assert!(
+            !service
+                .cache_capabilities_if_current(
+                    "local",
+                    pending_generation,
+                    ModuleCapabilities::from_modules(Vec::new())
+                )
+                .await
+        );
+        assert_eq!(
+            service
+                .register_observability_if_current("local", pending_generation, || Ok(()))
+                .await,
+            Err(AppError::OperationCancelled)
+        );
+        second.resume();
+        let new_token = opening
+            .await
+            .unwrap()
+            .unwrap()
+            .connection_token
+            .unwrap()
+            .parse()
+            .unwrap();
+
+        assert!(!service
+            .close_connection_if_current("local", old_token)
+            .await
+            .unwrap());
+        assert_eq!(service.capture_capability_token("local").await, new_token);
+        assert_eq!(service.profile("local").await.unwrap().port, second.port);
+        assert!(service
+            .close_connection_if_current("local", new_token)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn lifecycle_cleanup_removes_the_old_handle_after_a_newer_attempt_fails() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles.clone(), Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        server.wait_for_ping().await;
+        server.resume();
+        let old_token = opening
+            .await
+            .unwrap()
+            .unwrap()
+            .connection_token
+            .unwrap()
+            .parse()
+            .unwrap();
+        let unavailable = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut failed_profile = server.profile();
+        failed_profile.port = unavailable.local_addr().unwrap().port();
+        drop(unavailable);
+        profiles.save(&[failed_profile]).unwrap();
+        assert!(service.open_connection("local").await.is_err());
+        {
+            let _generation = service.generations.read().await;
+            assert!(!service.pending_attempts.lock().await.contains_key("local"));
+        }
+        assert!(service
+            .select_database(SelectDatabaseInput {
+                connection_id: "local".into(),
+                database: 1
+            })
+            .await
+            .is_err());
+        {
+            let _generation = service.generations.read().await;
+            assert!(!service.pending_attempts.lock().await.contains_key("local"));
+        }
+        assert!(service.active.read().await.contains_key("local"));
+        assert!(service
+            .close_connection_if_current("local", old_token)
+            .await
+            .unwrap());
+        assert!(!service.active.read().await.contains_key("local"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_aborting_an_open_clears_its_pending_attempt() {
+        let mut server = PausedRedis::start().await;
+        let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
+        let service = Arc::new(RedisService::new(profiles, Arc::new(EmptySecrets)));
+        let opening_service = Arc::clone(&service);
+        let opening = tokio::spawn(async move { opening_service.open_connection("local").await });
+        server.wait_for_ping().await;
+        opening.abort();
+        assert!(opening.await.unwrap_err().is_cancelled());
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let generation = service.generations.read().await;
+                let pending = service.pending_attempts.lock().await;
+                if !pending.contains_key("local") {
+                    break;
+                }
+                drop(pending);
+                drop(generation);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("aborted connection must clear its pending token");
+        assert!(!service.active.read().await.contains_key("local"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_conditional_cleanup_of_unknown_connection_does_not_create_a_generation() {
+        let service = RedisService::new(
+            Arc::new(MutableProfiles(Mutex::new(vec![]))),
+            Arc::new(EmptySecrets),
+        );
+        assert!(!service
+            .close_connection_if_current("missing", 0)
+            .await
+            .unwrap());
+        assert!(!service.generations.read().await.contains_key("missing"));
+    }
+
+    #[tokio::test]
+    async fn lifecycle_connection_test_does_not_issue_a_cleanup_token() {
+        let mut server = PausedRedis::start().await;
+        let profile = server.profile();
+        let service = Arc::new(RedisService::new(
+            Arc::new(MutableProfiles(Mutex::new(vec![]))),
+            Arc::new(EmptySecrets),
+        ));
+        let testing = tokio::spawn(async move {
+            service
+                .test_connection(&profile, &ConnectionSecrets::default())
+                .await
+        });
+        server.wait_for_ping().await;
+        server.resume();
+        let info = serde_json::to_value(testing.await.unwrap().unwrap()).unwrap();
+        assert!(info.get("connection_token").is_none());
+    }
+
+    #[tokio::test]
     async fn lifecycle_close_cancels_an_open_waiting_for_redis() {
         let mut server = PausedRedis::start().await;
         let profiles = Arc::new(MutableProfiles(Mutex::new(vec![server.profile()])));
@@ -5228,6 +5588,7 @@ YSJNv4U6bRWyIi73vcUurj95dMO3PFtn9OVODFRirT7MqBJM3OjttnsT
                 profile.cluster = Some(cluster.clone());
             }
             ConnectionHandle {
+                published_token: None,
                 client: crate::redis::RoutedClient::Standalone(
                     crate::redis::StandaloneClient::Direct(
                         ::redis::Client::open(format!("redis://{address}/")).unwrap(),

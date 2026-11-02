@@ -3,7 +3,7 @@ use std::{
     future::Future,
     io::{self, Read, Write},
     net::{Shutdown, SocketAddr, TcpStream},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, OnceLock,
@@ -14,7 +14,7 @@ use std::{
 use crate::{
     domain::{ConnectionEndpoint, SshAuthMethod, SshConfig},
     error::AppError,
-    persistence::ConnectionSecrets,
+    persistence::{ConnectionSecrets, SshHostKeyStore},
 };
 
 const SSH_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
@@ -82,34 +82,6 @@ impl Drop for CancelPendingConnection {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HostKeyStatus {
-    Match,
-    Mismatch,
-    NotFound,
-    Failure,
-}
-
-fn verify_host_key(status: HostKeyStatus) -> Result<(), AppError> {
-    match status {
-        HostKeyStatus::Match => Ok(()),
-        HostKeyStatus::Mismatch | HostKeyStatus::NotFound | HostKeyStatus::Failure => {
-            Err(AppError::SshTunnelFailed)
-        }
-    }
-}
-
-impl From<ssh2::CheckResult> for HostKeyStatus {
-    fn from(value: ssh2::CheckResult) -> Self {
-        match value {
-            ssh2::CheckResult::Match => Self::Match,
-            ssh2::CheckResult::Mismatch => Self::Mismatch,
-            ssh2::CheckResult::NotFound => Self::NotFound,
-            ssh2::CheckResult::Failure => Self::Failure,
-        }
-    }
-}
-
 #[derive(Debug, PartialEq, Eq)]
 enum AuthSelection<'a> {
     Agent,
@@ -165,37 +137,6 @@ fn valid_secret_path(path: &Path) -> bool {
         && path
             .to_str()
             .is_some_and(|value| !value.contains(['\n', '\r', '\0']))
-}
-
-fn select_known_hosts_path(
-    secrets: &ConnectionSecrets,
-    home: Option<&Path>,
-) -> Result<PathBuf, AppError> {
-    if let Some(path) = secrets.ssh_known_hosts_file.as_deref() {
-        let path = Path::new(path);
-        return valid_secret_path(path)
-            .then(|| path.to_owned())
-            .ok_or(AppError::SshTunnelFailed);
-    }
-    home.map(|path| path.join(".ssh").join("known_hosts"))
-        .ok_or(AppError::SshTunnelFailed)
-}
-
-fn platform_home_dir() -> Option<PathBuf> {
-    #[cfg(windows)]
-    {
-        std::env::var_os("USERPROFILE")
-            .map(PathBuf::from)
-            .or_else(|| {
-                let drive = std::env::var_os("HOMEDRIVE")?;
-                let path = std::env::var_os("HOMEPATH")?;
-                Some(PathBuf::from(drive).join(path))
-            })
-    }
-    #[cfg(not(windows))]
-    {
-        std::env::var_os("HOME").map(PathBuf::from)
-    }
 }
 
 trait ProxyChannel: Read + Write + Send {
@@ -323,6 +264,7 @@ impl Drop for SessionOwner {
 struct SshReconnectMaterial {
     config: SshConfig,
     secrets: ConnectionSecrets,
+    host_keys: Arc<SshHostKeyStore>,
 }
 
 #[derive(Clone)]
@@ -336,11 +278,13 @@ impl SshTransport {
     pub async fn connect(
         config: &SshConfig,
         secrets: &ConnectionSecrets,
+        host_keys: Arc<SshHostKeyStore>,
     ) -> Result<Self, AppError> {
         config.validate().map_err(|_| AppError::SshTunnelFailed)?;
         connect_with_resolver(
             config.clone(),
             secrets.clone(),
+            host_keys,
             blocking_ssh_limit(),
             SSH_CONNECT_TIMEOUT,
             |host, port| async move {
@@ -386,7 +330,12 @@ impl SshTransport {
 
     pub(super) async fn reconnect(&self) -> Result<Self, AppError> {
         let material = self.reconnect.as_ref().ok_or(AppError::SshTunnelFailed)?;
-        Self::connect(&material.config, &material.secrets).await
+        Self::connect(
+            &material.config,
+            &material.secrets,
+            material.host_keys.clone(),
+        )
+        .await
     }
 
     pub async fn forward(&self, target: &ConnectionEndpoint) -> Result<Arc<SshForward>, AppError> {
@@ -434,6 +383,7 @@ fn valid_forward_target(target: &ConnectionEndpoint) -> bool {
 async fn connect_with_resolver<R, F>(
     config: SshConfig,
     secrets: ConnectionSecrets,
+    host_keys: Arc<SshHostKeyStore>,
     blocking_limit: Arc<tokio::sync::Semaphore>,
     timeout: Duration,
     resolver: R,
@@ -445,6 +395,7 @@ where
     let reconnect = Arc::new(SshReconnectMaterial {
         config: config.clone(),
         secrets: ssh_connection_secrets(&secrets),
+        host_keys: host_keys.clone(),
     });
     let addresses = tokio::time::timeout(timeout, resolver(config.host.clone(), config.port))
         .await
@@ -464,7 +415,14 @@ where
     let worker_pending = Arc::clone(&pending);
     let mut worker = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        connect_blocking(&config, &secrets, addresses, deadline, &worker_pending)
+        connect_blocking(
+            &config,
+            &secrets,
+            &host_keys,
+            addresses,
+            deadline,
+            &worker_pending,
+        )
     });
     let backend = match tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
@@ -491,6 +449,7 @@ where
 fn connect_blocking(
     config: &SshConfig,
     secrets: &ConnectionSecrets,
+    host_keys: &SshHostKeyStore,
     addresses: Vec<SocketAddr>,
     deadline: Instant,
     pending: &PendingConnection,
@@ -505,7 +464,7 @@ fn connect_blocking(
     session.set_tcp_stream(socket);
     session.handshake().map_err(|_| AppError::SshTunnelFailed)?;
     ensure_deadline(deadline)?;
-    verify_session_host_key(&session, config, secrets)?;
+    verify_session_host_key(&session, config, host_keys)?;
     configure_session_deadline(&session, deadline)?;
     let backend = Arc::new(Libssh2Backend {
         session,
@@ -587,26 +546,10 @@ fn protocol_timeout_millis(remaining: Duration) -> u32 {
 fn verify_session_host_key(
     session: &ssh2::Session,
     config: &SshConfig,
-    secrets: &ConnectionSecrets,
+    host_keys: &SshHostKeyStore,
 ) -> Result<(), AppError> {
-    let path = select_known_hosts_path(secrets, platform_home_dir().as_deref())?;
-    let mut known_hosts = session
-        .known_hosts()
-        .map_err(|_| AppError::SshTunnelFailed)?;
-    known_hosts
-        .read_file(&path, ssh2::KnownHostFileKind::OpenSSH)
-        .map_err(|_| AppError::SshTunnelFailed)?;
-    let (key, _) = session.host_key().ok_or(AppError::SshTunnelFailed)?;
-    check_known_host(&known_hosts, &config.host, config.port, key)
-}
-
-fn check_known_host(
-    known_hosts: &ssh2::KnownHosts,
-    host: &str,
-    port: u16,
-    key: &[u8],
-) -> Result<(), AppError> {
-    verify_host_key(known_hosts.check_port(host, port, key).into())
+    let (key, key_type) = session.host_key().ok_or(AppError::SshTunnelFailed)?;
+    host_keys.verify(&config.host, config.port, key, key_type)
 }
 
 fn authenticate_backend(
@@ -749,7 +692,6 @@ fn ssh_connection_secrets(secrets: &ConnectionSecrets) -> ConnectionSecrets {
         ssh_private_key: secrets.ssh_private_key.clone(),
         ssh_passphrase: secrets.ssh_passphrase.clone(),
         ssh_identity_file: secrets.ssh_identity_file.clone(),
-        ssh_known_hosts_file: secrets.ssh_known_hosts_file.clone(),
         ..ConnectionSecrets::default()
     }
 }
@@ -1064,6 +1006,7 @@ mod tests {
     use std::{
         future::pending,
         net::SocketAddr,
+        path::PathBuf,
         sync::atomic::{AtomicUsize, Ordering},
     };
     use tokio::io::AsyncReadExt;
@@ -1084,6 +1027,13 @@ mod tests {
         path
     }
 
+    fn unused_host_key_store() -> Arc<SshHostKeyStore> {
+        Arc::new(SshHostKeyStore::new(std::env::temp_dir().join(format!(
+            "redix-unused-host-keys-{}",
+            uuid::Uuid::new_v4()
+        ))))
+    }
+
     fn endpoint(host: &str, port: u16) -> ConnectionEndpoint {
         ConnectionEndpoint {
             host: host.into(),
@@ -1100,6 +1050,7 @@ mod tests {
             connect_with_resolver(
                 ssh_config(SshAuthMethod::Agent),
                 ConnectionSecrets::default(),
+                unused_host_key_store(),
                 task_limit,
                 Duration::from_millis(50),
                 move |_, _| async move {
@@ -1129,6 +1080,7 @@ mod tests {
         let result = connect_with_resolver(
             ssh_config(SshAuthMethod::Agent),
             ConnectionSecrets::default(),
+            unused_host_key_store(),
             limit,
             Duration::from_millis(20),
             |_, _| async { Ok(vec!["127.0.0.1:22".parse().unwrap()]) },
@@ -1156,6 +1108,7 @@ mod tests {
             connect_with_resolver(
                 ssh_config(SshAuthMethod::Agent),
                 ConnectionSecrets::default(),
+                unused_host_key_store(),
                 Arc::new(tokio::sync::Semaphore::new(1)),
                 Duration::from_millis(75),
                 move |_, _| async move { Ok(vec![address]) },
@@ -1198,6 +1151,7 @@ mod tests {
             connect_with_resolver(
                 ssh_config(SshAuthMethod::Agent),
                 ConnectionSecrets::default(),
+                unused_host_key_store(),
                 task_limit,
                 Duration::from_secs(2),
                 move |_, _| async move { Ok(vec![address]) },
@@ -1251,73 +1205,6 @@ mod tests {
         let mut byte = [0_u8; 1];
         server.read_exact(&mut byte).unwrap();
         assert_eq!(byte, [b'x']);
-    }
-
-    #[test]
-    fn unknown_or_changed_host_key_is_never_accepted() {
-        assert_eq!(
-            verify_host_key(HostKeyStatus::NotFound),
-            Err(AppError::SshTunnelFailed)
-        );
-        assert_eq!(
-            verify_host_key(HostKeyStatus::Mismatch),
-            Err(AppError::SshTunnelFailed)
-        );
-        assert_eq!(
-            verify_host_key(HostKeyStatus::Failure),
-            Err(AppError::SshTunnelFailed)
-        );
-        assert_eq!(verify_host_key(HostKeyStatus::Match), Ok(()));
-    }
-
-    #[test]
-    fn openssh_known_hosts_entries_are_checked_with_port_for_all_ports() {
-        use base64::Engine;
-
-        let mut key = Vec::new();
-        key.extend_from_slice(&(11_u32.to_be_bytes()));
-        key.extend_from_slice(b"ssh-ed25519");
-        key.extend_from_slice(&(32_u32.to_be_bytes()));
-        key.extend_from_slice(&[7_u8; 32]);
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&key);
-        let session = ssh2::Session::new().unwrap();
-
-        for host_field in [
-            "example.com",
-            "[example.com]:22",
-            "|1|AQIDBAUGBwgJCgsMDQ4PEBESExQ=|ZPCaIWkIizT/3iOVVyeg848Days=",
-        ] {
-            let mut known_hosts = session.known_hosts().unwrap();
-            known_hosts
-                .read_str(
-                    &format!("{host_field} ssh-ed25519 {encoded}\n"),
-                    ssh2::KnownHostFileKind::OpenSSH,
-                )
-                .unwrap();
-            assert_eq!(
-                check_known_host(&known_hosts, "example.com", 22, &key),
-                Ok(()),
-                "host field {host_field} must match port 22"
-            );
-        }
-
-        let mut known_hosts = session.known_hosts().unwrap();
-        known_hosts
-            .read_str(
-                &format!("other.example ssh-ed25519 {encoded}\n"),
-                ssh2::KnownHostFileKind::OpenSSH,
-            )
-            .unwrap();
-        assert_eq!(
-            check_known_host(&known_hosts, "example.com", 22, &key),
-            Err(AppError::SshTunnelFailed)
-        );
-        let mut changed_key = key.clone();
-        *changed_key.last_mut().unwrap() = 8;
-        assert_eq!(
-            check_known_host(&known_hosts, "other.example", 22, &changed_key),
-            Err(AppError::SshTunnelFailed)
-        );
     }
 
     #[test]
@@ -1489,18 +1376,16 @@ mod tests {
     }
 
     #[test]
-    fn secret_paths_precede_defaults_and_legacy_profile_paths_are_ignored() {
-        let legacy_identity = absolute_test_path("legacy-identity");
-        let legacy_known_hosts = absolute_test_path("legacy-known-hosts");
+    fn private_key_secret_path_takes_precedence_over_legacy_profile_path() {
         let identity = absolute_test_path("secret-identity");
-        let known_hosts = absolute_test_path("secret-known-hosts");
-        let home = absolute_test_path("home");
         let mut config = ssh_config(SshAuthMethod::PrivateKey);
-        config.legacy_identity_file = Some(legacy_identity.to_string_lossy().into_owned());
-        config.legacy_known_hosts_file = Some(legacy_known_hosts.to_string_lossy().into_owned());
+        config.legacy_identity_file = Some(
+            absolute_test_path("legacy-identity")
+                .to_string_lossy()
+                .into_owned(),
+        );
         let secrets = ConnectionSecrets {
             ssh_identity_file: Some(identity.to_string_lossy().into_owned()),
-            ssh_known_hosts_file: Some(known_hosts.to_string_lossy().into_owned()),
             ..Default::default()
         };
         assert_eq!(
@@ -1510,39 +1395,18 @@ mod tests {
                 passphrase: None,
             })
         );
-        assert_eq!(
-            select_known_hosts_path(&secrets, Some(home.as_path())),
-            Ok(known_hosts)
-        );
-        assert_eq!(
-            select_known_hosts_path(&ConnectionSecrets::default(), Some(home.as_path())),
-            Ok(home.join(".ssh").join("known_hosts"))
-        );
-        assert_eq!(
-            select_known_hosts_path(&ConnectionSecrets::default(), None),
-            Err(AppError::SshTunnelFailed)
-        );
     }
 
     #[test]
-    fn relative_or_control_character_secret_paths_fail_closed() {
-        let home = absolute_test_path("home");
-        let invalid_absolute = format!(
-            "{}\nother",
-            absolute_test_path("invalid-key").to_string_lossy()
-        );
+    fn relative_or_control_character_identity_paths_fail_closed() {
+        let invalid_absolute = format!("{}\nother", absolute_test_path("invalid-key").display());
         for path in ["relative/key".to_owned(), invalid_absolute] {
             let secrets = ConnectionSecrets {
-                ssh_identity_file: Some(path.clone()),
-                ssh_known_hosts_file: Some(path),
+                ssh_identity_file: Some(path),
                 ..Default::default()
             };
             assert_eq!(
                 select_auth(&ssh_config(SshAuthMethod::PrivateKey), &secrets),
-                Err(AppError::SshTunnelFailed)
-            );
-            assert_eq!(
-                select_known_hosts_path(&secrets, Some(home.as_path())),
                 Err(AppError::SshTunnelFailed)
             );
         }
@@ -1891,6 +1755,51 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    #[ignore = "需要外部隔离真实 sshd 和私钥文件 fixture"]
+    async fn real_sshd_reconnect_revalidates_the_app_host_key() {
+        let required = |name: &str| std::env::var(name).expect(name);
+        let mut config = ssh_config(SshAuthMethod::PrivateKey);
+        config.host = required("REDIX_TEST_SSH_HOST");
+        config.port = required("REDIX_TEST_SSH_PORT").parse().unwrap();
+        config.username = required("REDIX_TEST_SSH_USERNAME");
+        let secrets = ConnectionSecrets {
+            ssh_identity_file: Some(required("REDIX_TEST_SSH_IDENTITY_FILE")),
+            ..ConnectionSecrets::default()
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("known_hosts");
+        let store = Arc::new(SshHostKeyStore::new(path.clone()));
+        let result = SshTransport::connect(&config, &secrets, store.clone()).await;
+        let Err(AppError::SshHostKeyUnknown(id)) = result else {
+            panic!("an empty application store must require confirmation");
+        };
+        store.trust(id).unwrap();
+        let transport = SshTransport::connect(&config, &secrets, store)
+            .await
+            .unwrap();
+        transport.reconnect().await.unwrap();
+
+        let wrong_path = directory.path().join("replacement_known_hosts");
+        let wrong_store = SshHostKeyStore::new(wrong_path.clone());
+        let mut key = Vec::new();
+        key.extend_from_slice(&11_u32.to_be_bytes());
+        key.extend_from_slice(b"ssh-ed25519");
+        key.extend_from_slice(&32_u32.to_be_bytes());
+        key.extend_from_slice(&[7_u8; 32]);
+        let Err(AppError::SshHostKeyUnknown(id)) =
+            wrong_store.verify(&config.host, config.port, &key, ssh2::HostKeyType::Ed25519)
+        else {
+            panic!("expected a replacement test key challenge");
+        };
+        wrong_store.trust(id).unwrap();
+        std::fs::copy(wrong_path, path).unwrap();
+        assert!(matches!(
+            transport.reconnect().await,
+            Err(AppError::SshHostKeyChanged)
+        ));
+    }
+
     #[test]
     fn reconnect_material_retains_only_ssh_credentials() {
         let secrets = ConnectionSecrets {
@@ -1913,7 +1822,6 @@ mod tests {
                 ssh_private_key: Some("ssh-private-key".into()),
                 ssh_passphrase: Some("ssh-passphrase".into()),
                 ssh_identity_file: Some("/ssh/identity".into()),
-                ssh_known_hosts_file: Some("/ssh/known-hosts".into()),
                 ..ConnectionSecrets::default()
             }
         );

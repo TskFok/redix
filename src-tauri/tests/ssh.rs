@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use redix_lib::{
     domain::{ConnectionProfile, SshAuthMethod},
     error::AppError,
-    persistence::{ConnectionSecrets, ProfileRepository, SecretStore},
+    persistence::{ConnectionSecrets, ProfileRepository, SecretStore, SshHostKeyStore},
     redis::{RedisOperations, RedisService},
 };
 
@@ -76,10 +76,7 @@ fn fixture(auth: FixtureAuth) -> (ConnectionProfile, ConnectionSecrets) {
     let mut profile = ssh_profile(auth);
     profile.host = required("REDIX_TEST_REDIS_HOST");
     profile.port = required("REDIX_TEST_REDIS_PORT").parse().unwrap();
-    let mut secrets = ConnectionSecrets {
-        ssh_known_hosts_file: Some(required("REDIX_TEST_SSH_KNOWN_HOSTS")),
-        ..Default::default()
-    };
+    let mut secrets = ConnectionSecrets::default();
     match auth {
         FixtureAuth::Agent => {}
         FixtureAuth::Password => {
@@ -99,10 +96,17 @@ fn fixture(auth: FixtureAuth) -> (ConnectionProfile, ConnectionSecrets) {
 
 async fn assert_real_forward(auth: FixtureAuth) {
     let (profile, secrets) = fixture(auth);
-    RedisService::new(Arc::new(Profiles), Arc::new(Secrets))
-        .test_connection(&profile, &secrets)
-        .await
-        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    std::fs::copy(required("REDIX_TEST_SSH_KNOWN_HOSTS"), &path).unwrap();
+    RedisService::with_ssh_host_keys(
+        Arc::new(Profiles),
+        Arc::new(Secrets),
+        Arc::new(SshHostKeyStore::new(path)),
+    )
+    .test_connection(&profile, &secrets)
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -131,21 +135,90 @@ async fn real_sshd_identity_file_authentication_and_forwarding() {
 
 #[tokio::test]
 #[ignore = "需要外部真实 sshd fixture"]
-async fn real_sshd_rejects_unknown_host_key() {
-    let mut profile = ssh_profile(FixtureAuth::Agent);
+async fn real_sshd_requires_app_confirmation_even_with_legacy_known_hosts() {
+    let mut profile = ssh_profile(FixtureAuth::Password);
     profile.host = "127.0.0.1".into();
     profile.port = 1;
     let directory = tempfile::tempdir().unwrap();
-    let empty_known_hosts: PathBuf = directory.path().join("known_hosts");
-    std::fs::write(&empty_known_hosts, "").unwrap();
+    let path: PathBuf = directory.path().join("known_hosts");
+    let store = Arc::new(SshHostKeyStore::new(path.clone()));
     let secrets = ConnectionSecrets {
-        ssh_known_hosts_file: Some(empty_known_hosts.to_string_lossy().into_owned()),
+        // Existing per-connection trust files must never bypass app confirmation.
+        ssh_known_hosts_file: Some(required("REDIX_TEST_SSH_KNOWN_HOSTS")),
+        // No password: host verification must stop before authentication.
         ..Default::default()
     };
-
-    let error = RedisService::new(Arc::new(Profiles), Arc::new(Secrets))
+    let service =
+        RedisService::with_ssh_host_keys(Arc::new(Profiles), Arc::new(Secrets), store.clone());
+    let error = service
         .test_connection(&profile, &secrets)
         .await
         .unwrap_err();
-    assert_eq!(error, AppError::SshTunnelFailed);
+    let AppError::SshHostKeyUnknown(id) = error else {
+        panic!("expected a host key challenge before authentication, got {error:?}");
+    };
+    let challenge = store.get_challenge(id).unwrap();
+    let ssh = profile.ssh.as_ref().unwrap();
+    assert_eq!(challenge.host, ssh.host);
+    assert_eq!(challenge.port, ssh.port);
+    assert!(challenge.fingerprint.starts_with("SHA256:"));
+    assert!(!path.exists(), "an unconfirmed key must not be persisted");
+    store.discard(id).unwrap();
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+#[ignore = "需要外部真实 sshd、Redis 与私钥文件 fixture"]
+async fn real_sshd_confirmed_host_connects_and_persists_across_service_restart() {
+    let (profile, secrets) = fixture(FixtureAuth::PrivateKeyFile);
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("known_hosts");
+    let store = Arc::new(SshHostKeyStore::new(path.clone()));
+    let service =
+        RedisService::with_ssh_host_keys(Arc::new(Profiles), Arc::new(Secrets), store.clone());
+    let error = service
+        .test_connection(&profile, &secrets)
+        .await
+        .unwrap_err();
+    let AppError::SshHostKeyUnknown(id) = error else {
+        panic!("expected a host key challenge, got {error:?}");
+    };
+    store.trust(id).unwrap();
+    service.test_connection(&profile, &secrets).await.unwrap();
+    let restored = RedisService::with_ssh_host_keys(
+        Arc::new(Profiles),
+        Arc::new(Secrets),
+        Arc::new(SshHostKeyStore::new(path)),
+    );
+    restored.test_connection(&profile, &secrets).await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "需要外部真实 sshd fixture"]
+async fn real_sshd_changed_host_is_rejected_before_authentication() {
+    let profile = ssh_profile(FixtureAuth::Password);
+    let ssh = profile.ssh.as_ref().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let store = Arc::new(SshHostKeyStore::new(directory.path().join("known_hosts")));
+    let mut wrong_key = Vec::new();
+    wrong_key.extend_from_slice(&11_u32.to_be_bytes());
+    wrong_key.extend_from_slice(b"ssh-ed25519");
+    wrong_key.extend_from_slice(&32_u32.to_be_bytes());
+    wrong_key.extend_from_slice(&[7_u8; 32]);
+    let error = store
+        .verify(&ssh.host, ssh.port, &wrong_key, ssh2::HostKeyType::Ed25519)
+        .unwrap_err();
+    let AppError::SshHostKeyUnknown(id) = error else {
+        panic!("expected initial challenge, got {error:?}");
+    };
+    store.trust(id).unwrap();
+    let service = RedisService::with_ssh_host_keys(Arc::new(Profiles), Arc::new(Secrets), store);
+    // No authentication material is supplied, so Changed proves verification runs first.
+    assert_eq!(
+        service
+            .test_connection(&profile, &ConnectionSecrets::default())
+            .await
+            .unwrap_err(),
+        AppError::SshHostKeyChanged
+    );
 }

@@ -18,7 +18,6 @@ export interface ConnectionFormValues {
   ssh_port: string;
   ssh_username: string;
   ssh_identity_file: string;
-  ssh_known_hosts_file: string;
   ssh_auth_method: SshAuthMethod;
   ssh_password: string;
   ssh_private_key: string;
@@ -75,7 +74,6 @@ export function formValuesFromProfile(
     ssh_port: String(profile?.ssh?.port ?? 22),
     ssh_username: profile?.ssh?.username ?? "",
     ssh_identity_file: "",
-    ssh_known_hosts_file: "",
     ssh_auth_method: profile?.ssh?.auth_method ?? "agent",
     ssh_password: "",
     ssh_private_key: "",
@@ -156,7 +154,11 @@ export function replaceProfile(
 const errorMessages: Record<string, string> = {
   INVALID_CONNECTION: "连接配置无效，请检查主机、端口和数据库。",
   CONNECTION_FAILED: "无法连接到 Redis 服务器，请检查网络和凭据。",
-  SSH_TUNNEL_FAILED: "SSH 隧道建立失败，请检查 ssh-agent、私钥和 known_hosts；应用不会自动信任未知主机。",
+  SSH_TUNNEL_FAILED: "SSH 隧道建立失败，请检查网络、ssh-agent、密码或私钥。",
+  SSH_HOST_KEY_UNKNOWN: "SSH 主机尚未信任，请重新连接并核对主机指纹。",
+  SSH_HOST_KEY_CHANGED: "SSH 主机密钥已变化，已阻止连接。请通过可信渠道核验主机身份。",
+  SSH_HOST_KEY_STORE_FAILED: "无法读取或保存 Redix 的 SSH 主机信任库，请检查本地文件权限后重试。",
+  SSH_HOST_KEY_CHALLENGE_EXPIRED: "SSH 主机指纹确认已过期，请重新连接并核对指纹。",
   AUTHENTICATION_FAILED: "Redis 身份验证失败，请检查用户名和密码。",
   CLUSTER_TOPOLOGY_FAILED: "Redis 集群拓扑发现失败，请检查种子节点和集群配置。",
   CLUSTER_NODE_UNAVAILABLE: "Redis 集群节点不可用，请检查节点地址和网络。",

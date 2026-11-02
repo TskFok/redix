@@ -1,12 +1,14 @@
 import Select from "../../components/Select";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Toast from "../../components/Toast";
 import { useFeedbackState } from "../../components/useFeedbackState";
 import { useTransientFeedback } from "../../components/useTransientFeedback";
 import "./connectionForm.css";
 
 import { pickLocalFile } from "../../lib/pickLocalFile";
+import { useSshHostKeyConfirmation } from "./useSshHostKeyConfirmation";
 import {
+  closeConnectionIfCurrent,
   openConnection,
   saveConnection,
   testConnection,
@@ -66,7 +68,7 @@ function buildConnectionInput(
         return { error: "SSH 私钥内容和私钥文件路径只能填写一项。" };
       }
       if ((newKey && saved?.has_identity_file) || (newIdentity && saved?.has_private_key)) {
-        return { error: "切换私钥来源前，请勾选清除已保存的 SSH 凭据和路径。此操作也会清除 known_hosts 路径和私钥口令，请按需重新填写。" };
+        return { error: "切换私钥来源前，请勾选清除已保存的 SSH 凭据和路径。此操作也会清除私钥口令，请按需重新填写。" };
       }
     }
     const hasPassword = values.ssh_auth_method === "password" && (Boolean(values.ssh_password) || Boolean(saved?.has_password));
@@ -81,7 +83,7 @@ function buildConnectionInput(
       has_private_key: hasKey,
       has_passphrase: values.ssh_auth_method === "private_key" && (Boolean(values.ssh_passphrase) || Boolean(saved?.has_passphrase)),
       has_identity_file: hasIdentity,
-      has_known_hosts_file: Boolean(values.ssh_known_hosts_file.trim()) || Boolean(initial?.ssh?.has_known_hosts_file && !values.clear_ssh_secrets),
+      has_known_hosts_file: Boolean(initial?.ssh?.has_known_hosts_file && !values.clear_ssh_secrets),
     };
   }
   let sentinel: SentinelConfig | null = null;
@@ -192,7 +194,6 @@ function buildConnectionInput(
         ssh_private_key: ssh.auth_method === "private_key" ? values.ssh_private_key.trim() || null : null,
         ssh_passphrase: ssh.auth_method === "private_key" ? values.ssh_passphrase || null : null,
         ssh_identity_file: ssh.auth_method === "private_key" ? values.ssh_identity_file.trim() || null : null,
-        ssh_known_hosts_file: values.ssh_known_hosts_file.trim() || null,
       } : {}),
       ...(sentinel ? { sentinel_password: values.sentinel_password || null } : {}),
       ca_certificate: caCertificate,
@@ -224,6 +225,8 @@ export function ConnectionForm({
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [pickingFile, setPickingFile] = useState(false);
+  const operationInFlight = useRef(false);
+  const { runWithSshHostKeyConfirmation, confirmationDialog } = useSshHostKeyConfirmation(profileId);
 
   const updateValue = (field: keyof ConnectionFormValues, value: string) => {
     setValues((current) => ({ ...current, [field]: value,
@@ -260,7 +263,7 @@ export function ConnectionForm({
   };
 
   const handleTest = async () => {
-    if (testing || saving) {
+    if (operationInFlight.current || testing || saving) {
       return;
     }
 
@@ -270,24 +273,28 @@ export function ConnectionForm({
       return;
     }
 
+    operationInFlight.current = true;
     setTesting(true);
     onTestingChange?.(true);
     setError(null);
     setFailure(null);
     setTestStatus(null);
     try {
-      const info = await testConnection(validation.input);
+      const input = validation.input;
+      const info = await runWithSshHostKeyConfirmation(() => testConnection(input));
+      if (info === null) return;
       setTestStatus(`连接成功，Redis ${info.server_version}${info.resolved_endpoint ? `，主节点 ${info.resolved_endpoint.host}:${info.resolved_endpoint.port}` : ""}`);
     } catch (caught) {
       setFailure(connectionFailureFeedback(caught, validation.input.profile, "测试连接失败，请检查配置。"));
     } finally {
+      operationInFlight.current = false;
       setTesting(false);
       onTestingChange?.(false);
     }
   };
 
   const handleSave = async (connectAfterSave: boolean) => {
-    if (testing || saving) {
+    if (operationInFlight.current || testing || saving) {
       return;
     }
 
@@ -297,6 +304,7 @@ export function ConnectionForm({
       return;
     }
 
+    operationInFlight.current = true;
     setSaving(true);
     onSavingChange?.(true);
     setError(null);
@@ -308,6 +316,7 @@ export function ConnectionForm({
     } catch (caught) {
       setFailure(connectionFailureFeedback(caught, validation.input.profile, "保存连接失败，请稍后重试。"));
       setSaving(false);
+      operationInFlight.current = false;
       onSavingChange?.(false);
       return;
     }
@@ -318,8 +327,10 @@ export function ConnectionForm({
         if (onConnect) {
           await onConnect(saved);
         } else {
-          await openConnection(saved.id);
-          onOpened?.(saved);
+          const info = await runWithSshHostKeyConfirmation(() => openConnection(saved.id), async (result) => {
+            if (result.connection_token) await closeConnectionIfCurrent(saved.id, result.connection_token);
+          });
+          if (info !== null) onOpened?.(saved);
         }
       } catch (caught) {
         if (onOpenFailed) {
@@ -330,6 +341,7 @@ export function ConnectionForm({
       }
     }
 
+    operationInFlight.current = false;
     setSaving(false);
     onSavingChange?.(false);
   };
@@ -338,6 +350,7 @@ export function ConnectionForm({
 
   return (
     <section className="connection-form-panel connection-form-compact" aria-labelledby="connection-form-title">
+      {confirmationDialog}
       <div className="panel-heading">
         <h2 id="connection-form-title">{initial ? "编辑连接" : "新增连接"}</h2>
       </div>
@@ -469,7 +482,7 @@ export function ConnectionForm({
           <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.ssh_enabled} onChange={(event) => updateBoolean("ssh_enabled", event.target.checked)} disabled={busy || values.topology === "cluster"} /><span>启用 SSH 隧道</span></label>
           {values.topology === "cluster" && <p className="field-hint">Cluster 暂不支持 SSH 隧道；请使用可直达各节点的网络。</p>}
           {values.ssh_enabled && <>
-            <p>支持 Standalone / Sentinel 与 TLS 组合。请先通过可信渠道核验主机密钥并写入 known_hosts；应用不会自动信任未知主机。切换认证方式会清除其他方式的凭据。</p>
+            <p>支持 Standalone / Sentinel 与 TLS 组合。首次连接时会提示核对 SSH 主机指纹，确认后保存到 Redix 的主机信任库；无需配置系统 known_hosts。切换认证方式会清除其他方式的凭据。</p>
             <div className="form-grid">
               <label className="field"><span>SSH 主机</span><input autoCapitalize="off" autoCorrect="off" value={values.ssh_host} onChange={(event) => updateValue("ssh_host", event.target.value)} disabled={busy} /></label>
               <label className="field"><span>SSH 端口</span><input autoCapitalize="off" autoCorrect="off" type="number" min={1} max={65535} value={values.ssh_port} onChange={(event) => updateValue("ssh_port", event.target.value)} disabled={busy} /></label>
@@ -503,11 +516,10 @@ export function ConnectionForm({
                 <label className="field"><span>SSH 私钥内容</span><textarea autoCapitalize="off" autoCorrect="off" value={values.ssh_private_key} onChange={(event) => updateValue("ssh_private_key", event.target.value)} disabled={busy} rows={3} autoComplete="off" /></label>
                 <label className="field"><span>SSH 私钥口令</span><input autoCapitalize="off" autoCorrect="off" type="password" autoComplete="new-password" value={values.ssh_passphrase} onChange={(event) => updateValue("ssh_passphrase", event.target.value)} disabled={busy} /></label>
               </>}
-              <label className="field"><span>SSH 已知主机文件路径</span><input autoCapitalize="off" autoCorrect="off" value={values.ssh_known_hosts_file} onChange={(event) => updateValue("ssh_known_hosts_file", event.target.value)} placeholder="可选，默认 ~/.ssh/known_hosts" disabled={busy} /></label>
             </div>
             {initial?.ssh && <>
-              <p className="field-hint">{values.clear_ssh_secrets ? "已选择清除旧材料，可填写替换材料。known_hosts 路径和私钥口令也会清除，请按需重新填写。" : "已保存材料仅显示状态，留空保留当前认证方式的材料。切换私钥内容与文件路径来源前，请先勾选清除。"}</p>
-              {!values.clear_ssh_secrets && <p className="field-hint">{initial.ssh.auth_method === values.ssh_auth_method && [initial.ssh.has_password && "密码已保存", initial.ssh.has_private_key && "私钥已保存", initial.ssh.has_identity_file && "私钥路径已保存", initial.ssh.has_passphrase && "私钥口令已保存"].filter(Boolean).join(" · ")}{initial.ssh.has_known_hosts_file ? " · 已知主机路径已保存" : ""}</p>}
+              <p className="field-hint">{values.clear_ssh_secrets ? "已选择清除旧材料，可填写替换材料。私钥口令也会清除，请按需重新填写。" : "已保存材料仅显示状态，留空保留当前认证方式的材料。切换私钥内容与文件路径来源前，请先勾选清除。"}</p>
+              {!values.clear_ssh_secrets && <p className="field-hint">{initial.ssh.auth_method === values.ssh_auth_method && [initial.ssh.has_password && "密码已保存", initial.ssh.has_private_key && "私钥已保存", initial.ssh.has_identity_file && "私钥路径已保存", initial.ssh.has_passphrase && "私钥口令已保存"].filter(Boolean).join(" · ")}</p>}
               <label className="checkbox-field"><input autoCapitalize="off" autoCorrect="off" type="checkbox" checked={values.clear_ssh_secrets} onChange={(event) => updateBoolean("clear_ssh_secrets", event.target.checked)} disabled={busy} /><span>清除已保存的 SSH 凭据和路径</span></label>
             </>}
           </>}

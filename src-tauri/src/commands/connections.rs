@@ -5,7 +5,7 @@ use crate::{
         ImportConnectionsResult, SaveConnectionInput, SshAuthMethod, TestConnectionInput,
     },
     error::AppError,
-    persistence::ConnectionSecrets,
+    persistence::{ConnectionSecrets, SshHostKeyChallenge},
     redis::RedisOperations,
     AppState,
 };
@@ -512,6 +512,36 @@ pub async fn test_connection(
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn get_ssh_host_key_challenge(
+    state: tauri::State<'_, AppState>,
+    challenge_id: String,
+) -> Result<SshHostKeyChallenge, AppError> {
+    let id = uuid::Uuid::parse_str(&challenge_id).map_err(|_| AppError::InvalidInput)?;
+    state.ssh_host_keys.get_challenge(id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn trust_ssh_host_key(
+    state: tauri::State<'_, AppState>,
+    challenge_id: String,
+) -> Result<(), AppError> {
+    let id = uuid::Uuid::parse_str(&challenge_id).map_err(|_| AppError::InvalidInput)?;
+    let store = state.ssh_host_keys.clone();
+    tokio::task::spawn_blocking(move || store.trust(id))
+        .await
+        .map_err(|_| AppError::SshHostKeyStoreFailed)?
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn discard_ssh_host_key(
+    state: tauri::State<'_, AppState>,
+    challenge_id: String,
+) -> Result<(), AppError> {
+    let id = uuid::Uuid::parse_str(&challenge_id).map_err(|_| AppError::InvalidInput)?;
+    state.ssh_host_keys.discard(id)
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn open_connection(
     state: tauri::State<'_, AppState>,
     connection_id: String,
@@ -537,6 +567,26 @@ pub async fn close_connection(
     let _cli_lifecycle = state.cli.lifecycle_guard().await;
     state.redis.close_connection(&connection_id).await?;
     state.cli.close_connection(&connection_id).await;
+    Ok(())
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn close_connection_if_current(
+    state: tauri::State<'_, AppState>,
+    connection_id: String,
+    connection_token: String,
+) -> Result<(), AppError> {
+    let token = connection_token
+        .parse::<u64>()
+        .map_err(|_| AppError::InvalidInput)?;
+    let _cli_lifecycle = state.cli.lifecycle_guard().await;
+    if state
+        .redis
+        .close_connection_if_current(&connection_id, token)
+        .await?
+    {
+        state.cli.close_connection(&connection_id).await;
+    }
     Ok(())
 }
 
@@ -1122,6 +1172,79 @@ mod tests {
     }
 
     #[test]
+    fn ssh_host_key_ipc_confirms_only_backend_challenges_and_discards_cancelled_ones() {
+        let directory = tempfile::tempdir().unwrap();
+        let (_, profiles, secrets) = state_with(vec![], None);
+        let state = AppState::with_data_dir(profiles, secrets, directory.path().to_owned());
+        let store = state.ssh_host_keys.clone();
+        let mut key = Vec::new();
+        key.extend_from_slice(&11_u32.to_be_bytes());
+        key.extend_from_slice(b"ssh-ed25519");
+        key.extend_from_slice(&32_u32.to_be_bytes());
+        key.extend_from_slice(&[7_u8; 32]);
+        let pending_id = |host| match store.verify(host, 22, &key, ssh2::HostKeyType::Ed25519) {
+            Err(AppError::SshHostKeyUnknown(id)) => id.to_string(),
+            result => panic!("expected challenge, got {result:?}"),
+        };
+        let accepted = pending_id("accepted.example");
+        let cancelled = pending_id("cancelled.example");
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .invoke_handler(tauri::generate_handler![
+                get_ssh_host_key_challenge,
+                trust_ssh_host_key,
+                discard_ssh_host_key,
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let invoke = |cmd: &str, id: &str| {
+            tauri::test::get_ipc_response(
+                &webview,
+                tauri::webview::InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: webview.url().unwrap(),
+                    body: serde_json::json!({"challenge_id": id}).into(),
+                    headers: Default::default(),
+                    invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+                },
+            )
+        };
+        let challenge: serde_json::Value = invoke("get_ssh_host_key_challenge", &accepted)
+            .unwrap()
+            .deserialize()
+            .unwrap();
+        assert_eq!(challenge["host"], "accepted.example");
+        assert_eq!(
+            challenge["fingerprint"],
+            "SHA256:gNSIRW+2Iyiuvsdp/bgjy38bvWHw6wQm3tuoXrl3WjQ"
+        );
+        assert_eq!(challenge.as_object().unwrap().len(), 5);
+        assert!(!directory.path().join("known_hosts").exists());
+        invoke("trust_ssh_host_key", &accepted).unwrap();
+        assert_eq!(
+            store.verify("accepted.example", 22, &key, ssh2::HostKeyType::Ed25519),
+            Ok(())
+        );
+        invoke("discard_ssh_host_key", &cancelled).unwrap();
+        assert_eq!(
+            invoke("trust_ssh_host_key", &cancelled).unwrap_err()["code"],
+            "SSH_HOST_KEY_CHALLENGE_EXPIRED"
+        );
+        assert_eq!(
+            invoke("trust_ssh_host_key", "invalid").unwrap_err()["code"],
+            "INVALID_INPUT"
+        );
+        let saved = std::fs::read_to_string(directory.path().join("known_hosts")).unwrap();
+        assert!(saved.contains("[accepted.example]:22"));
+        assert!(!saved.contains("cancelled.example"));
+    }
+
+    #[test]
     fn ssh_test_ipc_resolves_new_material_and_never_persists_it() {
         use tauri::Manager;
         let (state, profiles, secrets) = state_with(vec![], None);
@@ -1290,6 +1413,85 @@ mod tests {
             Err(AppError::InvalidInput)
         ));
         assert!(profiles.load().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn conditional_close_ipc_preserves_newer_cli_and_closes_the_matching_connection() {
+        use tauri::Manager;
+        let (port, _) = spawn_cli_redis("current").await;
+        let mut current_profile = profile("local", "Current", false);
+        current_profile.port = port;
+        let (state, _, _) = state_with(vec![current_profile], None);
+        let old_token = state
+            .redis
+            .open_connection("local")
+            .await
+            .unwrap()
+            .connection_token
+            .unwrap();
+        let current_token = state
+            .redis
+            .open_connection("local")
+            .await
+            .unwrap()
+            .connection_token
+            .unwrap();
+        let session = CliSessionInput {
+            connection_id: "local".into(),
+            session_id: "00000000-0000-4000-8000-000000000080".into(),
+        };
+        state.cli.open(&state.redis, session.clone()).await.unwrap();
+        let app = tauri::test::mock_builder()
+            .manage(state)
+            .invoke_handler(tauri::generate_handler![close_connection_if_current])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .unwrap();
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .unwrap();
+        let invoke = |token: &str| {
+            tauri::test::get_ipc_response(
+                &webview,
+                tauri::webview::InvokeRequest {
+                    cmd: "close_connection_if_current".into(),
+                    callback: tauri::ipc::CallbackFn(0),
+                    error: tauri::ipc::CallbackFn(1),
+                    url: webview.url().unwrap(),
+                    body: serde_json::json!({"connection_id": "local", "connection_token": token})
+                        .into(),
+                    headers: Default::default(),
+                    invoke_key: tauri::test::INVOKE_KEY.to_owned(),
+                },
+            )
+        };
+        invoke(&old_token).unwrap();
+        assert_eq!(
+            invoke("invalid-token").unwrap_err()["code"],
+            "INVALID_INPUT"
+        );
+        let state = app.state::<AppState>();
+        let command = CliCommandInput {
+            connection_id: "local".into(),
+            session_id: session.session_id,
+            command: "GET source".into(),
+        };
+        assert_eq!(
+            state
+                .cli
+                .execute(command.clone())
+                .await
+                .unwrap()
+                .result
+                .unwrap()
+                .value,
+            serde_json::json!("current")
+        );
+        invoke(&current_token).unwrap();
+        assert!(matches!(
+            state.cli.execute(command).await,
+            Err(AppError::ConnectionFailed)
+        ));
+        assert!(state.redis.execute_command("local", "PING").await.is_err());
     }
 
     #[tokio::test]

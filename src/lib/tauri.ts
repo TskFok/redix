@@ -69,6 +69,7 @@ import type {
   SearchArrayInput,
   RenameKeyInput,
   SaveConnectionInput,
+  SshHostKeyChallenge,
   SaveCommandHistoryInput,
   AddVectorSetElementsInput,
   CreateVectorSetInput,
@@ -127,6 +128,10 @@ function normalizeError(error: unknown): IpcError {
       ...(typeof error.diagnostics === "string" && error.diagnostics.trim()
         ? { diagnostics: error.diagnostics.trim() }
         : {}),
+      ...(error.code === "SSH_HOST_KEY_UNKNOWN" && typeof error.challenge_id === "string" &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(error.challenge_id)
+        ? { challenge_id: error.challenge_id }
+        : {}),
     };
   }
 
@@ -173,8 +178,27 @@ export function openConnection(connectionId: string): Promise<ConnectionInfo> {
   return call<ConnectionInfo>("open_connection", { connection_id: connectionId });
 }
 
+export function getSshHostKeyChallenge(challengeId: string): Promise<SshHostKeyChallenge> {
+  return call<SshHostKeyChallenge>("get_ssh_host_key_challenge", { challenge_id: challengeId });
+}
+
+export function trustSshHostKey(challengeId: string): Promise<void> {
+  return call<void>("trust_ssh_host_key", { challenge_id: challengeId });
+}
+
+export function discardSshHostKey(challengeId: string): Promise<void> {
+  return call<void>("discard_ssh_host_key", { challenge_id: challengeId });
+}
+
 export function closeConnection(connectionId: string): Promise<void> {
   return call<void>("close_connection", { connection_id: connectionId });
+}
+
+export function closeConnectionIfCurrent(connectionId: string, connectionToken: string): Promise<void> {
+  return call<void>("close_connection_if_current", {
+    connection_id: connectionId,
+    connection_token: connectionToken,
+  });
 }
 
 export function scanKeys(input: ScanKeysInput): Promise<ScanPage> {

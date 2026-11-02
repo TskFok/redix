@@ -158,6 +158,8 @@ impl ImportKeysInput {
 pub struct ConnectionInfo {
     pub server_version: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection_token: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_endpoint: Option<super::ConnectionEndpoint>,
 }
 

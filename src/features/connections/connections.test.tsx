@@ -352,7 +352,7 @@ describe("Redis 连接管理页面", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("切换私钥来源前，请勾选清除已保存的 SSH 凭据和路径");
     fireEvent.click(screen.getByRole("button", { name: "保存" }));
     expect(testConnectionMock).not.toHaveBeenCalled(); expect(saveConnectionMock).not.toHaveBeenCalled();
-    expect(screen.getByRole("alert")).toHaveTextContent("known_hosts");
+    expect(screen.getByRole("alert")).toHaveTextContent("私钥口令");
     fireEvent.click(screen.getByLabelText("清除已保存的 SSH 凭据和路径"));
     fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
     await screen.findByText(/连接成功/);
@@ -393,7 +393,7 @@ describe("Redis 连接管理页面", () => {
     render(<ConnectionPage onOpenConnection={onOpenConnectionMock} />);
     fireEvent.click(await screen.findByRole("button", { name: "编辑 本地 Redis" }));
     expect(screen.getByLabelText("SSH 密码")).toHaveValue("");
-    expect(screen.getByLabelText("SSH 已知主机文件路径")).toHaveValue("");
+    expect(screen.queryByLabelText("SSH 已知主机文件路径")).not.toBeInTheDocument();
     fireEvent.click(screen.getByLabelText("清除已保存的 SSH 凭据和路径"));
     fireEvent.click(screen.getByRole("button", { name: "测试连接" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("SSH 密码");
